@@ -1013,7 +1013,14 @@ async function handleMessage(msg: any) {
 		}
 		
 		// 解析项目路由（传入 intent 避免重复检测）
-		const { workspace, message, label, intent } = resolveWorkspace(text, currentProject, routeIntent);
+		let { workspace, message, label, intent } = resolveWorkspace(text, currentProject, routeIntent);
+		
+		// 检测定时任务请求，强制使用 cursor-remote-control 工作区（规则文件所在）
+		const isScheduleRequest = /([0-9]+|一|二|三|四|五|六|七|八|九|十)(分钟|小时|天|周|月).*(后|提醒|通知|告诉)|每(天|周|月|小时).*[提醒通知]|定时/i.test(text);
+		if (isScheduleRequest) {
+			workspace = ROOT;
+			console.log(`[路由] 定时任务请求 → 强制使用全局工作区: ${workspace}`);
+		}
 		
 		// 临时路由提示
 		if (intent.type === 'temp') {
@@ -1523,15 +1530,6 @@ async function handleMessage(msg: any) {
 		busySessions.add(lockKey);
 		console.log(`[执行] workspace=${workspace} message="${message.slice(0, 60)}"`);
 		await sendMarkdown(sessionWebhook, '⏳ Cursor AI 正在思考...', '💭 思考中', 'wathet');
-		
-		// 确保工作区有规则文件（每次都检查，轻量操作）
-		const cronRulesSource = resolve(ROOT, '.cursor/CRON-TASK-RULES.md');
-		const cronRulesTarget = resolve(workspace, '.cursor/CRON-TASK-RULES.md');
-		if (existsSync(cronRulesSource) && !existsSync(cronRulesTarget)) {
-			mkdirSync(resolve(workspace, '.cursor'), { recursive: true });
-			writeFileSync(cronRulesTarget, readFileSync(cronRulesSource, 'utf-8'));
-			console.log(`[工作区] 已同步规则: ${cronRulesTarget}`);
-		}
 		
 		// 记忆由 Cursor 自主通过 memory-tool.ts 调用，server 记录会话日志
 		if (memory) {
