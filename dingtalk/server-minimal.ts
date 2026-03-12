@@ -1033,16 +1033,40 @@ async function handleMessage(msg: any) {
 			}
 		}
 		
+		// 检测简单定时任务请求，服务器端直接创建（不依赖 Agent）
+		const simpleScheduleMatch = text.match(/^(\d+)(分钟|小时)后\s*(?:提醒|通知)?(?:我)?\s*(.+)$/i);
+		if (simpleScheduleMatch) {
+			const [, num, unit, taskMessage] = simpleScheduleMatch;
+			const minutes = unit === '小时' ? parseInt(num) * 60 : parseInt(num);
+			const runAtMs = Date.now() + minutes * 60 * 1000;
+			const runAt = new Date(runAtMs);
+			
+			const task = await scheduler.add({
+				name: `${num}${unit}后提醒`,
+				enabled: true,
+				deleteAfterRun: true,
+				schedule: { kind: 'at', at: runAt.toISOString() },
+				message: taskMessage.trim(),
+				platform: 'dingtalk',
+				webhook: sessionWebhook,
+			});
+			
+			const timeStr = runAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+			await sendMarkdown(sessionWebhook, `✅ 已设置好，大约在 **${timeStr}** 通过钉钉提醒你：\n\n${taskMessage}\n\n发送 \`/cron\` 可查看所有任务。`, '⏰ 定时任务已创建');
+			console.log(`[任务] 服务器端创建: ${task.name} @ ${timeStr}`);
+			return;
+		}
+		
 		// 解析项目路由（传入 intent 避免重复检测）
 		let { workspace, message, label, intent } = resolveWorkspace(text, currentProject, routeIntent);
-		
+
 		// 检测定时任务请求，强制使用 cursor-remote-control 工作区（规则文件所在）
 		const isScheduleRequest = /([0-9]+|一|二|三|四|五|六|七|八|九|十)(分钟|小时|天|周|月).*(后|提醒|通知|告诉)|每(天|周|月|小时).*[提醒通知]|定时/i.test(text);
 		if (isScheduleRequest) {
 			workspace = ROOT;
 			console.log(`[路由] 定时任务请求 → 强制使用全局工作区: ${workspace}`);
 		}
-		
+
 		// 临时路由提示
 		if (intent.type === 'temp') {
 			console.log(`[路由] 临时路由到项目: ${label}`);
