@@ -721,12 +721,13 @@ interface RouteIntent {
  * - "#/path/to/project 消息" → 快捷路径语法
  */
 function detectRouteIntent(text: string): RouteIntent {
+	const raw = (text || '').trim().replace(/\s+/g, ' ');  // 归一化空格（含全角）
 	const { projects } = projectsConfig;
 	const projectNames = Object.keys(projects);
-	const projectPattern = projectNames.join('|');
+	const projectPattern = projectNames.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
 	
 	// 0. 路径快捷语法：#/path 或 @/path
-	const pathSymbolMatch = text.match(/^[#@]((?:~?\/|~).+?)\s+(.+)$/);
+	const pathSymbolMatch = raw.match(/^[#@]((?:~?\/|~).+?)\s+(.+)$/);
 	if (pathSymbolMatch) {
 		const rawPath = pathSymbolMatch[1];
 		const absolutePath = rawPath.startsWith('~') 
@@ -740,7 +741,7 @@ function detectRouteIntent(text: string): RouteIntent {
 	}
 	
 	// 1. 简化符号：#项目名 或 @项目名
-	const symbolMatch = text.match(new RegExp(`^[#@](${projectPattern})\\s+(.+)`, 'i'));
+	const symbolMatch = raw.match(new RegExp(`^[#@](${projectPattern})\\s+(.+)`, 'i'));
 	if (symbolMatch) {
 		const project = symbolMatch[1].toLowerCase();
 		if (projects[project]) {
@@ -752,13 +753,12 @@ function detectRouteIntent(text: string): RouteIntent {
 		}
 	}
 	
-	// 2a. 切换到任意路径："切换到 /path" / "切换到路径 /path"
-	const pathSwitchMatch = text.match(/^(?:切换到|切换|进入|打开)(?:路径)?\s+((?:~?\/|~).+?)\s*$/i);
+	// 2a. 切换到任意路径："切换到 /path" / "切换到路径 /path"（必须以 / 或 ~ 开头，避免误匹配 "切换到 remote"）
+	const pathSwitchMatch = raw.match(/^(?:切换到|切到|切换|进入|打开)(?:路径)?\s+([~\/].+?)\s*$/i);
 	if (pathSwitchMatch) {
-		const rawPath = pathSwitchMatch[1];
-		const absolutePath = rawPath.startsWith('~') 
-			? rawPath.replace(/^~/, process.env.HOME || '~')
-			: rawPath;
+		const absolutePath = pathSwitchMatch[1].startsWith('~')
+			? pathSwitchMatch[1].replace(/^~/, process.env.HOME || '~')
+			: pathSwitchMatch[1];
 		return {
 			type: 'switch',
 			path: absolutePath,
@@ -768,11 +768,11 @@ function detectRouteIntent(text: string): RouteIntent {
 	
 	// 2b. 持久切换到项目："切换到 XXX" / "切到 XXX" / "现在用 XXX" / "改成 XXX 项目"
 	const switchPatterns = [
-		new RegExp(`^(?:切换到|切到|切换|现在用|改成|使用)\\s*(${projectPattern})(?:项目)?\\s*$`, 'i'),
-		new RegExp(`^(?:进入|打开)\\s*(${projectPattern})(?:项目)?\\s*$`, 'i'),
+		new RegExp(`^(?:切换到|切到|切换|现在用|改成|使用)\\s*(${projectPattern})(?:\\s*项目)?\\s*$`, 'i'),
+		new RegExp(`^(?:进入|打开)\\s*(${projectPattern})(?:\\s*项目)?\\s*$`, 'i'),
 	];
 	for (const pattern of switchPatterns) {
-		const match = text.match(pattern);
+		const match = raw.match(pattern);
 		if (match) {
 			const project = match[1].toLowerCase();
 			if (projects[project]) {
@@ -788,7 +788,7 @@ function detectRouteIntent(text: string): RouteIntent {
 		new RegExp(`(${projectPattern})(?:项目)?(?:有|出现|发现)`, 'i'),
 	];
 	for (const pattern of tempPatterns) {
-		const match = text.match(pattern);
+		const match = raw.match(pattern);
 		if (match) {
 			const project = match[1].toLowerCase();
 			if (projects[project]) {
@@ -2265,6 +2265,12 @@ async function handleInner(
 			console.log(`[路由] 持久切换到项目: ${routeIntent.project}`);
 			return;
 		}
+		// 识别到切换意图但项目不存在，明确提示
+		const available = Object.keys(projectsConfig.projects).map((k) => `\`${k}\``).join('、');
+		const msg = `未找到项目「${routeIntent.project}」。\n\n可用项目：${available}\n\n请检查 \`projects.json\` 或使用上述项目名。`;
+		if (cardId) await updateCard(cardId, msg, { title: "未找到项目", color: "orange" });
+		else await replyCard(messageId, msg, { title: "未找到项目", color: "orange" });
+		return;
 	}
 	
 	// 检测简单定时任务请求，服务器端直接创建（不依赖 Agent）
