@@ -1867,8 +1867,12 @@ async function handleInner(
 			"- `/心跳 间隔 分钟数`",
 			"",
 			"**项目路由**",
-			`· 对话切换：说「切到 remote」「切换到 XXX 项目」「现在用 activity」等可持久切换`,
-			`· 前缀指定：\`项目名:消息\` 或 \`#项目名 消息\`，如 \`remote:帮我看看这个bug\``,
+			"· 对话切换：说「切到 remote」「切换到 XXX 项目」等可持久切换",
+			"· 前缀指定：`项目名:消息` 或 `#项目名 消息`",
+			"· 示例（长按复制）：",
+			"```",
+			`remote:帮我看看这个bug`,
+			"```",
 			`· 可用项目：${Object.keys(projectsConfig.projects).map((k) => `\`${k}\``).join("、")}（默认：\`${projectsConfig.default_project}\`）`,
 		].join("\n");
 		await replyCard(messageId, helpText, { title: "📖 使用帮助", color: "blue" });
@@ -2105,7 +2109,7 @@ async function handleInner(
 					schedDesc = `cron: ${j.schedule.expr}`;
 				}
 				const lastRun = j.state?.lastRunAtMs ? new Date(j.state.lastRunAtMs).toLocaleString("zh-CN") : "从未执行";
-				return `${status} **${i + 1}. ${j.name}**\n   调度: ${schedDesc}\n   上次: ${lastRun}\n   ID: \`${j.id.slice(0, 8)}\``;
+				return `${status} **${i + 1}. ${j.name}**\n   调度: ${schedDesc}\n   上次: ${lastRun}\n   ID（复制用）：\n\`\`\`\n${j.id}\n\`\`\``;
 			});
 			lines.push("", `📊 共 ${jobs.length} 个待执行任务`);
 			await replyCard(messageId, lines.join("\n"), { title: "📋 定时任务", color: "blue" });
@@ -2260,15 +2264,15 @@ async function handleInner(
 			sessionsStore.set(defaultWorkspace, ws);
 			saveSessions();
 			
-			const msg = `**已切换到项目：${routeIntent.project}**\n\n📁 ${projectInfo.description}\n\`${projectInfo.path}\`\n\n后续消息将在此项目中执行，直到你切换到其他项目。`;
+			const msg = `**已切换到项目：${routeIntent.project}**\n\n📁 ${projectInfo.description}\n\n路径（长按复制）：\n\`\`\`\n${projectInfo.path}\n\`\`\`\n\n后续消息将在此项目中执行，直到你切换到其他项目。`;
 			if (cardId) await updateCard(cardId, msg, { title: "✅ 项目已切换", color: "green" });
 			else await replyCard(messageId, msg, { title: "✅ 项目已切换", color: "green" });
 			console.log(`[路由] 持久切换到项目: ${routeIntent.project}`);
 			return;
 		}
 		// 识别到切换意图但项目不存在，明确提示
-		const available = Object.keys(projectsConfig.projects).map((k) => `\`${k}\``).join('、');
-		const msg = `未找到项目「${routeIntent.project}」。\n\n可用项目：${available}\n\n请检查 \`projects.json\` 或使用上述项目名。`;
+		const names = Object.keys(projectsConfig.projects);
+		const msg = `未找到项目「${routeIntent.project}」。\n\n可用项目（长按复制）：\n\`\`\`\n${names.join('\n')}\n\`\`\`\n\n请检查 \`projects.json\` 或使用上述项目名。`;
 		if (cardId) await updateCard(cardId, msg, { title: "未找到项目", color: "orange" });
 		else await replyCard(messageId, msg, { title: "未找到项目", color: "orange" });
 		return;
