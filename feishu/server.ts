@@ -125,6 +125,7 @@ const WORKSPACE_FILES = [
 	".cursor/SOUL.md", ".cursor/IDENTITY.md", ".cursor/USER.md",
 	".cursor/MEMORY.md", ".cursor/HEARTBEAT.md", ".cursor/TASKS.md",
 	".cursor/BOOT.md", ".cursor/TOOLS.md",
+	".cursor/CRON-TASK-RULES.md",
 ];
 const WORKSPACE_RULES = [
 	".cursor/rules/soul.mdc",
@@ -1390,6 +1391,9 @@ function execAgent(
 		if (opts?.context?.chatId) {
 			env.CURSOR_WEBHOOK = opts.context.chatId;
 		}
+		
+		// 传递规则文档路径（Agent 可以读取全局规则）
+		env.CURSOR_CRON_RULES_PATH = resolve(ROOT, '.cursor/CRON-TASK-RULES.md');
 
 		const child = spawn(AGENT_BIN, args, {
 			env,
@@ -1667,6 +1671,63 @@ async function shouldProcessMessage(messageId: string): Promise<boolean> {
 	const isNew = await tryRecordMessagePersistent(messageId, "im.receive", console.log);
 	return isNew;
 }
+
+// ── 定时任务文件位置修正 ─────────────────────────
+async function fixCronJobsLocation(workspace: string, chatId: string) {
+	// 检查工作区是否有 cron-jobs.json（错误位置）
+	const wrongPath = resolve(workspace, 'cron-jobs.json');
+	const correctPath = resolve(ROOT, 'cron-jobs-feishu.json');
+	
+	if (!existsSync(wrongPath)) return;
+	
+	try {
+		console.log(`[修正] 发现错误位置的任务文件: ${wrongPath}`);
+		
+		// 读取错误位置的任务
+		const wrongData = JSON.parse(readFileSync(wrongPath, 'utf-8'));
+		
+		// 读取正确位置的现有任务（如果存在）
+		let correctData: any;
+		try {
+			correctData = JSON.parse(readFileSync(correctPath, 'utf-8'));
+		} catch {
+			correctData = { version: 1, jobs: [] };
+		}
+		
+		// 修正每个任务的字段
+		let fixedCount = 0;
+		for (const job of wrongData.jobs || []) {
+			// 添加缺失的 platform 和 webhook 字段
+			if (!job.platform) {
+				job.platform = 'feishu';
+				fixedCount++;
+			}
+			if (!job.webhook) {
+				job.webhook = chatId;
+				fixedCount++;
+			}
+			
+			// 检查是否已存在（避免重复）
+			const exists = correctData.jobs.some((j: any) => j.id === job.id);
+			if (!exists) {
+				correctData.jobs.push(job);
+			}
+		}
+		
+		// 保存到正确位置
+		writeFileSync(correctPath, JSON.stringify(correctData, null, 2));
+		console.log(`[修正] ✅ 已移动 ${wrongData.jobs?.length || 0} 个任务到 ${correctPath}`);
+		console.log(`[修正] ✅ 修复了 ${fixedCount} 个缺失字段`);
+		
+		// 删除错误位置的文件
+		unlinkSync(wrongPath);
+		console.log(`[修正] ✅ 已删除 ${wrongPath}`);
+		
+	} catch (err) {
+		console.error('[修正] 失败:', err);
+	}
+}
+
 // ── 消息处理 ─────────────────────────────────────
 async function handle(params: {
 	text: string;
@@ -2339,7 +2400,10 @@ async function handleInner(
 			memory.appendSessionLog(workspace, "assistant", result.slice(0, 3000), usedModel);
 		}
 
-		// Agent 可能修改了 cron-jobs.json，重新加载调度器
+		// Agent 可能修改了 cron-jobs.json，检查并修正位置
+		await fixCronJobsLocation(workspace, chatId);
+		
+		// 重新加载调度器
 		scheduler.reload().catch(() => {});
 
 		const fullResult = quotaWarning ? `${quotaWarning}\n\n---\n\n${result}` : result;

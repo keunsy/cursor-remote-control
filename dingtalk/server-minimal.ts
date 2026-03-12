@@ -541,6 +541,9 @@ async function runAgent(
 			console.log(`[ENV] 设置 CURSOR_WEBHOOK=${context.webhook.slice(0, 50)}...`);
 		}
 		
+		// 传递规则文档路径（Agent 可以读取全局规则）
+		env.CURSOR_CRON_RULES_PATH = resolve(ROOT, '.cursor/CRON-TASK-RULES.md');
+		
 		const proc = spawn('agent', args, { 
 			env,
 			stdio: ['ignore', 'pipe', 'pipe']
