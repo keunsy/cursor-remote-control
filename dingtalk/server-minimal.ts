@@ -782,6 +782,62 @@ function resolveWorkspace(
 	};
 }
 
+// ── 定时任务文件位置修正 ─────────────────────────
+async function fixCronJobsLocation(workspace: string, webhook: string) {
+	// 检查工作区是否有 cron-jobs.json（错误位置）
+	const wrongPath = resolve(workspace, 'cron-jobs.json');
+	const correctPath = resolve(ROOT, 'cron-jobs-dingtalk.json');
+	
+	if (!existsSync(wrongPath)) return;
+	
+	try {
+		console.log(`[修正] 发现错误位置的任务文件: ${wrongPath}`);
+		
+		// 读取错误位置的任务
+		const wrongData = JSON.parse(readFileSync(wrongPath, 'utf-8'));
+		
+		// 读取正确位置的现有任务（如果存在）
+		let correctData: any;
+		try {
+			correctData = JSON.parse(readFileSync(correctPath, 'utf-8'));
+		} catch {
+			correctData = { version: 1, jobs: [] };
+		}
+		
+		// 修正每个任务的字段
+		let fixedCount = 0;
+		for (const job of wrongData.jobs || []) {
+			// 添加缺失的 platform 和 webhook 字段
+			if (!job.platform) {
+				job.platform = 'dingtalk';
+				fixedCount++;
+			}
+			if (!job.webhook) {
+				job.webhook = webhook;
+				fixedCount++;
+			}
+			
+			// 检查是否已存在（避免重复）
+			const exists = correctData.jobs.some((j: any) => j.id === job.id);
+			if (!exists) {
+				correctData.jobs.push(job);
+			}
+		}
+		
+		// 保存到正确位置
+		writeFileSync(correctPath, JSON.stringify(correctData, null, 2));
+		console.log(`[修正] ✅ 已移动 ${wrongData.jobs?.length || 0} 个任务到 ${correctPath}`);
+		console.log(`[修正] ✅ 修复了 ${fixedCount} 个缺失字段`);
+		
+		// 删除错误位置的文件
+		unlinkSync(wrongPath);
+		console.log(`[修正] ✅ 已删除 ${wrongPath}`);
+		
+	} catch (err) {
+		console.error('[修正] 失败:', err);
+	}
+}
+
 // ── 消息去重（使用 Map 存储时间戳）─────────────
 const seenMessages = new Map<string, number>();
 const MAX_SEEN_SIZE = 1000;
@@ -1491,7 +1547,10 @@ async function handleMessage(msg: any) {
 			memory.appendSessionLog(workspace, "assistant", cleanOutput.slice(0, 3000), config.CURSOR_MODEL);
 		}
 			
-			// Agent 可能修改了 cron-jobs-dingtalk.json，重新加载调度器
+			// Agent 可能修改了 cron-jobs，检查并修正位置
+			await fixCronJobsLocation(workspace, sessionWebhook);
+			
+			// 重新加载调度器
 			scheduler.reload().catch(() => {});
 			
 			// 发送结果
