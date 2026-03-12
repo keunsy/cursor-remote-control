@@ -783,6 +783,9 @@ function isBillingError(text: string): boolean {
 	return BILLING_PATTERNS.some((p) => p.test(text));
 }
 
+// Agent 全局超时时间（30分钟），防止长时间任务卡死
+const MAX_AGENT_TIMEOUT = 30 * 60 * 1000; // 30分钟
+
 const childPids = new Set<number>();
 // lockKey → 正在运行的 agent 子进程（用于 /stop 终止）
 const activeAgents = new Map<string, { pid: number; kill: () => void }>();
@@ -1142,14 +1145,16 @@ function execAgent(
 		let assistantBuf = "";
 		let lastSegment = "";
 		let toolBuf = ""; // 工具活动日志（显示在进度卡片中）
-		let done = false;
-		const startTime = Date.now();
-		let lastProgressTime = 0;
-		let lineBuf = "";
+	let done = false;
+	const startTime = Date.now();
+	let lastProgressTime = 0;
+	let lineBuf = "";
+	let globalTimeout: NodeJS.Timeout | null = null;
 
 		function cleanup() {
 			done = true;
 			clearInterval(timer);
+			if (globalTimeout) clearTimeout(globalTimeout);
 			if (child.pid) childPids.delete(child.pid);
 			activeAgents.delete(lockKey);
 		}
@@ -1163,6 +1168,7 @@ function execAgent(
 			return assistantBuf.slice(-300);
 		}
 
+		// 进度更新定时器（每秒）
 		const timer = setInterval(() => {
 			if (done) return;
 			const now = Date.now();
@@ -1178,6 +1184,20 @@ function execAgent(
 				}
 			}
 		}, 1000);
+
+		// 全局超时定时器（30分钟）
+		globalTimeout = setTimeout(() => {
+			if (done) return;
+			const elapsed = Math.round((Date.now() - startTime) / 1000 / 60);
+			console.error(`[超时] Agent运行超过${MAX_AGENT_TIMEOUT/60000}分钟 (实际: ${elapsed}分钟)，强制终止 [${lockKey}]`);
+			cleanup();
+			try {
+				child.kill("SIGKILL"); // 强制终止
+			} catch (e) {
+				console.error(`[超时] 终止进程失败:`, e);
+			}
+			reject(new Error(`Agent运行超时 (${elapsed}分钟)，已强制终止。如需更长时间，请分批处理或使用 /stop 手动终止。`));
+		}, MAX_AGENT_TIMEOUT);
 
 		function processLine(line: string) {
 			const ev = tryParseJson(line);

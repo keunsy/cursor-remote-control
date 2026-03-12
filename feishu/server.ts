@@ -21,6 +21,7 @@ import { MemoryManager } from "./memory.js";
 import { Scheduler, type CronJob } from "./scheduler.js";
 import { HeartbeatRunner } from "./heartbeat.js";
 import { tryRecordMessagePersistent } from "./feishu/dedup.js";
+import { sendMediaFeishu } from "./feishu/media.js";
 
 const HOME = process.env.HOME;
 if (!HOME) throw new Error("$HOME is not set");
@@ -940,6 +941,9 @@ function isBillingError(text: string): boolean {
 	return BILLING_PATTERNS.some((p) => p.test(text));
 }
 
+// Agent 全局超时时间（30分钟），防止长时间任务卡死
+const MAX_AGENT_TIMEOUT = 30 * 60 * 1000; // 30分钟
+
 const childPids = new Set<number>();
 // lockKey → 正在运行的 agent 子进程（用于 /stop 终止）
 const activeAgents = new Map<string, { pid: number; kill: () => void }>();
@@ -1422,10 +1426,12 @@ function execAgent(
 	const startTime = Date.now();
 	let lastProgressTime = 0;
 	let lineBuf = "";
+	let globalTimeout: NodeJS.Timeout | null = null;
 
 		function cleanup() {
 			done = true;
 			clearInterval(timer);
+			if (globalTimeout) clearTimeout(globalTimeout);
 			if (child.pid) childPids.delete(child.pid);
 			activeAgents.delete(lockKey);
 		}
@@ -1439,6 +1445,7 @@ function execAgent(
 			return assistantBuf.slice(-300);
 		}
 
+		// 进度更新定时器（每秒）
 		const timer = setInterval(() => {
 			if (done) return;
 			const now = Date.now();
@@ -1454,6 +1461,20 @@ function execAgent(
 				}
 			}
 		}, 1000);
+
+		// 全局超时定时器（30分钟）
+		globalTimeout = setTimeout(() => {
+			if (done) return;
+			const elapsed = Math.round((Date.now() - startTime) / 1000 / 60);
+			console.error(`[超时] Agent运行超过${MAX_AGENT_TIMEOUT/60000}分钟 (实际: ${elapsed}分钟)，强制终止 [${lockKey}]`);
+			cleanup();
+			try {
+				child.kill("SIGKILL"); // 强制终止
+			} catch (e) {
+				console.error(`[超时] 终止进程失败:`, e);
+			}
+			reject(new Error(`Agent运行超时 (${elapsed}分钟)，已强制终止。如需更长时间，请分批处理或使用 /stop 手动终止。`));
+		}, MAX_AGENT_TIMEOUT);
 
 		function processLine(line: string) {
 			const ev = tryParseJson(line);
@@ -1856,12 +1877,17 @@ async function handleInner(
 			`- ${c("/密钥", "/apikey")} — 查看/更换 API Key（仅私聊）`,
 			"  用法：`/密钥 key_xxx...`",
 			"",
-			"**记忆系统**",
-			`- ${c("/记忆", "/memory")} — 查看记忆状态`,
-			`- \`/记忆 关键词\` — 语义搜索记忆`,
-			`- \`/记录 内容\` — 写入今日日记`,
-			`- ${c("/整理记忆", "/reindex")} — 重建记忆索引`,
-			"",
+		"**记忆系统**",
+		`- ${c("/记忆", "/memory")} — 查看记忆状态`,
+		`- \`/记忆 关键词\` — 语义搜索记忆`,
+		`- \`/记录 内容\` — 写入今日日记`,
+		`- ${c("/整理记忆", "/reindex")} — 重建记忆索引`,
+		"",
+		"**文件操作**",
+		`- ${c("/apk", "/股票apk")} — 一键发送股票项目 APK`,
+		`- \`/发送文件 路径\` — 发送任意本地文件`,
+		`- 示例: \`/发送文件 ~/document.pdf\``,
+		"",
 			"**定时任务**",
 			`- ${c("/任务", "/cron")} — 查看所有定时任务`,
 			"- `/任务 暂停/恢复/删除/执行 ID`",
@@ -1990,6 +2016,126 @@ async function handleInner(
 			await replyCard(messageId, "已终止当前任务。\n\n发送新消息将继续在当前会话中对话。", { title: "已终止", color: "orange" });
 		} else {
 			await replyCard(messageId, "当前没有正在运行的任务。", { title: "无任务", color: "grey" });
+		}
+		return;
+	}
+
+	// /apk、/股票apk → 快速发送股票项目最新 APK
+	if (/^\/(apk|股票apk|股票|sendapk)\s*$/i.test(text.trim())) {
+		console.log(`[指令] 发送股票 APK`);
+		
+		// 从 projects.json 读取股票项目路径
+		const stockProject = projectsConfig.projects["stock-android"];
+		if (!stockProject) {
+			await replyCard(messageId, `❌ **配置错误**\n\n在 projects.json 中未找到 \`stock-android\` 项目配置。\n\n请在 projects.json 中添加股票项目配置。`, { title: "配置缺失", color: "red" });
+			return;
+		}
+		
+		const apkPath = resolve(stockProject.path, "app/build/outputs/apk/debug/app-debug.apk");
+		
+		// 检查文件是否存在
+		if (!existsSync(apkPath)) {
+			await replyCard(messageId, `❌ **APK 文件未找到**\n\n路径: \`${apkPath}\`\n\n请先编译安卓项目。`, { title: "文件未找到", color: "red" });
+			return;
+		}
+		
+		// 检查文件大小和修改时间
+		const stats = statSync(apkPath);
+		const fileSize = stats.size;
+		const maxSize = 30 * 1024 * 1024; // 30MB
+		const modTime = new Date(stats.mtime).toLocaleString('zh-CN');
+		
+		if (fileSize > maxSize) {
+			await replyCard(messageId, `❌ **文件太大**\n\n文件大小: ${(fileSize / 1024 / 1024).toFixed(2)}MB\n限制: 30MB`, { title: "超出大小限制", color: "red" });
+			return;
+		}
+		
+		// 读取文件并发送
+		try {
+			await replyCard(messageId, `📤 **正在发送股票 APK...**\n\n文件: app-debug.apk\n大小: ${(fileSize / 1024 / 1024).toFixed(2)}MB\n编译时间: ${modTime}`, { title: "股票 APK", color: "blue" });
+			
+			const buffer = readFileSync(apkPath);
+			const fileName = "a-stock-pullback-strategy.apk"; // 使用更友好的文件名
+			
+			const cfg = {
+				accounts: [{
+					accountId: "default",
+					appId: config.FEISHU_APP_ID,
+					appSecret: config.FEISHU_APP_SECRET,
+				}]
+			};
+			
+			await sendMediaFeishu({
+				cfg,
+				to: chatId,
+				mediaBuffer: buffer,
+				fileName,
+			});
+			
+			console.log(`[指令] 股票 APK 发送成功: ${fileName} (${(fileSize / 1024 / 1024).toFixed(2)}MB)`);
+			await replyCard(messageId, `✅ **APK 发送成功！**\n\n📱 A股回踩策略 Android 版\n文件名: ${fileName}\n大小: ${(fileSize / 1024 / 1024).toFixed(2)}MB\n编译时间: ${modTime}\n\n**请在上方查收并安装。**`, { title: "发送成功", color: "green" });
+		} catch (err) {
+			console.error(`[指令] APK 发送失败:`, err);
+			await replyCard(messageId, `❌ **发送失败**\n\n错误: ${err instanceof Error ? err.message : String(err)}`, { title: "发送失败", color: "red" });
+		}
+		return;
+	}
+
+	// /发送文件 → 发送本地文件到飞书
+	const sendFileMatch = text.match(/^\/(发送文件|sendfile|send|发送)[\s:：]+(.+)/i);
+	if (sendFileMatch) {
+		const filePath = sendFileMatch[2].trim();
+		
+		// 展开 ~ 为用户目录
+		const expandedPath = filePath.startsWith("~") 
+			? resolve(HOME, filePath.slice(1)) 
+			: resolve(filePath);
+		
+		console.log(`[指令] 发送文件: ${expandedPath}`);
+		
+		// 检查文件是否存在
+		if (!existsSync(expandedPath)) {
+			await replyCard(messageId, `❌ **文件不存在**\n\n路径: \`${expandedPath}\`\n\n请检查文件路径是否正确。`, { title: "文件未找到", color: "red" });
+			return;
+		}
+		
+		// 检查文件大小
+		const stats = statSync(expandedPath);
+		const fileSize = stats.size;
+		const maxSize = 30 * 1024 * 1024; // 30MB
+		
+		if (fileSize > maxSize) {
+			await replyCard(messageId, `❌ **文件太大**\n\n文件大小: ${(fileSize / 1024 / 1024).toFixed(2)}MB\n限制: 30MB\n\n请选择较小的文件。`, { title: "超出大小限制", color: "red" });
+			return;
+		}
+		
+		// 读取文件并发送
+		try {
+			await replyCard(messageId, `📤 **正在发送文件...**\n\n文件: \`${expandedPath.split("/").pop()}\`\n大小: ${(fileSize / 1024 / 1024).toFixed(2)}MB`, { title: "文件上传中", color: "blue" });
+			
+			const buffer = readFileSync(expandedPath);
+			const fileName = expandedPath.split("/").pop() || "file";
+			
+			const cfg = {
+				accounts: [{
+					accountId: "default",
+					appId: config.FEISHU_APP_ID,
+					appSecret: config.FEISHU_APP_SECRET,
+				}]
+			};
+			
+			await sendMediaFeishu({
+				cfg,
+				to: chatId,
+				mediaBuffer: buffer,
+				fileName,
+			});
+			
+			console.log(`[指令] 文件发送成功: ${fileName} (${(fileSize / 1024 / 1024).toFixed(2)}MB)`);
+			await replyCard(messageId, `✅ **文件发送成功！**\n\n文件名: \`${fileName}\`\n大小: ${(fileSize / 1024 / 1024).toFixed(2)}MB\n\n请在上方查收文件。`, { title: "发送成功", color: "green" });
+		} catch (err) {
+			console.error(`[指令] 文件发送失败:`, err);
+			await replyCard(messageId, `❌ **发送失败**\n\n错误: ${err instanceof Error ? err.message : String(err)}`, { title: "发送失败", color: "red" });
 		}
 		return;
 	}

@@ -9,43 +9,91 @@ DINGTALK_DIR="${SCRIPT_DIR}/dingtalk"
 
 case "$1" in
   start)
-    echo "🚀 启动服务..."
-    cd "$FEISHU_DIR" && nohup bun run start-with-keepawake.ts > /tmp/feishu-cursor.log 2>&1 &
-    echo "  ✅ 飞书服务已启动 (PID: $!)"
-    cd "$DINGTALK_DIR" && nohup bun run start-with-keepawake.ts > /tmp/dingtalk-cursor.log 2>&1 &
-    echo "  ✅ 钉钉服务已启动 (PID: $!)"
+    case "$2" in
+      feishu)
+        echo "🚀 启动飞书服务..."
+        cd "$FEISHU_DIR" && nohup bun run start-with-keepawake.ts > /tmp/feishu-cursor.log 2>&1 &
+        echo "  ✅ 飞书服务已启动 (PID: $!)"
+        ;;
+      dingtalk)
+        echo "🚀 启动钉钉服务..."
+        cd "$DINGTALK_DIR" && nohup bun run start-with-keepawake.ts > /tmp/dingtalk-cursor.log 2>&1 &
+        echo "  ✅ 钉钉服务已启动 (PID: $!)"
+        ;;
+      *)
+        echo "🚀 启动所有服务..."
+        cd "$FEISHU_DIR" && nohup bun run start-with-keepawake.ts > /tmp/feishu-cursor.log 2>&1 &
+        echo "  ✅ 飞书服务已启动 (PID: $!)"
+        cd "$DINGTALK_DIR" && nohup bun run start-with-keepawake.ts > /tmp/dingtalk-cursor.log 2>&1 &
+        echo "  ✅ 钉钉服务已启动 (PID: $!)"
+        ;;
+    esac
     ;;
     
   stop)
-    echo "🛑 停止服务..."
-    
-    # 清理所有飞书相关进程（更彻底的匹配）
-    pkill -9 -f "bun.*feishu" 2>/dev/null
-    pkill -9 -f "caffeinate.*feishu" 2>/dev/null
-    
-    # 清理所有钉钉相关进程
-    pkill -9 -f "bun.*dingtalk" 2>/dev/null
-    pkill -9 -f "caffeinate.*dingtalk" 2>/dev/null
-    
-    # 等待进程完全退出
-    sleep 1
-    
-    # 验证是否还有残留进程
-    REMAINING=$(ps aux | grep -E "bun.*(feishu|dingtalk)" | grep -v grep | wc -l)
-    if [ "$REMAINING" -gt 0 ]; then
-      echo "  ⚠️  发现残留进程，再次清理..."
-      ps aux | grep -E "bun.*(feishu|dingtalk)" | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null
-      sleep 1
-    fi
-    
-    echo "  ✅ 所有服务已停止"
+    case "$2" in
+      feishu)
+        echo "🛑 停止飞书服务..."
+        pkill -9 -f "bun.*feishu" 2>/dev/null
+        pkill -9 -f "caffeinate.*feishu" 2>/dev/null
+        sleep 1
+        echo "  ✅ 飞书服务已停止"
+        ;;
+      dingtalk)
+        echo "🛑 停止钉钉服务..."
+        pkill -9 -f "bun.*dingtalk" 2>/dev/null
+        pkill -9 -f "caffeinate.*dingtalk" 2>/dev/null
+        sleep 1
+        echo "  ✅ 钉钉服务已停止"
+        ;;
+      *)
+        echo "🛑 停止所有服务..."
+        
+        # 清理所有飞书相关进程（更彻底的匹配）
+        pkill -9 -f "bun.*feishu" 2>/dev/null
+        pkill -9 -f "caffeinate.*feishu" 2>/dev/null
+        
+        # 清理所有钉钉相关进程
+        pkill -9 -f "bun.*dingtalk" 2>/dev/null
+        pkill -9 -f "caffeinate.*dingtalk" 2>/dev/null
+        
+        # 等待进程完全退出
+        sleep 1
+        
+        # 验证是否还有残留进程
+        REMAINING=$(ps aux | grep -E "bun.*(feishu|dingtalk)" | grep -v grep | wc -l)
+        if [ "$REMAINING" -gt 0 ]; then
+          echo "  ⚠️  发现残留进程，再次清理..."
+          ps aux | grep -E "bun.*(feishu|dingtalk)" | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null
+          sleep 1
+        fi
+        
+        echo "  ✅ 所有服务已停止"
+        ;;
+    esac
     ;;
     
   restart)
-    echo "🔄 重启服务..."
-    "$0" stop
-    sleep 2
-    "$0" start
+    case "$2" in
+      feishu)
+        echo "🔄 重启飞书服务..."
+        "$0" stop feishu
+        sleep 2
+        "$0" start feishu
+        ;;
+      dingtalk)
+        echo "🔄 重启钉钉服务..."
+        "$0" stop dingtalk
+        sleep 2
+        "$0" start dingtalk
+        ;;
+      *)
+        echo "🔄 重启所有服务..."
+        "$0" stop
+        sleep 2
+        "$0" start
+        ;;
+    esac
     ;;
     
   status)
@@ -90,14 +138,28 @@ case "$1" in
   *)
     echo "Cursor Remote Control - 服务管理"
     echo ""
-    echo "用法: bash manage-services.sh {start|stop|restart|status|logs}"
+    echo "用法: bash manage-services.sh {start|stop|restart|status|logs} [feishu|dingtalk]"
     echo ""
     echo "命令:"
-    echo "  start    - 启动飞书和钉钉服务"
-    echo "  stop     - 停止所有服务"
-    echo "  restart  - 重启所有服务"
-    echo "  status   - 查看服务状态"
-    echo "  logs     - 查看日志 (logs feishu | logs dingtalk)"
+    echo "  start [service]   - 启动服务"
+    echo "    start           - 启动所有服务（飞书 + 钉钉）"
+    echo "    start feishu    - 只启动飞书服务"
+    echo "    start dingtalk  - 只启动钉钉服务"
+    echo ""
+    echo "  stop [service]    - 停止服务"
+    echo "    stop            - 停止所有服务"
+    echo "    stop feishu     - 只停止飞书服务"
+    echo "    stop dingtalk   - 只停止钉钉服务"
+    echo ""
+    echo "  restart [service] - 重启服务"
+    echo "    restart         - 重启所有服务"
+    echo "    restart feishu  - 只重启飞书服务"
+    echo "    restart dingtalk- 只重启钉钉服务"
+    echo ""
+    echo "  status            - 查看服务状态"
+    echo "  logs [service]    - 查看日志"
+    echo "    logs feishu     - 查看飞书日志"
+    echo "    logs dingtalk   - 查看钉钉日志"
     exit 1
     ;;
 esac
