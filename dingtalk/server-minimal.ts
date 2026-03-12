@@ -503,7 +503,7 @@ process.on('SIGTERM', () => {
 	process.exit(0);
 });
 
-// ── Cursor Agent 调用（与首次提交 4dbf84c 一致，仅保留 context/stdio/result 兼容）──
+// ── Cursor Agent 调用 ────────────────────────────
 async function runAgent(
 	workspace: string,
 	message: string,
@@ -536,10 +536,20 @@ async function runAgent(
 			activeAgents.set(lockKey, { pid: proc.pid, kill: () => proc.kill('SIGTERM') });
 		}
 
-		let resultFromEvent = '';  // type:'result' 的最终结果（不覆盖 assistant）
-		let assistantBuf = '';     // 累积 assistant 的 text，避免被空 result 覆盖
+		let resultFromEvent = '';
+		let assistantBuf = '';
 		let sessionId: string | undefined = agentId;
 		let lineBuf = '';
+		let done = false;
+
+		function cleanup() {
+			done = true;
+			activeAgents.delete(lockKey);
+			if (proc.pid) {
+				const idx = childPids.indexOf(proc.pid);
+				if (idx >= 0) childPids.splice(idx, 1);
+			}
+		}
 
 		proc.stdout.on('data', (chunk) => {
 			lineBuf += chunk.toString();
@@ -557,7 +567,9 @@ async function runAgent(
 					if (ev.type === 'assistant' && ev.message?.content) {
 						const parts = Array.isArray(ev.message.content) ? ev.message.content : [ev.message.content];
 						for (const c of parts) {
-							if (c?.type === 'text' && typeof c.text === 'string') assistantBuf += c.text;
+							if (c?.type === 'text' && typeof c.text === 'string') {
+								assistantBuf += c.text;
+							}
 						}
 					}
 				} catch (_) {}
@@ -567,13 +579,10 @@ async function runAgent(
 		proc.stderr.on('data', (chunk) => { console.error('[CLI stderr]', chunk.toString()); });
 
 		proc.on('close', (code) => {
-			activeAgents.delete(lockKey);
-			if (proc.pid) {
-				const idx = childPids.indexOf(proc.pid);
-				if (idx >= 0) childPids.splice(idx, 1);
-			}
-			// 优先用 result 事件内容，否则用 assistant 累积（与飞书一致，避免空 result 覆盖整段回复）
+			if (done) return;
+			cleanup();
 			const result = (resultFromEvent || assistantBuf).trim();
+			console.log(`[runAgent完成] result.length=${result.length} code=${code}`);
 			if (code === 0) resolve({ result, sessionId });
 			else reject(new Error(`Agent exited with code ${code}`));
 		});
@@ -766,25 +775,31 @@ async function fixCronJobsLocation(workspace: string, webhook: string) {
 			correctData = { version: 1, jobs: [] };
 		}
 		
-		// 修正每个任务的字段
-		let fixedCount = 0;
-		for (const job of wrongData.jobs || []) {
-			// 添加缺失的 platform 和 webhook 字段
-			if (!job.platform) {
-				job.platform = 'dingtalk';
-				fixedCount++;
-			}
-			if (!job.webhook) {
-				job.webhook = webhook;
-				fixedCount++;
-			}
-			
-			// 检查是否已存在（避免重复）
-			const exists = correctData.jobs.some((j: any) => j.id === job.id);
-			if (!exists) {
-				correctData.jobs.push(job);
-			}
+	// 修正每个任务的字段
+	let fixedCount = 0;
+	for (const job of wrongData.jobs || []) {
+		// 跳过明确属于其他平台的任务
+		if (job.platform && job.platform !== 'dingtalk') {
+			console.log(`[修正] 跳过 ${job.platform} 平台的任务: ${job.name}`);
+			continue;
 		}
+		
+		// 添加缺失的 platform 和 webhook 字段
+		if (!job.platform) {
+			job.platform = 'dingtalk';
+			fixedCount++;
+		}
+		if (!job.webhook) {
+			job.webhook = webhook;
+			fixedCount++;
+		}
+		
+		// 检查是否已存在（避免重复）
+		const exists = correctData.jobs.some((j: any) => j.id === job.id);
+		if (!exists) {
+			correctData.jobs.push(job);
+		}
+	}
 		
 		// 保存到正确位置
 		writeFileSync(correctPath, JSON.stringify(correctData, null, 2));
@@ -1531,33 +1546,40 @@ async function handleMessage(msg: any) {
 			console.log(`[并发] 会话 ${lockKey} 已在运行，等待中...`);
 		}
 		
-		busySessions.add(lockKey);
-		console.log(`[执行] workspace=${workspace} message="${message.slice(0, 60)}"`);
-		await sendMarkdown(sessionWebhook, '⏳ Cursor AI 正在思考...', '💭 思考中', 'wathet');
-		
-		// 记忆由 Cursor 自主通过 memory-tool.ts 调用，server 记录会话日志
-		if (memory) {
-			memory.appendSessionLog(workspace, "user", message, config.CURSOR_MODEL);
-		}
-		
-		try {
-			const { result, sessionId } = await runAgent(workspace, message, session.agentId, {
-				platform: 'dingtalk',
-				webhook: sessionWebhook
-			});
+	busySessions.add(lockKey);
+	console.log(`[执行] workspace=${workspace} message="${message.slice(0, 60)}"`);
+	
+	console.log(`[DEBUG-1] 准备发送思考中提示`);
+	await sendMarkdown(sessionWebhook, '⏳ Cursor AI 正在思考...', '💭 思考中', 'wathet');
+	console.log(`[DEBUG-2] 思考中提示已发送`);
+	
+	// 记忆由 Cursor 自主通过 memory-tool.ts 调用，server 记录会话日志
+	if (memory) {
+		memory.appendSessionLog(workspace, "user", message, config.CURSOR_MODEL);
+		console.log(`[DEBUG-3] 已记录用户消息到会话日志`);
+	}
+	
+	console.log(`[DEBUG-4] 准备调用 runAgent, message="${message.slice(0, 30)}"`);
+	try {
+		const { result, sessionId } = await runAgent(workspace, message, session.agentId, {
+			platform: 'dingtalk',
+			webhook: sessionWebhook
+		});
+		console.log(`[DEBUG-5] runAgent 返回: result="${result?.slice(0, 100) || '(empty)'}" length=${result?.length || 0}`);
 
 			if (sessionId) {
 				session.agentId = sessionId;
 				setActiveSession(workspace, sessionId, message.slice(0, 40));
 			}
 
-			let resultStr = '';
-			if (typeof result === 'string') resultStr = result;
-			else if (result && typeof result === 'object') {
-				const obj = result as any;
-				resultStr = obj.text || obj.content || '';
-			}
-			const cleanOutput = resultStr.trim();
+		let resultStr = '';
+		if (typeof result === 'string') resultStr = result;
+		else if (result && typeof result === 'object') {
+			const obj = result as any;
+			resultStr = obj.text || obj.content || '';
+		}
+		const cleanOutput = resultStr.trim();
+		console.log(`[DEBUG-6] cleanOutput.length=${cleanOutput.length}, isEmpty=${!cleanOutput}`);
 			
 			// 记录 assistant 回复到会话日志
 			if (memory) {
