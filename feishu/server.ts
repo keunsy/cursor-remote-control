@@ -1393,7 +1393,9 @@ function execAgent(
 		}
 		
 		// 传递定时任务文件的绝对路径（Agent 直接写入，不依赖工作区）
-		env.CURSOR_CRON_FILE = resolve(ROOT, 'cron-jobs-feishu.json');
+		const cronFilePath = resolve(ROOT, 'cron-jobs-feishu.json');
+		env.CURSOR_CRON_FILE = cronFilePath;
+		console.log(`[ENV] 设置 CURSOR_CRON_FILE=${cronFilePath}`);
 
 		const child = spawn(AGENT_BIN, args, {
 			env,
@@ -2249,6 +2251,30 @@ async function handleInner(
 			console.log(`[路由] 持久切换到项目: ${routeIntent.project}`);
 			return;
 		}
+	}
+	
+	// 检测简单定时任务请求，服务器端直接创建（不依赖 Agent）
+	const simpleScheduleMatch = text.match(/^(\d+)(分钟|小时)后\s*(?:提醒|通知)?(?:我)?\s*(.+)$/i);
+	if (simpleScheduleMatch) {
+		const [, num, unit, taskMessage] = simpleScheduleMatch;
+		const minutes = unit === '小时' ? parseInt(num) * 60 : parseInt(num);
+		const runAtMs = Date.now() + minutes * 60 * 1000;
+		const runAt = new Date(runAtMs);
+		
+		const task = await scheduler.add({
+			name: `${num}${unit}后提醒`,
+			enabled: true,
+			deleteAfterRun: true,
+			schedule: { kind: 'at', at: runAt.toISOString() },
+			message: taskMessage.trim(),
+			platform: 'feishu',
+			webhook: chatId,
+		});
+		
+		const timeStr = runAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+		await replyCard(messageId, `✅ 已设置好，大约在 **${timeStr}** 通过飞书提醒你：\n\n${taskMessage}\n\n发送 \`/cron\` 可查看所有任务。`, { title: '⏰ 定时任务已创建', color: 'green' });
+		console.log(`[任务] 服务器端创建: ${task.name} @ ${timeStr}`);
+		return;
 	}
 	
 	// 路由解析（传入 intent 避免重复检测）
