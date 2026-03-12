@@ -1322,27 +1322,39 @@ async function handleMessage(msg: any) {
 		const taskMatch = message.match(/^\/(任务|cron|定时|task|schedule|定时任务)[\s:：]*(.*)/i);
 		if (taskMatch) {
 			const subCmd = taskMatch[2].trim().toLowerCase();
-			
+
 			// 无参数 → 列出所有任务
 			if (!subCmd) {
-				const jobs = await scheduler.list(true);
+				// 直接从文件读取最新任务（避免 reload 的 3 秒保护机制）
+				const cronFilePath = resolve(ROOT, 'cron-jobs-dingtalk.json');
+				let jobs: any[] = [];
+				try {
+					const data = JSON.parse(readFileSync(cronFilePath, 'utf-8'));
+					jobs = (data.jobs || []).filter((j: any) => j.platform === 'dingtalk');
+				} catch (e) {
+					console.warn(`[任务] 读取文件失败: ${e}`);
+				}
+				
 				if (jobs.length === 0) {
 					await sendMarkdown(sessionWebhook, '暂无定时任务。\n\n在对话中说「每天早上9点做XX」，AI 会自动创建任务。', '📋 定时任务');
 					return;
 				}
-				const lines = jobs.map((j, i) => {
+				const lines = jobs.map((j: any, i: number) => {
 					const status = j.enabled ? '✅' : '⏸️';
-					const schedDesc = j.schedule.kind === 'at'
-						? `一次性: ${new Date(j.schedule.at).toLocaleString('zh-CN')}`
-						: j.schedule.kind === 'every'
-							? `每 ${Math.round(j.schedule.everyMs / 60000)} 分钟`
-							: `cron: ${j.schedule.expr}`;
-					const lastRun = j.state.lastRunAtMs ? new Date(j.state.lastRunAtMs).toLocaleString('zh-CN') : '从未执行';
+					let schedDesc = "";
+					if (j.schedule.kind === 'at') {
+						const atTime = new Date(j.schedule.at);
+						schedDesc = `一次性 ${atTime.toLocaleString("zh-CN", { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}`;
+					} else if (j.schedule.kind === 'every') {
+						schedDesc = `每 ${Math.round(j.schedule.everyMs / 60000)} 分钟`;
+					} else {
+						schedDesc = `cron: ${j.schedule.expr}`;
+					}
+					const lastRun = j.state?.lastRunAtMs ? new Date(j.state.lastRunAtMs).toLocaleString('zh-CN') : '从未执行';
 					return `${status} **${i + 1}. ${j.name}**\n   调度: ${schedDesc}\n   上次: ${lastRun}\n   ID: \`${j.id.slice(0, 8)}\``;
 				});
-				const stats = scheduler.getStats();
-				lines.push('', `共 ${stats.total} 个任务（${stats.enabled} 启用）${stats.nextRunIn ? `，下次执行: ${stats.nextRunIn}` : ''}`);
-				await sendMarkdown(sessionWebhook, lines.join('\n'), '📋 定时任务', 'blue');
+				lines.push('', `📊 共 ${jobs.length} 个待执行任务`);
+				await sendMarkdown(sessionWebhook, lines.join('\n'), '📋 定时任务');
 				return;
 			}
 			
