@@ -1708,12 +1708,10 @@ const scheduler = new Scheduler({
 			return;
 		}
 		
-		const title = `⏰ 定时任务: ${job.name}`;
-		if (result.length <= 3800) {
-			await sendMarkdown(webhook, result, title, 'purple');
-		} else {
-			await sendMarkdown(webhook, result.slice(0, 3800) + '\n\n...(已截断)', title, 'orange');
-		}
+		// 发送提醒内容
+		const title = `⏰ 定时提醒`;
+		await sendMarkdown(webhook, result, title);
+		console.log(`[定时] 钉钉提醒已发送: ${result}`);
 	},
 	log: (msg: string) => console.log(`[调度] ${msg}`),
 });
