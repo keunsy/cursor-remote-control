@@ -786,31 +786,31 @@ const MAX_SEEN_SIZE = 1000;
 
 function isDuplicate(messageId: string): boolean {
 	const now = Date.now();
-	
+
 	// 清理超过 5 分钟的旧消息
 	for (const [id, timestamp] of seenMessages.entries()) {
 		if (now - timestamp > 5 * 60 * 1000) {
 			seenMessages.delete(id);
 		}
 	}
-	
+
 	// 检查是否重复
 	if (seenMessages.has(messageId)) {
 		const age = now - seenMessages.get(messageId)!;
-		console.log(`[去重] ✓ 命中 msgId="${messageId.slice(0, 30)}" (${Math.round(age/1000)}秒前已处理)`);
+		console.log(`[去重] ❌ 重复消息 msgId="${messageId}" (${Math.round(age/1000)}秒前已处理)`);
 		return true;
 	}
-	
+
 	// 记录新消息
 	seenMessages.set(messageId, now);
-	console.log(`[去重] ✓ 新消息 msgId="${messageId.slice(0, 30)}" (缓存: ${seenMessages.size})`);
-	
+	console.log(`[去重] ✅ 新消息 msgId="${messageId}" (缓存: ${seenMessages.size})`);
+
 	// 防止内存泄漏：超过上限时删除最旧的
 	if (seenMessages.size > MAX_SEEN_SIZE) {
 		const oldest = Array.from(seenMessages.entries()).sort((a, b) => a[1] - b[1])[0];
 		seenMessages.delete(oldest[0]);
 	}
-	
+
 	return false;
 }
 
@@ -822,7 +822,7 @@ async function handleMessage(msg: any) {
 	const messageId = data.msgId || data.messageId || 'unknown';
 	
 	if (isDuplicate(messageId)) {
-		console.log(`[去重] 跳过重复消息: ${messageId}`);
+		console.log(`[去重] ⏭️  跳过重复消息`);
 		return;
 	}
 	
@@ -1631,14 +1631,16 @@ const client = new DWClient({
 });
 
 client.registerCallbackListener(TOPIC_ROBOT, async (res) => {
+	console.log('[回调] 收到钉钉推送');
 	try {
 		await handleMessage(res);
+		console.log('[回调] 处理完成，返回 200');
 		return { code: 200, message: 'OK' };
 	} catch (error) {
 		console.error('[回调异常]', error);
-		return { 
-			code: 500, 
-			message: error instanceof Error ? error.message : String(error) 
+		return {
+			code: 500,
+			message: error instanceof Error ? error.message : String(error)
 		};
 	}
 });

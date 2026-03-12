@@ -16,10 +16,18 @@ case "$1" in
     
   stop)
     echo "🛑 停止服务..."
-    pkill -f "bun.*feishu.*start-with-keepawake"
+    # 清理飞书相关进程
+    pkill -9 -f "bun.*feishu.*start" 2>/dev/null
+    pkill -9 -f "caffeinate.*feishu" 2>/dev/null
     echo "  ✅ 飞书服务已停止"
-    pkill -f "bun.*dingtalk.*start-with-keepawake"
+    
+    # 清理钉钉相关进程
+    pkill -9 -f "bun.*dingtalk.*start" 2>/dev/null
+    pkill -9 -f "caffeinate.*dingtalk" 2>/dev/null
     echo "  ✅ 钉钉服务已停止"
+    
+    # 等待进程完全退出
+    sleep 1
     ;;
     
   restart)
