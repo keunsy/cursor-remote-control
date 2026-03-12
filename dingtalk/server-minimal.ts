@@ -1139,8 +1139,9 @@ async function handleMessage(msg: any) {
 				'- `/心跳 间隔 分钟数`',
 				'',
 				'**项目路由**',
-				`发送 \`/项目名 消息\` 或 \`#项目名 消息\` 指定工作区`,
-				`可用项目：${Object.keys(projectsConfig.projects).map(k => `\`${k}\``).join('、')}（默认：\`${projectsConfig.default_project}\`）`,
+				'· 对话切换：说「切到 remote」「切换到 XXX 项目」「现在用 activity」等可持久切换',
+				'· 前缀指定：`项目名:消息` 或 `#项目名 消息` 指定工作区',
+				`· 可用项目：${Object.keys(projectsConfig.projects).map(k => `\`${k}\``).join('、')}（默认：\`${projectsConfig.default_project}\`）`,
 			].join('\n');
 			await sendMarkdown(sessionWebhook, helpText, '📖 使用帮助', 'blue');
 			return;
