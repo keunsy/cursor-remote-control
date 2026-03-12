@@ -1555,8 +1555,8 @@ function splitMarkdown(text: string, maxLen: number): string[] {
 }
 
 // ── 定时任务调度器 ────────────────────────────────
-// 钉钉独立的 cron-jobs.json（与飞书分离）
-const cronStorePath = resolve(defaultWorkspace, 'cron-jobs-dingtalk.json');
+// 钉钉独立的 cron-jobs.json（保存在固定的全局目录）
+const cronStorePath = resolve(ROOT, 'cron-jobs-dingtalk.json');
 
 const scheduler = new Scheduler({
 	storePath: cronStorePath,
@@ -1604,7 +1604,7 @@ console.log(`
 │  连接: 钉钉 Stream 长连接
 │  收件: ${INBOX_DIR}
 │  记忆: ${memory ? `与飞书共享（${config.VOLC_EMBEDDING_MODEL}）` : '未初始化'}
-│  调度: cron-jobs-dingtalk.json (独立监听)
+│  调度: cron-jobs-dingtalk.json (全局目录)
 │  心跳: 默认关闭（/心跳 开启）
 │
 │  项目路由:
@@ -1652,7 +1652,7 @@ console.log('[调度] 正在启动 Scheduler...');
 scheduler.start().catch((err) => {
 	console.error('[调度] 启动失败:', err);
 });
-console.log('[调度] Scheduler 已启动，监听 cron-jobs-dingtalk.json');
+console.log(`[调度] Scheduler 已启动，文件: ${cronStorePath}`);
 
 // ── 启动心跳系统 ──────────────────────────────────
 heartbeat.start();

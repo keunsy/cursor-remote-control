@@ -224,7 +224,8 @@ try {
 let lastActiveChatId: string | undefined;
 
 // ── 定时任务调度器 ────────────────────────────────
-const cronStorePath = resolve(defaultWorkspace, "cron-jobs.json");
+// 保存在固定的全局目录（不随项目切换而变化）
+const cronStorePath = resolve(ROOT, "cron-jobs-feishu.json");
 
 const scheduler = new Scheduler({
 	storePath: cronStorePath,
@@ -2016,7 +2017,7 @@ async function handleInner(
 		if (!subCmd || subCmd === "list" || subCmd === "列表") {
 			const jobs = await scheduler.list();
 			if (jobs.length === 0) {
-				await replyCard(messageId, "暂无定时任务。\n\n在对话中告诉 AI「每天早上9点检查邮件」即可自动创建，\n或手动编辑工作区的 `cron-jobs.json`。", { title: "📋 定时任务", color: "blue" });
+				await replyCard(messageId, "暂无定时任务。\n\n在对话中告诉 AI「每天早上9点检查邮件」即可自动创建，\n或手动编辑全局文件 `cron-jobs-feishu.json`。", { title: "📋 定时任务", color: "blue" });
 				return;
 			}
 			const lines = jobs.map((j, i) => {
@@ -2479,7 +2480,7 @@ console.log(`
 │  收件: ${INBOX_DIR}
 │  语音: ${sttEngine}
 │  记忆: ${memEngine}
-│  调度: cron-jobs.json (文件监听)
+│  调度: cron-jobs-feishu.json (全局目录)
 │  心跳: 默认关闭（飞书 /心跳 开启）
 │  自检: .cursor/BOOT.md（每次启动执行）
 │
