@@ -1,0 +1,37 @@
+{
+  "name": "feishu-cursor-claw",
+  "version": "0.1.0",
+  "description": "Turn Feishu/Lark into a remote control for Cursor AI — your personal AI strategic partner via IM",
+  "type": "module",
+  "scripts": {
+    "start": "bun run server.ts",
+    "bridge": "bun run bridge.ts"
+  },
+  "engines": {
+    "bun": ">=1"
+  },
+  "keywords": [
+    "cursor",
+    "feishu",
+    "lark",
+    "ai-agent",
+    "cursor-agent",
+    "speech-to-text",
+    "volcengine",
+    "whisper"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nongjun/feishu-cursor-claw"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.59.0"
+  }
+}

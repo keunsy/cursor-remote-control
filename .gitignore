@@ -1,0 +1,47 @@
+# 环境变量和敏感信息
+.env
+.env.local
+.env.*.local
+
+# 依赖
+node_modules/
+**/node_modules/
+
+# 日志
+*.log
+logs/
+*.log.*
+/tmp/*.log
+
+# 构建产物
+dist/
+build/
+*.js.map
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# 运行时文件
+*.pid
+*.sock
+
+# 数据库
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.memory.sqlite*
+
+# 收件箱
+inbox/
+**/inbox/
+
+# 本地配置
+plist/
+*.plist
