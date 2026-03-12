@@ -16,25 +16,34 @@ case "$1" in
     
   stop)
     echo "🛑 停止服务..."
-    # 清理飞书相关进程
-    pkill -9 -f "bun.*feishu.*start" 2>/dev/null
-    pkill -9 -f "caffeinate.*feishu" 2>/dev/null
-    echo "  ✅ 飞书服务已停止"
     
-    # 清理钉钉相关进程
-    pkill -9 -f "bun.*dingtalk.*start" 2>/dev/null
+    # 清理所有飞书相关进程（更彻底的匹配）
+    pkill -9 -f "bun.*feishu" 2>/dev/null
+    pkill -9 -f "caffeinate.*feishu" 2>/dev/null
+    
+    # 清理所有钉钉相关进程
+    pkill -9 -f "bun.*dingtalk" 2>/dev/null
     pkill -9 -f "caffeinate.*dingtalk" 2>/dev/null
-    echo "  ✅ 钉钉服务已停止"
     
     # 等待进程完全退出
     sleep 1
+    
+    # 验证是否还有残留进程
+    REMAINING=$(ps aux | grep -E "bun.*(feishu|dingtalk)" | grep -v grep | wc -l)
+    if [ "$REMAINING" -gt 0 ]; then
+      echo "  ⚠️  发现残留进程，再次清理..."
+      ps aux | grep -E "bun.*(feishu|dingtalk)" | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null
+      sleep 1
+    fi
+    
+    echo "  ✅ 所有服务已停止"
     ;;
     
   restart)
     echo "🔄 重启服务..."
-    $0 stop
+    "$0" stop
     sleep 2
-    $0 start
+    "$0" start
     ;;
     
   status)

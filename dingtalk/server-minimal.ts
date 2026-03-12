@@ -503,14 +503,14 @@ process.on('SIGTERM', () => {
 	process.exit(0);
 });
 
-// ── Cursor Agent 调用 ────────────────────────────
+// ── Cursor Agent 调用（基于飞书的稳定实现）────────
 async function runAgent(
 	workspace: string,
 	message: string,
 	agentId?: string,
 	context?: { platform?: string; webhook?: string }
 ): Promise<{ result: string; sessionId?: string }> {
-	return new Promise((resolve, reject) => {
+	return new Promise((res, reject) => {
 		const args = [
 			'-p', '--force', '--trust', '--approve-mcps',
 			'--workspace', workspace,
@@ -536,9 +536,11 @@ async function runAgent(
 			activeAgents.set(lockKey, { pid: proc.pid, kill: () => proc.kill('SIGTERM') });
 		}
 
-		let resultFromEvent = '';
-		let assistantBuf = '';
+		let stderr = '';
+		let resultText = '';
 		let sessionId: string | undefined = agentId;
+		let assistantBuf = '';
+		let lastSegment = '';
 		let lineBuf = '';
 		let done = false;
 
@@ -560,15 +562,15 @@ async function runAgent(
 				try {
 					const ev = JSON.parse(line);
 					if (ev.session_id && !sessionId) sessionId = ev.session_id;
-					if (ev.type === 'result' && ev.result !== undefined) {
-						const r = ev.result;
-						resultFromEvent = typeof r === 'string' ? r : (r?.text ?? r?.content ?? String(r ?? ''));
+					
+					if (ev.type === 'result' && ev.result != null) {
+						resultText = ev.result;
 					}
 					if (ev.type === 'assistant' && ev.message?.content) {
-						const parts = Array.isArray(ev.message.content) ? ev.message.content : [ev.message.content];
-						for (const c of parts) {
-							if (c?.type === 'text' && typeof c.text === 'string') {
+						for (const c of ev.message.content) {
+							if (c.type === 'text' && c.text) {
 								assistantBuf += c.text;
+								lastSegment += c.text;
 							}
 						}
 					}
@@ -576,15 +578,31 @@ async function runAgent(
 			}
 		});
 
-		proc.stderr.on('data', (chunk) => { console.error('[CLI stderr]', chunk.toString()); });
+		proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
 
 		proc.on('close', (code) => {
 			if (done) return;
 			cleanup();
-			const result = (resultFromEvent || assistantBuf).trim();
-			console.log(`[runAgent完成] result.length=${result.length} code=${code}`);
-			if (code === 0) resolve({ result, sessionId });
+			if (lineBuf.trim()) {
+				try {
+					const ev = JSON.parse(lineBuf);
+					if (ev.session_id && !sessionId) sessionId = ev.session_id;
+					if (ev.type === 'result' && ev.result != null) resultText = ev.result;
+				} catch (_) {}
+			}
+
+			const rawResultText = typeof resultText === 'string' ? resultText.trim() : '';
+			const finalSegment = lastSegment.trim();
+			const rawOutput = rawResultText || finalSegment || assistantBuf.trim() || stderr.trim() || '(无输出)';
+			
+			console.log(`[runAgent完成] rawResultText.length=${rawResultText.length} finalSegment.length=${finalSegment.length} assistantBuf.length=${assistantBuf.trim().length}`);
+			
+			if (code === 0) res({ result: rawOutput, sessionId });
 			else reject(new Error(`Agent exited with code ${code}`));
+		});
+
+		proc.on('error', (err) => {
+			if (!done) { cleanup(); reject(err); }
 		});
 	});
 }

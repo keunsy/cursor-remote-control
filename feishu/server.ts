@@ -1696,16 +1696,22 @@ async function fixCronJobsLocation(workspace: string, chatId: string) {
 			correctData = { version: 1, jobs: [] };
 		}
 		
-		// 修正每个任务的字段
-		let fixedCount = 0;
-		for (const job of wrongData.jobs || []) {
-			// 添加缺失的 platform 和 webhook 字段
-			if (!job.platform) {
-				job.platform = 'feishu';
-				fixedCount++;
-			}
-			if (!job.webhook) {
-				job.webhook = chatId;
+	// 修正每个任务的字段
+	let fixedCount = 0;
+	for (const job of wrongData.jobs || []) {
+		// 跳过明确属于其他平台的任务
+		if (job.platform && job.platform !== 'feishu') {
+			console.log(`[修正] 跳过 ${job.platform} 平台的任务: ${job.name}`);
+			continue;
+		}
+		
+		// 添加缺失的 platform 和 webhook 字段
+		if (!job.platform) {
+			job.platform = 'feishu';
+			fixedCount++;
+		}
+		if (!job.webhook) {
+			job.webhook = chatId;
 				fixedCount++;
 			}
 			
@@ -2079,16 +2085,29 @@ async function handleInner(
 
 	// /任务、/cron、/定时 → 定时任务管理
 	const taskMatch = text.match(/^\/(任务|cron|定时|task|schedule|定时任务)[\s:：]*(.*)/i);
+	console.log(`[命令检测] text="${text}" → taskMatch=${taskMatch ? 'YES' : 'NO'}`);
 	if (taskMatch) {
 		const subCmd = taskMatch[2].trim().toLowerCase();
+		console.log(`[命令执行] /cron 子命令="${subCmd}"`);
 
 		if (!subCmd || subCmd === "list" || subCmd === "列表") {
 			// 直接从文件读取最新任务（避免 reload 的 3 秒保护机制）
 			const cronFilePath = resolve(ROOT, 'cron-jobs-feishu.json');
+			console.log(`[任务查询] 读取文件: ${cronFilePath}`);
 			let jobs: any[] = [];
 			try {
 				const data = JSON.parse(readFileSync(cronFilePath, 'utf-8'));
-				jobs = (data.jobs || []).filter((j: any) => j.enabled && j.platform === 'feishu');
+				console.log(`[任务查询] 文件内容: ${JSON.stringify(data).slice(0, 200)}`);
+				const allJobs = data.jobs || [];
+				console.log(`[任务查询] 总任务数: ${allJobs.length}`);
+				jobs = allJobs.filter((j: any) => j.enabled && j.platform === 'feishu');
+				console.log(`[任务查询] 过滤后任务数: ${jobs.length}, 过滤条件: enabled=true && platform='feishu'`);
+				if (allJobs.length > 0 && jobs.length === 0) {
+					console.log(`[任务查询] ⚠️ 有任务但过滤后为空，检查任务详情:`);
+					allJobs.forEach((j: any, i: number) => {
+						console.log(`[任务查询]   任务${i}: enabled=${j.enabled}, platform=${j.platform}, name=${j.name}`);
+					});
+				}
 			} catch (e) {
 				console.warn(`[任务] 读取文件失败: ${e}`);
 			}
@@ -2552,11 +2571,13 @@ dispatcher.register({
 			const chatType = (msg.chat_type as string) || "p2p";
 			const content = msg.content as string;
 
-			const allowed = await shouldProcessMessage(messageId);
-			if (!allowed) {
-				console.log("[去重] 跳过重复 message_id:", messageId);
-				return;
-			}
+		console.log(`[消息] 收到消息 messageId=${messageId.slice(0, 20)}... type=${messageType}`);
+		const allowed = await shouldProcessMessage(messageId);
+		if (!allowed) {
+			console.log(`[去重] ❌ 跳过重复消息 messageId=${messageId.slice(0, 20)}...`);
+			return;
+		}
+		console.log(`[去重] ✅ 新消息，允许处理 messageId=${messageId.slice(0, 20)}...`);
 			if (!TYPES.has(messageType)) {
 				await replyCard(messageId, `暂不支持: ${messageType}`);
 				return;

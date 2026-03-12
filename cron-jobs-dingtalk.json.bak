@@ -2,36 +2,22 @@
   "version": 1,
   "jobs": [
     {
-      "id": "a1b2c3d4-e5f6-4789-a012-345678901234",
-      "name": "3分钟后提醒 wc",
+      "name": "2分钟后提醒",
       "enabled": true,
       "deleteAfterRun": true,
       "schedule": {
         "kind": "at",
-        "at": "2026-03-12T17:05:00+08:00"
+        "at": "2026-03-12T11:46:43.973Z"
       },
-      "message": "提醒：wc",
-      "createdAt": "2026-03-12T17:01:00+08:00",
-      "updatedAt": "2026-03-12T17:02:00+08:00",
-      "state": {},
-      "platform": "dingtalk",
-      "webhook": "https://oapi.dingtalk.com/robot/sendBySession?session=7b6e8700c2c1a2d80221b509ff396244"
-    },
-    {
-      "id": "380e1221-0e2b-43d8-bdda-5f0e004042c4",
-      "name": "3分钟后提醒喝水",
-      "enabled": true,
-      "deleteAfterRun": true,
-      "schedule": {
-        "kind": "at",
-        "at": "2026-03-12T17:25:27+08:00"
-      },
-      "message": "提醒：喝水",
+      "message": "丢垃圾",
       "platform": "dingtalk",
       "webhook": "https://oapi.dingtalk.com/robot/sendBySession?session=7b6e8700c2c1a2d80221b509ff396244",
-      "createdAt": "2026-03-12T09:22:27.971Z",
-      "updatedAt": "2026-03-12T09:22:27.971Z",
-      "state": {}
+      "id": "5634888c-4321-4603-883f-d26a127932d8",
+      "createdAt": "2026-03-12T11:44:43.973Z",
+      "updatedAt": "2026-03-12T11:44:43.973Z",
+      "state": {
+        "nextRunAtMs": 1773316003973
+      }
     }
   ]
 }

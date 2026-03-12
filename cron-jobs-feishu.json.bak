@@ -2,21 +2,21 @@
   "version": 1,
   "jobs": [
     {
-      "name": "5分钟后提醒",
+      "id": "at-19-20-qucan",
+      "name": "取餐提醒",
       "enabled": true,
       "deleteAfterRun": true,
       "schedule": {
         "kind": "at",
-        "at": "2026-03-12T10:19:34.693Z"
+        "at": "2026-03-12T19:20:00+08:00"
       },
-      "message": "环境很好",
+      "message": "取餐",
       "platform": "feishu",
-      "webhook": "oc_672ad3c25adbe2e707730799a0b133ec",
-      "id": "729bdd67-fa9c-4db5-9690-872eaff1efbe",
-      "createdAt": "2026-03-12T10:14:34.694Z",
-      "updatedAt": "2026-03-12T10:14:34.694Z",
+      "webhook": "",
+      "createdAt": "2026-03-12T11:20:00.000Z",
+      "updatedAt": "2026-03-12T11:20:00.000Z",
       "state": {
-        "nextRunAtMs": 1773310774693
+        "nextRunAtMs": 1773314400000
       }
     }
   ]
