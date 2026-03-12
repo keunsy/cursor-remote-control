@@ -2,8 +2,10 @@
 
 # 飞书和钉钉服务管理脚本
 
-FEISHU_DIR="/Users/keunsy/work/cursor/cursor-remote-control/feishu"
-DINGTALK_DIR="/Users/keunsy/work/cursor/cursor-remote-control/dingtalk"
+# 获取脚本所在目录的绝对路径
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FEISHU_DIR="${SCRIPT_DIR}/feishu"
+DINGTALK_DIR="${SCRIPT_DIR}/dingtalk"
 
 case "$1" in
   start)

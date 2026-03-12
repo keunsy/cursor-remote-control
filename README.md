@@ -136,7 +136,7 @@ curl https://cursor.com/install -fsS | bash
 ~/.local/bin/agent login
 
 # 4. 创建并配置文件
-cd /Users/keunsy/work/cursor/cursor-remote-control
+cd /path/to/cursor-remote-control
 
 # 创建项目路由配置
 cp projects.json.example projects.json
@@ -260,7 +260,7 @@ bash manage-services.sh logs dingtalk    # 查看钉钉日志
 **首次配置**：从模板创建配置文件
 
 ```bash
-cd /Users/keunsy/work/cursor/cursor-remote-control
+cd /path/to/cursor-remote-control
 cp projects.json.example projects.json
 # 编辑 projects.json，配置你的工作区
 ```
