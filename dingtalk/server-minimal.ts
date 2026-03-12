@@ -17,6 +17,8 @@ import { resolve } from 'node:path';
 import axios from 'axios';
 import { execFileSync } from 'node:child_process';
 import { Scheduler, type CronJob } from './scheduler.js';
+import { MemoryManager } from './memory.js';
+import { HeartbeatRunner } from './heartbeat.js';
 
 const HOME = process.env.HOME!;
 const ROOT = resolve(import.meta.dirname, '..');
@@ -46,9 +48,6 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason) => {
 	console.error('[Promise 异常]', reason);
 });
-
-// 默认工作区（用于定时任务）
-const defaultWorkspace = resolve(ROOT, 'remote-control');
 
 // ── 配置 ─────────────────────────────────────────
 interface EnvConfig {
@@ -112,6 +111,56 @@ interface ProjectsConfig {
 const projectsConfig: ProjectsConfig = existsSync(PROJECTS_PATH)
 	? JSON.parse(readFileSync(PROJECTS_PATH, 'utf-8'))
 	: { projects: { default: { path: ROOT, description: 'Default' } }, default_project: 'default' };
+
+// ── 记忆管理器 ───────────────────────────────────
+const defaultWorkspace = projectsConfig.projects[projectsConfig.default_project]?.path || ROOT;
+
+// 记忆工作区：支持独立配置，避免污染工作项目
+const memoryWorkspaceKey = (projectsConfig as any).memory_workspace || projectsConfig.default_project;
+const memoryWorkspace = projectsConfig.projects[memoryWorkspaceKey]?.path || defaultWorkspace;
+
+let memory: MemoryManager | undefined;
+try {
+	memory = new MemoryManager({
+		workspaceDir: memoryWorkspace,
+		embeddingApiKey: config.VOLC_EMBEDDING_API_KEY,
+		embeddingModel: config.VOLC_EMBEDDING_MODEL,
+		embeddingEndpoint: "https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal",
+	});
+	setTimeout(() => {
+		memory!.index().then((n) => {
+			if (n > 0) console.log(`[记忆] 启动索引完成: ${n} 块`);
+		}).catch((e) => console.warn(`[记忆] 启动索引失败: ${e}`));
+	}, 3000);
+} catch (e) {
+	console.warn(`[记忆] 初始化失败（功能降级）: ${e}`);
+}
+
+// ── 最近活跃 webhook（用于定时任务/心跳主动推送）─────
+// （钉钉使用 webhook 而非 chatId）
+
+// ── 心跳系统 ──────────────────────────────────────
+const heartbeat = new HeartbeatRunner({
+	config: {
+		enabled: false,  // 默认关闭，用户通过 /心跳 开启
+		everyMs: 30 * 60_000,  // 30 分钟
+	},
+	onExecute: async (prompt: string) => {
+		memory?.appendSessionLog(defaultWorkspace, "user", "[心跳检查] " + prompt.slice(0, 200), config.CURSOR_MODEL);
+		const { result } = await runAgent(defaultWorkspace, prompt);
+		memory?.appendSessionLog(defaultWorkspace, "assistant", result.slice(0, 3000), config.CURSOR_MODEL);
+		return result;
+	},
+	onDelivery: async (content: string) => {
+		const webhook = getWebhook();
+		if (!webhook) {
+			console.warn("[心跳] 无活跃 webhook，跳过发送");
+			return;
+		}
+		await sendMarkdown(webhook, content, '💓 心跳检查');
+	},
+	log: (msg: string) => console.log(`[心跳] ${msg}`),
+});
 
 // ── 钉钉 access_token ────────────────────────────
 let accessToken = '';
@@ -224,14 +273,31 @@ function getWebhook(conversationId?: string): string | undefined {
 }
 
 // ── 消息发送 ─────────────────────────────────────
-async function sendMarkdown(webhook: string, markdown: string, title?: string) {
+async function sendMarkdown(webhook: string, markdown: string, title?: string, color?: string) {
 	try {
 		console.log(`[发送] webhook=${webhook.slice(0, 50)} length=${markdown.length}`);
+		
+		// 为标题添加 emoji 前缀（模拟飞书卡片的颜色）
+		const colorEmoji: Record<string, string> = {
+			'blue': '🔵',
+			'green': '✅',
+			'red': '❌',
+			'orange': '⚠️',
+			'purple': '💜',
+			'wathet': '🔷',
+			'grey': '⚪',
+		};
+		const emoji = color ? colorEmoji[color] || '📌' : '📌';
+		const formattedTitle = title ? `${emoji} ${title}` : 'Cursor AI';
+		
+		// 为内容添加轻微的分隔线样式
+		const formattedText = markdown.trim();
+		
 		await axios.post(webhook, {
 			msgtype: 'markdown',
 			markdown: {
-				title: title || 'Cursor AI',
-				text: markdown,
+				title: formattedTitle,
+				text: formattedText,
 			},
 		});
 		console.log('[发送] 成功');
@@ -438,7 +504,12 @@ process.on('SIGTERM', () => {
 });
 
 // ── Cursor Agent 调用 ────────────────────────────
-async function runAgent(workspace: string, message: string, agentId?: string): Promise<{ result: string; sessionId?: string }> {
+async function runAgent(
+	workspace: string, 
+	message: string, 
+	agentId?: string,
+	context?: { platform?: string; webhook?: string }
+): Promise<{ result: string; sessionId?: string }> {
 	return new Promise((resolve, reject) => {
 		const args = [
 			'-p', '--force', '--trust', '--approve-mcps',
@@ -460,7 +531,18 @@ async function runAgent(workspace: string, message: string, agentId?: string): P
 			? { ...process.env, CURSOR_API_KEY: config.CURSOR_API_KEY }
 			: process.env;
 		
-		const proc = spawn('agent', args, { env });
+		// 传递平台和回调地址给 agent（用于创建定时任务）
+		if (context?.platform) {
+			env.CURSOR_PLATFORM = context.platform;
+		}
+		if (context?.webhook) {
+			env.CURSOR_WEBHOOK = context.webhook;
+		}
+		
+		const proc = spawn('agent', args, { 
+			env,
+			stdio: ['ignore', 'pipe', 'pipe']
+		});
 		
 		// 追踪进程（用于 /终止）
 		const lockKey = getLockKey(workspace);
@@ -538,6 +620,7 @@ async function runAgent(workspace: string, message: string, agentId?: string): P
 interface RouteIntent {
 	type: 'switch' | 'temp' | 'none';  // switch=持久切换, temp=临时路由, none=无路由
 	project?: string;  // 项目名
+	path?: string;  // 任意路径（用于临时切换）
 	cleanedText: string;  // 移除路由信息后的文本
 }
 
@@ -547,11 +630,27 @@ interface RouteIntent {
  * - "切换到 activity 项目" / "现在用 api" → 持久切换
  * - "帮我看看 activity 项目的代码" / "在 api 里查个 bug" → 临时路由
  * - "#activity 消息" / "@api 消息" → 临时路由（简化符号）
+ * - "切换到 /path/to/project" → 临时切换到任意路径
+ * - "#/path/to/project 消息" → 快捷路径语法
  */
 function detectRouteIntent(text: string): RouteIntent {
 	const { projects } = projectsConfig;
 	const projectNames = Object.keys(projects);
 	const projectPattern = projectNames.join('|');
+	
+	// 0. 路径快捷语法：#/path 或 @/path
+	const pathSymbolMatch = text.match(/^[#@]((?:~?\/|~).+?)\s+(.+)$/);
+	if (pathSymbolMatch) {
+		const rawPath = pathSymbolMatch[1];
+		const absolutePath = rawPath.startsWith('~') 
+			? rawPath.replace(/^~/, process.env.HOME || '~')
+			: rawPath;
+		return {
+			type: 'temp',
+			path: absolutePath,
+			cleanedText: pathSymbolMatch[2].trim(),
+		};
+	}
 	
 	// 1. 简化符号：#项目名 或 @项目名
 	const symbolMatch = text.match(new RegExp(`^[#@](${projectPattern})\\s+(.+)`, 'i'));
@@ -566,7 +665,21 @@ function detectRouteIntent(text: string): RouteIntent {
 		}
 	}
 	
-	// 2. 持久切换："切换到 XXX" / "现在用 XXX" / "改成 XXX 项目"
+	// 2a. 切换到任意路径："切换到 /path" / "切换到路径 /path"
+	const pathSwitchMatch = text.match(/^(?:切换到|切换|进入|打开)(?:路径)?\s+((?:~?\/|~).+?)\s*$/i);
+	if (pathSwitchMatch) {
+		const rawPath = pathSwitchMatch[1];
+		const absolutePath = rawPath.startsWith('~') 
+			? rawPath.replace(/^~/, process.env.HOME || '~')
+			: rawPath;
+		return {
+			type: 'switch',
+			path: absolutePath,
+			cleanedText: '',
+		};
+	}
+	
+	// 2b. 持久切换到项目："切换到 XXX" / "现在用 XXX" / "改成 XXX 项目"
 	const switchPatterns = [
 		new RegExp(`^(?:切换到|切换|现在用|改成|使用)\\s*(${projectPattern})(?:项目)?\\s*$`, 'i'),
 		new RegExp(`^(?:进入|打开)\\s*(${projectPattern})(?:项目)?\\s*$`, 'i'),
@@ -623,6 +736,20 @@ function resolveWorkspace(
 	
 	// 2. 对话式路由（使用传入的 intent，避免重复检测）
 	const routeIntent = intent || detectRouteIntent(text);
+	
+	// 2a. 路径型路由（临时切换到任意目录）
+	if (routeIntent.type !== 'none' && routeIntent.path) {
+		const pathLabel = routeIntent.path.split('/').pop() || routeIntent.path;
+		return {
+			workspace: routeIntent.path,
+			message: routeIntent.cleanedText || text,
+			label: `📁${pathLabel}`,
+			routeChanged: routeIntent.type === 'switch',
+			intent: routeIntent,
+		};
+	}
+	
+	// 2b. 项目名路由
 	if (routeIntent.type !== 'none' && routeIntent.project) {
 		return {
 			workspace: projects[routeIntent.project].path,
@@ -734,7 +861,7 @@ async function handleMessage(msg: any) {
 				break;
 				
 		case 'picture':
-			await sendMarkdown(sessionWebhook, '📷 正在处理图片...');
+			await sendMarkdown(sessionWebhook, '📷 正在处理图片...', '处理中', 'wathet');
 			try {
 				if (!data.content?.downloadCode) {
 					throw new Error('图片下载码缺失');
@@ -742,13 +869,13 @@ async function handleMessage(msg: any) {
 				const imagePath = await downloadFile(data.content.downloadCode, '.jpg');
 				text = `用户发了一张图片，已保存到 ${imagePath}，请查看并回复。`;
 			} catch (error) {
-				await sendMarkdown(sessionWebhook, `❌ 图片下载失败: ${error instanceof Error ? error.message : '未知错误'}`);
+				await sendMarkdown(sessionWebhook, `❌ 图片下载失败: ${error instanceof Error ? error.message : '未知错误'}`, '失败', 'red');
 				return;
 			}
 			break;
 				
 		case 'audio':
-			await sendMarkdown(sessionWebhook, '🎙️ 正在识别语音...');
+			await sendMarkdown(sessionWebhook, '🎙️ 正在识别语音...', '识别中', 'wathet');
 			try {
 				if (!data.content?.downloadCode) {
 					throw new Error('语音下载码缺失');
@@ -760,11 +887,11 @@ async function handleMessage(msg: any) {
 					text = transcript;
 					console.log(`[语音] 识别成功: ${transcript.slice(0, 60)}`);
 				} else {
-					await sendMarkdown(sessionWebhook, '❌ 语音识别失败，请用文字重新发送');
+					await sendMarkdown(sessionWebhook, '❌ 语音识别失败，请用文字重新发送', '识别失败', 'red');
 					return;
 				}
 			} catch (error) {
-				await sendMarkdown(sessionWebhook, `❌ 语音处理失败: ${error instanceof Error ? error.message : '未知错误'}`);
+				await sendMarkdown(sessionWebhook, `❌ 语音处理失败: ${error instanceof Error ? error.message : '未知错误'}`, '失败', 'red');
 				return;
 			}
 			break;
@@ -778,13 +905,13 @@ async function handleMessage(msg: any) {
 				const filePath = await downloadFile(data.content.downloadCode, '');
 				text = `用户发了文件 ${fileName}，已保存到 ${filePath}`;
 			} catch (error) {
-				await sendMarkdown(sessionWebhook, `❌ 文件下载失败: ${error instanceof Error ? error.message : '未知错误'}`);
+				await sendMarkdown(sessionWebhook, `❌ 文件下载失败: ${error instanceof Error ? error.message : '未知错误'}`, '失败', 'red');
 				return;
 			}
 			break;
 				
 			default:
-				await sendMarkdown(sessionWebhook, `暂不支持消息类型: ${msgtype}`);
+				await sendMarkdown(sessionWebhook, `暂不支持消息类型: ${msgtype}`, '不支持', 'grey');
 				return;
 		}
 		
@@ -801,7 +928,16 @@ async function handleMessage(msg: any) {
 		// 对话式路由识别（只调用一次）
 		const routeIntent = detectRouteIntent(text);
 		
-		// 持久切换：直接切换项目并确认
+		// 持久切换到任意路径：提示用户这是临时切换
+		if (routeIntent.type === 'switch' && routeIntent.path) {
+			const pathLabel = routeIntent.path.split('/').pop() || routeIntent.path;
+			const msg = `**📂 临时切换到路径：${pathLabel}**\n\n📁 \`${routeIntent.path}\`\n\n⚠️ 此为临时路径，不会保存到持久配置。\n若要固定使用，请添加到 \`projects.json\`。\n\n下一条消息将在此路径执行。`;
+			await sendMarkdown(sessionWebhook, msg, '📂 临时切换', 'blue');
+			console.log(`[路由] 临时切换到路径: ${routeIntent.path}`);
+			return;
+		}
+		
+		// 持久切换到项目：直接切换项目并确认
 		if (routeIntent.type === 'switch' && routeIntent.project) {
 			const projectInfo = projectsConfig.projects[routeIntent.project];
 			if (projectInfo) {
@@ -809,7 +945,7 @@ async function handleMessage(msg: any) {
 				session.currentProject = routeIntent.project;
 				
 				const msg = `**✅ 已切换到项目：${routeIntent.project}**\n\n📁 ${projectInfo.description}\n\`${projectInfo.path}\`\n\n后续消息将在此项目中执行，直到你切换到其他项目。`;
-				await sendMarkdown(sessionWebhook, msg, '✅ 项目已切换');
+				await sendMarkdown(sessionWebhook, msg, '✅ 项目已切换', 'green');
 				console.log(`[路由] 持久切换到项目: ${routeIntent.project}`);
 				return;
 			}
@@ -849,16 +985,27 @@ async function handleMessage(msg: any) {
 				`- ${c('/密钥', '/apikey')} — 查看/更换 API Key（仅私聊）`,
 				'  用法：`/密钥 key_xxx...`',
 				'',
+				'**记忆系统**',
+				`- ${c('/记忆', '/memory')} — 查看记忆状态`,
+				`- \`/记忆 关键词\` — 语义搜索记忆`,
+				`- \`/记录 内容\` — 写入今日日记`,
+				`- ${c('/整理记忆', '/reindex')} — 重建记忆索引`,
+				'',
 				'**定时任务**',
 				`- ${c('/任务', '/cron')} — 查看所有定时任务`,
 				'- `/任务 暂停/恢复/删除/执行 ID`',
 				'- 或在对话中说「每天早上9点做XX」由 AI 自动创建',
 				'',
+				'**心跳系统**',
+				`- ${c('/心跳', '/heartbeat')} — 查看心跳状态`,
+				'- `/心跳 开启/关闭/执行`',
+				'- `/心跳 间隔 分钟数`',
+				'',
 				'**项目路由**',
 				`发送 \`/项目名 消息\` 或 \`#项目名 消息\` 指定工作区`,
 				`可用项目：${Object.keys(projectsConfig.projects).map(k => `\`${k}\``).join('、')}（默认：\`${projectsConfig.default_project}\`）`,
 			].join('\n');
-			await sendMarkdown(sessionWebhook, helpText, '📖 使用帮助');
+			await sendMarkdown(sessionWebhook, helpText, '📖 使用帮助', 'blue');
 			return;
 		}
 		
@@ -873,9 +1020,18 @@ async function handleMessage(msg: any) {
 					return `  \`${name}\` → ${s.active!.slice(0, 12)}...`;
 				}).join('\n') || '  (无活跃会话)';
 			
+			const memStatus = memory
+				? (() => {
+					const stats = memory.getStats();
+					return `${stats.chunks} 块（${stats.files} 文件, ${stats.cachedEmbeddings} 嵌入缓存）`;
+				})()
+				: '未初始化';
+			
 			const statusText = [
 				`**AppKey：** ${keyPreview}`,
+				`**记忆：** ${memStatus}`,
 				`**调度：** ${(() => { const s = scheduler.getStats(); return s.total > 0 ? `${s.enabled}/${s.total} 任务${s.nextRunIn ? `（下次: ${s.nextRunIn}）` : ''}` : '无任务'; })()}`,
+				`**心跳：** ${heartbeat.getStatus().enabled ? `每 ${Math.round(heartbeat.getStatus().everyMs / 60000)} 分钟` : '未启用'}`,
 				`**活跃任务：** ${busySessions.size} 个运行中`,
 				'',
 				'**项目路由：**',
@@ -884,7 +1040,7 @@ async function handleMessage(msg: any) {
 				'**活跃会话：**',
 				sessions,
 			].join('\n');
-			await sendMarkdown(sessionWebhook, statusText, '📊 服务状态');
+			await sendMarkdown(sessionWebhook, statusText, '📊 服务状态', 'blue');
 			return;
 		}
 		
@@ -893,7 +1049,7 @@ async function handleMessage(msg: any) {
 			archiveAndResetSession(workspace);
 			const historyCount = getSessionHistory(workspace).length;
 			const hint = historyCount > 0 ? `\n\n历史会话已保留（共 ${historyCount} 个），发送 \`/会话\` 可查看和切换。` : '';
-			await sendMarkdown(sessionWebhook, `**[${label}]** 新会话已开始，下一条消息将创建全新对话。${hint}`, '🆕 新会话');
+			await sendMarkdown(sessionWebhook, `**[${label}]** 新会话已开始，下一条消息将创建全新对话。${hint}`, '🆕 新会话', 'green');
 			return;
 		}
 		
@@ -920,7 +1076,7 @@ async function handleMessage(msg: any) {
 					lines.push(`${icon} **${i + 1}.** ${h.summary}${tag}\n   ${time} · \`${h.id.slice(0, 8)}\``);
 				}
 				lines.push('', '---', '切换：`/会话 编号`　　新建：`/新对话`');
-				await sendMarkdown(sessionWebhook, lines.join('\n'), '💬 会话列表');
+				await sendMarkdown(sessionWebhook, lines.join('\n'), '💬 会话列表', 'blue');
 				return;
 			}
 			
@@ -933,7 +1089,7 @@ async function handleMessage(msg: any) {
 					return;
 				}
 				switchToSession(workspace, target.id);
-				await sendMarkdown(sessionWebhook, `已切换到会话 #${num}：**${target.summary}**\n\n下一条消息将在此会话中继续对话。\n\`${target.id.slice(0, 12)}\` · ${formatRelativeTime(target.lastActiveAt)}`, '💬 已切换');
+				await sendMarkdown(sessionWebhook, `已切换到会话 #${num}：**${target.summary}**\n\n下一条消息将在此会话中继续对话。\n\`${target.id.slice(0, 12)}\` · ${formatRelativeTime(target.lastActiveAt)}`, '💬 已切换', 'green');
 				console.log(`[Session] 切换到 ${target.id.slice(0, 12)} (${target.summary})`);
 				return;
 			}
@@ -959,7 +1115,7 @@ async function handleMessage(msg: any) {
 			
 			// 无参数 → 显示模型列表
 			if (!input) {
-				await sendMarkdown(sessionWebhook, buildModelListCard(config.CURSOR_MODEL), '🤖 选择模型');
+				await sendMarkdown(sessionWebhook, buildModelListCard(config.CURSOR_MODEL), '🤖 选择模型', 'blue');
 				return;
 			}
 			
@@ -977,14 +1133,14 @@ async function handleMessage(msg: any) {
 					: `${envContent.trimEnd()}\nCURSOR_MODEL=${exact.id}\n`;
 				writeFileSync(ENV_PATH, updated);
 				const prev = config.CURSOR_MODEL;
-				await sendMarkdown(sessionWebhook, `${prev} → **${exact.id}**（${exact.desc}）\n\n已写入 .env，2 秒内自动生效。`, '✅ 模型已切换');
+				await sendMarkdown(sessionWebhook, `${prev} → **${exact.id}**（${exact.desc}）\n\n已写入 .env，2 秒内自动生效。`, '✅ 模型已切换', 'green');
 				console.log(`[指令] 模型切换: ${prev} → ${exact.id}`);
 				return;
 			}
 			
 			if (candidates.length > 1) {
 				const list = candidates.map(m => `- \`${m.id}\`（${m.desc}）`).join('\n');
-				await sendMarkdown(sessionWebhook, `「${input}」匹配到多个模型：\n\n${list}\n\n请输入更精确的名称或编号。`, '⚠️ 请精确选择');
+				await sendMarkdown(sessionWebhook, `「${input}」匹配到多个模型：\n\n${list}\n\n请输入更精确的名称或编号。`, '⚠️ 请精确选择', 'orange');
 				return;
 			}
 			
@@ -1000,7 +1156,7 @@ async function handleMessage(msg: any) {
 				: `${envContent.trimEnd()}\nCURSOR_MODEL=${input}\n`;
 			writeFileSync(ENV_PATH, updated);
 			const prev = config.CURSOR_MODEL;
-			await sendMarkdown(sessionWebhook, `${prev} → **${input}**\n\n⚠️ 此模型不在常用列表中，若名称有误可能导致执行失败。\n发送 \`/模型\` 查看常用列表。`, '⚠️ 模型已切换');
+			await sendMarkdown(sessionWebhook, `${prev} → **${input}**\n\n⚠️ 此模型不在常用列表中，若名称有误可能导致执行失败。\n发送 \`/模型\` 查看常用列表。`, '⚠️ 模型已切换', 'orange');
 			console.log(`[指令] 模型切换(自定义): ${prev} → ${input}`);
 			return;
 		}
@@ -1011,12 +1167,12 @@ async function handleMessage(msg: any) {
 			const rawKey = apikeyMatch[2]?.trim();
 			if (!rawKey) {
 				const preview = config.CURSOR_API_KEY ? `\`...${config.CURSOR_API_KEY.slice(-8)}\`` : '**未设置**';
-				await sendMarkdown(sessionWebhook, `**当前 API Key：** ${preview}\n\n用法：\`/密钥 key_xxx...\``, '🔑 API Key');
+				await sendMarkdown(sessionWebhook, `**当前 API Key：** ${preview}\n\n用法：\`/密钥 key_xxx...\``, '🔑 API Key', 'blue');
 				return;
 			}
 			// 群聊安全检查
 			if (isGroup) {
-				await sendMarkdown(sessionWebhook, '⚠️ **安全提醒：请勿在群聊中发送 API Key！**\n\n请在与机器人的 **私聊** 中发送 `/密钥` 指令。', '⚠️ 安全提醒');
+				await sendMarkdown(sessionWebhook, '⚠️ **安全提醒：请勿在群聊中发送 API Key！**\n\n请在与机器人的 **私聊** 中发送 `/密钥` 指令。', '⚠️ 安全提醒', 'red');
 				return;
 			}
 			try {
@@ -1025,7 +1181,7 @@ async function handleMessage(msg: any) {
 					? envContent.replace(/^CURSOR_API_KEY=.*$/m, `CURSOR_API_KEY=${rawKey}`)
 					: `${envContent.trimEnd()}\nCURSOR_API_KEY=${rawKey}\n`;
 				writeFileSync(ENV_PATH, updated);
-				await sendMarkdown(sessionWebhook, `**API Key 已更换**\n\n新 Key: \`...${rawKey.slice(-8)}\`\n\n已写入 .env 并自动生效。`, '✅ Key 已更新');
+				await sendMarkdown(sessionWebhook, `**API Key 已更换**\n\n新 Key: \`...${rawKey.slice(-8)}\`\n\n已写入 .env 并自动生效。`, '✅ Key 已更新', 'green');
 				console.log(`[指令] API Key 已通过钉钉更换 (...${rawKey.slice(-8)})`);
 			} catch (err) {
 				await sendMarkdown(sessionWebhook, `❌ 写入失败: ${err instanceof Error ? err.message : err}`, '❌ 失败');
@@ -1042,7 +1198,7 @@ async function handleMessage(msg: any) {
 				console.log(`[指令] 终止 agent pid=${agent.pid} session=${lk}`);
 				await sendMarkdown(sessionWebhook, '已终止当前任务。\n\n发送新消息将继续在当前会话中对话。', '⚠️ 已终止');
 			} else {
-				await sendMarkdown(sessionWebhook, '当前没有正在运行的任务。', 'ℹ️ 无任务');
+				await sendMarkdown(sessionWebhook, '当前没有正在运行的任务。', 'ℹ️ 无任务', 'grey');
 			}
 			return;
 		}
@@ -1071,7 +1227,7 @@ async function handleMessage(msg: any) {
 				});
 				const stats = scheduler.getStats();
 				lines.push('', `共 ${stats.total} 个任务（${stats.enabled} 启用）${stats.nextRunIn ? `，下次执行: ${stats.nextRunIn}` : ''}`);
-				await sendMarkdown(sessionWebhook, lines.join('\n'), '📋 定时任务');
+				await sendMarkdown(sessionWebhook, lines.join('\n'), '📋 定时任务', 'blue');
 				return;
 			}
 			
@@ -1085,7 +1241,7 @@ async function handleMessage(msg: any) {
 					return;
 				}
 				await scheduler.update(job.id, { enabled: false });
-				await sendMarkdown(sessionWebhook, `已暂停: **${job.name}**`, '⏸️ 已暂停');
+				await sendMarkdown(sessionWebhook, `已暂停: **${job.name}**`, '⏸️ 已暂停', 'orange');
 				return;
 			}
 			
@@ -1099,7 +1255,7 @@ async function handleMessage(msg: any) {
 					return;
 				}
 				await scheduler.update(job.id, { enabled: true });
-				await sendMarkdown(sessionWebhook, `已恢复: **${job.name}**`, '✅ 已恢复');
+				await sendMarkdown(sessionWebhook, `已恢复: **${job.name}**`, '✅ 已恢复', 'green');
 				return;
 			}
 			
@@ -1113,7 +1269,7 @@ async function handleMessage(msg: any) {
 					return;
 				}
 				scheduler.remove(job.id);
-				await sendMarkdown(sessionWebhook, `已删除: **${job.name}**`, '🗑️ 已删除');
+				await sendMarkdown(sessionWebhook, `已删除: **${job.name}**`, '🗑️ 已删除', 'green');
 				return;
 			}
 			
@@ -1126,7 +1282,7 @@ async function handleMessage(msg: any) {
 					await sendMarkdown(sessionWebhook, `未找到 ID 前缀为 \`${idPrefix}\` 的任务`, '❓ 未找到');
 					return;
 				}
-				await sendMarkdown(sessionWebhook, `⏳ 正在手动执行：**${job.name}**\n\n执行结果稍后推送...`, '⏳ 执行中');
+				await sendMarkdown(sessionWebhook, `⏳ 正在手动执行：**${job.name}**\n\n执行结果稍后推送...`, '⏳ 执行中', 'wathet');
 				scheduler.run(job.id).catch(err => {
 					console.error('[任务执行失败]', err);
 				});
@@ -1134,6 +1290,156 @@ async function handleMessage(msg: any) {
 			}
 			
 			await sendMarkdown(sessionWebhook, '未知子命令。\n\n用法：\n- `/任务` — 查看所有任务\n- `/任务 暂停 ID` — 暂停任务\n- `/任务 恢复 ID` — 恢复任务\n- `/任务 删除 ID` — 删除任务\n- `/任务 执行 ID` — 手动执行', 'ℹ️ 用法');
+			return;
+		}
+		
+		// /记忆、/memory → 记忆系统操作
+		const memoryMatch = message.match(/^\/(记忆|memory|搜索记忆|recall)[\s:：=]*(.*)/i);
+		if (memoryMatch) {
+			if (!memory) {
+				await sendMarkdown(sessionWebhook, '记忆系统未初始化（缺少向量嵌入 API Key）。\n\n请在 `.env` 中设置 `VOLC_EMBEDDING_API_KEY`。', '⚠️ 记忆不可用');
+				return;
+			}
+			const query = memoryMatch[2].trim();
+			if (!query) {
+				const summary = memory.getRecentSummary(3);
+				const stats = memory.getStats();
+				const fileList = stats.filePaths.length > 0
+					? stats.filePaths.slice(0, 25).map((p) => `- \`${p}\``).join('\n') + (stats.filePaths.length > 25 ? `\n- …及其他 ${stats.filePaths.length - 25} 个文件` : '')
+					: '（尚未索引，请发送 `/整理记忆`）';
+				const statusText = [
+					`**记忆索引：** ${stats.chunks} 块（${stats.files} 文件, ${stats.cachedEmbeddings} 嵌入缓存）`,
+					`**索引范围：** 工作区全部文本文件（.md .txt .html .json .mdc 等）`,
+					`**嵌入模型：** ${config.VOLC_EMBEDDING_MODEL}`,
+					'',
+					'**用法：**',
+					'- `/记忆 关键词` — 语义搜索记忆',
+					'- `/记录 内容` — 写入今日日记',
+					'- `/整理记忆` — 重建全工作区索引',
+					'',
+					`**已索引文件：**\n${fileList}`,
+					'',
+					summary ? `**最近记忆摘要：**\n\n${summary.slice(0, 1500)}` : '（暂无记忆文件）',
+				].join('\n');
+				await sendMarkdown(sessionWebhook, statusText, '🧠 记忆系统', 'purple');
+				return;
+			}
+			try {
+				const results = await memory.search(query, 5);
+				if (results.length === 0) {
+					await sendMarkdown(sessionWebhook, `未找到与「${query}」相关的记忆。\n\n索引范围：工作区全部文本文件（发 \`/整理记忆\` 可刷新）`, '❌ 无匹配');
+					return;
+				}
+				const lines = results.map((r, i) =>
+					`**${i + 1}.** \`${r.path}#L${r.startLine}\`（相关度 ${(r.score * 100).toFixed(0)}%）\n${r.text.slice(0, 300)}`,
+				);
+				await sendMarkdown(sessionWebhook, lines.join('\n\n---\n\n'), `🔍 搜索「${query}」`, 'purple');
+			} catch (e) {
+				await sendMarkdown(sessionWebhook, `搜索失败: ${e instanceof Error ? e.message : e}`, '❌ 失败');
+			}
+			return;
+		}
+		
+		// /记录 → 快速写入今日日记
+		const logMatch = message.match(/^\/(记录|log|note)[\s:：=]+(.+)/is);
+		if (logMatch) {
+			if (!memory) {
+				await sendMarkdown(sessionWebhook, '记忆系统未初始化。', '⚠️ 不可用');
+				return;
+			}
+			const content = logMatch[2].trim();
+			const path = memory.appendDailyLog(content);
+			await sendMarkdown(sessionWebhook, `已记录到今日日记。\n\n\`${path}\``, '📝 已记录', 'green');
+			return;
+		}
+		
+		// /整理记忆 → 重建全工作区记忆索引
+		if (/^\/(整理记忆|reindex|索引)\s*$/i.test(message.trim())) {
+			if (!memory) {
+				await sendMarkdown(sessionWebhook, '记忆系统未初始化。', '⚠️ 不可用');
+				return;
+			}
+			await sendMarkdown(sessionWebhook, '⏳ 正在扫描并索引工作区全部文本文件...', '⏳ 索引中', 'wathet');
+			try {
+				const count = await memory.index();
+				const stats = memory.getStats();
+				const msg = [
+					`索引完成: **${count}** 个记忆块（来自 **${stats.files}** 个文件）`,
+					`嵌入缓存: ${stats.cachedEmbeddings} 条`,
+					`嵌入模型: \`${config.VOLC_EMBEDDING_MODEL}\``,
+					'',
+					'**已索引文件：**',
+					...stats.filePaths.slice(0, 25).map((p) => `- \`${p}\``),
+					...(stats.filePaths.length > 25 ? [`- …及其他 ${stats.filePaths.length - 25} 个文件`] : []),
+				].join('\n');
+				await sendMarkdown(sessionWebhook, msg, '✅ 索引完成', 'green');
+			} catch (e) {
+				await sendMarkdown(sessionWebhook, `索引失败: ${e instanceof Error ? e.message : e}`, '❌ 失败');
+			}
+			return;
+		}
+		
+		// /心跳 → 心跳系统管理
+		const hbMatch = message.match(/^\/(心跳|heartbeat|hb)[\s:：]*(.*)/i);
+		if (hbMatch) {
+			const subCmd = hbMatch[2].trim().toLowerCase();
+			
+			if (!subCmd || subCmd === 'status' || subCmd === '状态') {
+				const s = heartbeat.getStatus();
+				const statusText = [
+					`**状态：** ${s.enabled ? '✅ 已启用' : '⏸ 已关闭'}`,
+					`**间隔：** ${Math.round(s.everyMs / 60000)} 分钟`,
+					s.nextRunAt ? `**下次执行：** ${new Date(s.nextRunAt).toLocaleString('zh-CN')}` : '',
+					s.lastRunAt ? `**上次执行：** ${new Date(s.lastRunAt).toLocaleString('zh-CN')}` : '',
+					'',
+					'**用法：**',
+					'- `/心跳 开启` — 启动心跳检查',
+					'- `/心跳 关闭` — 停止心跳检查',
+					'- `/心跳 执行` — 立即执行一次',
+					'- `/心跳 间隔 分钟数` — 设置间隔',
+					'',
+					'编辑工作区的 `.cursor/HEARTBEAT.md` 可自定义检查清单。',
+				].filter(Boolean).join('\n');
+				await sendMarkdown(sessionWebhook, statusText, '💓 心跳系统', 'purple');
+				return;
+			}
+			
+			if (/^(开启|enable|on|start|启动)$/i.test(subCmd)) {
+				heartbeat.updateConfig({ enabled: true });
+				await sendMarkdown(sessionWebhook, `心跳已开启，每 ${Math.round(heartbeat.getStatus().everyMs / 60000)} 分钟检查一次。\n\n编辑 \`.cursor/HEARTBEAT.md\` 自定义检查清单。`, '💓 已开启', 'green');
+				return;
+			}
+			
+			if (/^(关闭|disable|off|stop|停止)$/i.test(subCmd)) {
+				heartbeat.updateConfig({ enabled: false });
+				await sendMarkdown(sessionWebhook, '心跳已关闭。', '💓 已关闭', 'grey');
+				return;
+			}
+			
+			if (/^(执行|run|check|检查)$/i.test(subCmd)) {
+				await sendMarkdown(sessionWebhook, '💓 正在执行心跳检查...', '⏳ 执行中', 'wathet');
+				const result = await heartbeat.runOnce();
+				if (result.status === 'ran') {
+					await sendMarkdown(sessionWebhook, result.hasContent ? '心跳检查完成，发现需要关注的事项（已发送）' : '心跳检查完成，一切正常 ✅', '💓 检查完成', 'green');
+				} else {
+					await sendMarkdown(sessionWebhook, result.message || '检查跳过', '💓 已跳过');
+				}
+				return;
+			}
+			
+			const intervalMatch = subCmd.match(/^(?:间隔|interval)\s+(\d+)$/i);
+			if (intervalMatch) {
+				const mins = Number.parseInt(intervalMatch[1], 10);
+				if (mins < 1 || mins > 1440) {
+					await sendMarkdown(sessionWebhook, '间隔范围: 1-1440 分钟', '⚠️ 无效');
+					return;
+				}
+				heartbeat.updateConfig({ everyMs: mins * 60_000 });
+				await sendMarkdown(sessionWebhook, `心跳间隔已设为 **${mins} 分钟**`, '💓 已更新');
+				return;
+			}
+			
+			await sendMarkdown(sessionWebhook, '未知子命令。发送 `/心跳` 查看用法。', 'ℹ️ 用法');
 			return;
 		}
 		
@@ -1149,16 +1455,24 @@ async function handleMessage(msg: any) {
 		
 		// 检查是否有同会话任务运行中
 		if (busySessions.has(lockKey)) {
-			await sendMarkdown(sessionWebhook, '⏳ 排队中（同会话有任务进行中）\n\n请稍候...', '⏸️ 排队中');
+			await sendMarkdown(sessionWebhook, '⏳ 排队中（同会话有任务进行中）\n\n请稍候...', '⏸️ 排队中', 'orange');
 			console.log(`[并发] 会话 ${lockKey} 已在运行，等待中...`);
 		}
 		
 		busySessions.add(lockKey);
 		console.log(`[执行] workspace=${workspace} message="${message.slice(0, 60)}"`);
-		await sendMarkdown(sessionWebhook, '⏳ Cursor AI 正在思考...');
+		await sendMarkdown(sessionWebhook, '⏳ Cursor AI 正在思考...', '💭 思考中', 'wathet');
+		
+		// 记忆由 Cursor 自主通过 memory-tool.ts 调用，server 记录会话日志
+		if (memory) {
+			memory.appendSessionLog(workspace, "user", message, config.CURSOR_MODEL);
+		}
 		
 		try {
-			const { result, sessionId } = await runAgent(workspace, message, session.agentId);
+			const { result, sessionId } = await runAgent(workspace, message, session.agentId, {
+				platform: 'dingtalk',
+				webhook: sessionWebhook
+			});
 			
 			// 保存 session ID（用于会话恢复和历史记录）
 			if (sessionId) {
@@ -1169,6 +1483,11 @@ async function handleMessage(msg: any) {
 			}
 		
 		const cleanOutput = result.trim();
+		
+		// 记录 assistant 回复到会话日志
+		if (memory) {
+			memory.appendSessionLog(workspace, "assistant", cleanOutput.slice(0, 3000), config.CURSOR_MODEL);
+		}
 			
 			// Agent 可能修改了 cron-jobs-dingtalk.json，重新加载调度器
 			scheduler.reload().catch(() => {});
@@ -1179,13 +1498,13 @@ async function handleMessage(msg: any) {
 				const chunks = splitMarkdown(cleanOutput, 4000);
 				for (let i = 0; i < chunks.length; i++) {
 					const title = chunks.length > 1 ? `Cursor AI (${i + 1}/${chunks.length})` : 'Cursor AI';
-					await sendMarkdown(sessionWebhook, chunks[i], title);
+					await sendMarkdown(sessionWebhook, chunks[i], title, 'green');
 					if (i < chunks.length - 1) {
 						await new Promise(resolve => setTimeout(resolve, 500));
 					}
 				}
 			} else {
-				await sendMarkdown(sessionWebhook, '✅ 任务已完成（无输出）');
+				await sendMarkdown(sessionWebhook, '✅ 任务已完成（无输出）', '完成', 'green');
 			}
 		} finally {
 			busySessions.delete(lockKey);
@@ -1196,9 +1515,22 @@ async function handleMessage(msg: any) {
 		try {
 			await sendMarkdown(
 				sessionWebhook,
-				`❌ 执行失败\n\n${error instanceof Error ? error.message : String(error)}`
+				`❌ **执行失败**\n\n${error instanceof Error ? error.message : String(error)}`,
+				'执行失败',
+				'red'
 			);
 		} catch {}
+	}
+}
+
+// ── 调度回调 ───────────────────────────────────
+async function onScheduledTaskExecute(result: string, webhook: string, title?: string) {
+	if (result && result.length > 0) {
+		if (result.length <= 3800) {
+			await sendMarkdown(webhook, result, title, 'green');
+		} else {
+			await sendMarkdown(webhook, result.slice(0, 3800) + '\n\n...(已截断)', title, 'orange');
+		}
 	}
 }
 
@@ -1239,16 +1571,24 @@ const scheduler = new Scheduler({
 		}
 	},
 	onDelivery: async (job: CronJob, result: string) => {
-		const webhook = getWebhook();  // 获取最近活跃的 webhook
+		// 优先使用任务中保存的 webhook（确保发送到创建任务的平台）
+		const webhook = job.webhook || getWebhook();
 		if (!webhook) {
 			console.warn('[调度] 无活跃 webhook，跳过推送（用户需要先发送至少一条消息）');
 			return;
 		}
+		
+		// 只有钉钉创建的任务才发送到钉钉
+		if (job.platform && job.platform !== 'dingtalk') {
+			console.log(`[调度] 任务 ${job.name} 属于 ${job.platform}，跳过钉钉推送`);
+			return;
+		}
+		
 		const title = `⏰ 定时任务: ${job.name}`;
 		if (result.length <= 3800) {
-			await sendMarkdown(webhook, result, title);
+			await sendMarkdown(webhook, result, title, 'purple');
 		} else {
-			await sendMarkdown(webhook, result.slice(0, 3800) + '\n\n...(已截断)', title);
+			await sendMarkdown(webhook, result.slice(0, 3800) + '\n\n...(已截断)', title, 'orange');
 		}
 	},
 	log: (msg: string) => console.log(`[调度] ${msg}`),
@@ -1257,13 +1597,15 @@ const scheduler = new Scheduler({
 // ── 启动 ─────────────────────────────────────────
 console.log(`
 ┌──────────────────────────────────────────────────┐
-│  钉钉 → Cursor Agent 中继服务 v2.0               │
+│  钉钉 → Cursor Agent 中继服务 v3.0               │
 ├──────────────────────────────────────────────────┤
 │  模型: ${config.CURSOR_MODEL}
 │  Key:  ${config.CURSOR_API_KEY ? `...${config.CURSOR_API_KEY.slice(-8)}` : '(未设置)'}
 │  连接: 钉钉 Stream 长连接
 │  收件: ${INBOX_DIR}
+│  记忆: ${memory ? `与飞书共享（${config.VOLC_EMBEDDING_MODEL}）` : '未初始化'}
 │  调度: cron-jobs-dingtalk.json (独立监听)
+│  心跳: 默认关闭（/心跳 开启）
 │
 │  项目路由:
 ${Object.entries(projectsConfig.projects).map(([k, v]) => `│    /${k} → ${v.path}`).join('\n')}
@@ -1273,12 +1615,12 @@ ${Object.entries(projectsConfig.projects).map(([k, v]) => `│    /${k} → ${v.
 │    - 路由: 传统(/project) + 对话式(切换到/# /@)
 │    - 命令: /帮助 /状态 /新对话 /会话 /模型 /密钥 /终止 /任务
 │    - 会话: 持久化、历史、切换
+│    - 记忆: 语义搜索、日志记录、全工作区索引（与飞书共享）
+│    - 心跳: 定期检查、主动推送
 │    - 定时: cron-jobs-dingtalk.json
 │
 │  ⏸️ 暂不支持:
-│    - 实时进度（平台限制）
-│    - 心跳检查（webhook 限制）
-│    - 记忆搜索（按需实现）
+│    - 实时进度（平台限制：钉钉不支持消息更新）
 └──────────────────────────────────────────────────┘
 `);
 
@@ -1311,3 +1653,7 @@ scheduler.start().catch((err) => {
 	console.error('[调度] 启动失败:', err);
 });
 console.log('[调度] Scheduler 已启动，监听 cron-jobs-dingtalk.json');
+
+// ── 启动心跳系统 ──────────────────────────────────
+heartbeat.start();
+console.log(`[心跳] 已启动，默认关闭（发送 /心跳 开启）`);

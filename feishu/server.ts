@@ -241,15 +241,24 @@ const scheduler = new Scheduler({
 		}
 	},
 	onDelivery: async (job: CronJob, result: string) => {
-		if (!lastActiveChatId) {
+		// 优先使用任务中保存的 chatId（确保发送到创建任务的平台）
+		const chatId = job.webhook || lastActiveChatId;
+		if (!chatId) {
 			console.warn("[调度] 无活跃会话，跳过发送");
 			return;
 		}
+		
+		// 只有飞书创建的任务才发送到飞书
+		if (job.platform && job.platform !== 'feishu') {
+			console.log(`[调度] 任务 ${job.name} 属于 ${job.platform}，跳过飞书推送`);
+			return;
+		}
+		
 		const title = `⏰ 定时任务: ${job.name}`;
 		if (result.length <= 3800) {
-			await sendCard(lastActiveChatId, result, { title, color: "purple" });
+			await sendCard(chatId, result, { title, color: "purple" });
 		} else {
-			await sendCard(lastActiveChatId, result.slice(0, 3800) + "\n\n...(已截断)", { title, color: "purple" });
+			await sendCard(chatId, result.slice(0, 3800) + "\n\n...(已截断)", { title, color: "purple" });
 		}
 	},
 	log: (msg: string) => console.log(`[调度] ${msg}`),
@@ -696,6 +705,7 @@ function strip(s: string): string {
 interface RouteIntent {
 	type: 'switch' | 'temp' | 'none';  // switch=持久切换, temp=临时路由, none=无路由
 	project?: string;  // 项目名
+	path?: string;  // 任意路径（用于临时切换）
 	cleanedText: string;  // 移除路由信息后的文本
 }
 
@@ -705,11 +715,27 @@ interface RouteIntent {
  * - "切换到 activity 项目" / "现在用 api" → 持久切换
  * - "帮我看看 activity 项目的代码" / "在 api 里查个 bug" → 临时路由
  * - "#activity 消息" / "@api 消息" → 临时路由（简化符号）
+ * - "切换到 /path/to/project" → 临时切换到任意路径
+ * - "#/path/to/project 消息" → 快捷路径语法
  */
 function detectRouteIntent(text: string): RouteIntent {
 	const { projects } = projectsConfig;
 	const projectNames = Object.keys(projects);
 	const projectPattern = projectNames.join('|');
+	
+	// 0. 路径快捷语法：#/path 或 @/path
+	const pathSymbolMatch = text.match(/^[#@]((?:~?\/|~).+?)\s+(.+)$/);
+	if (pathSymbolMatch) {
+		const rawPath = pathSymbolMatch[1];
+		const absolutePath = rawPath.startsWith('~') 
+			? rawPath.replace(/^~/, process.env.HOME || '~')
+			: rawPath;
+		return {
+			type: 'temp',
+			path: absolutePath,
+			cleanedText: pathSymbolMatch[2].trim(),
+		};
+	}
 	
 	// 1. 简化符号：#项目名 或 @项目名
 	const symbolMatch = text.match(new RegExp(`^[#@](${projectPattern})\\s+(.+)`, 'i'));
@@ -724,7 +750,21 @@ function detectRouteIntent(text: string): RouteIntent {
 		}
 	}
 	
-	// 2. 持久切换："切换到 XXX" / "现在用 XXX" / "改成 XXX 项目"
+	// 2a. 切换到任意路径："切换到 /path" / "切换到路径 /path"
+	const pathSwitchMatch = text.match(/^(?:切换到|切换|进入|打开)(?:路径)?\s+((?:~?\/|~).+?)\s*$/i);
+	if (pathSwitchMatch) {
+		const rawPath = pathSwitchMatch[1];
+		const absolutePath = rawPath.startsWith('~') 
+			? rawPath.replace(/^~/, process.env.HOME || '~')
+			: rawPath;
+		return {
+			type: 'switch',
+			path: absolutePath,
+			cleanedText: '',
+		};
+	}
+	
+	// 2b. 持久切换到项目："切换到 XXX" / "现在用 XXX" / "改成 XXX 项目"
 	const switchPatterns = [
 		new RegExp(`^(?:切换到|切换|现在用|改成|使用)\\s*(${projectPattern})(?:项目)?\\s*$`, 'i'),
 		new RegExp(`^(?:进入|打开)\\s*(${projectPattern})(?:项目)?\\s*$`, 'i'),
@@ -781,6 +821,20 @@ function route(
 	
 	// 2. 对话式路由（使用传入的 intent，避免重复检测）
 	const routeIntent = intent || detectRouteIntent(text);
+	
+	// 2a. 路径型路由（临时切换到任意目录）
+	if (routeIntent.type !== 'none' && routeIntent.path) {
+		const pathLabel = routeIntent.path.split('/').pop() || routeIntent.path;
+		return {
+			workspace: routeIntent.path,
+			prompt: routeIntent.cleanedText || text,
+			label: `📁${pathLabel}`,
+			routeChanged: routeIntent.type === 'switch',
+			intent: routeIntent,
+		};
+	}
+	
+	// 2b. 项目名路由
 	if (routeIntent.type !== 'none' && routeIntent.project) {
 		return {
 			workspace: projects[routeIntent.project].path,
@@ -1309,6 +1363,7 @@ function execAgent(
 	opts?: {
 		sessionId?: string;
 		onProgress?: (p: AgentProgress) => void;
+		context?: { platform?: string; chatId?: string };
 	},
 ): Promise<{ result: string; sessionId?: string }> {
 	return new Promise((res, reject) => {
@@ -1325,8 +1380,18 @@ function execAgent(
 		}
 		args.push("--", prompt);
 
+		const env = { ...process.env, CURSOR_API_KEY: config.CURSOR_API_KEY };
+		
+		// 传递平台和回调地址给 agent（用于创建定时任务）
+		if (opts?.context?.platform) {
+			env.CURSOR_PLATFORM = opts.context.platform;
+		}
+		if (opts?.context?.chatId) {
+			env.CURSOR_WEBHOOK = opts.context.chatId;
+		}
+
 		const child = spawn(AGENT_BIN, args, {
-			env: { ...process.env, CURSOR_API_KEY: config.CURSOR_API_KEY },
+			env,
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 		if (child.pid) {
@@ -1504,6 +1569,7 @@ async function runAgent(
 	opts?: {
 		onProgress?: (p: AgentProgress) => void;
 		onStart?: () => void;
+		context?: { chatId?: string };
 	},
 ): Promise<{ result: string; quotaWarning?: string }> {
 	const primaryModel = config.CURSOR_MODEL;
@@ -1520,6 +1586,7 @@ async function runAgent(
 				const { result, sessionId } = await execAgent(lockKey, workspace, primaryModel, prompt, {
 					sessionId: existingSessionId,
 					onProgress: opts?.onProgress,
+					context: { platform: 'feishu', chatId: opts?.context?.chatId },
 				});
 				if (sessionId) {
 					setActiveSession(workspace, sessionId);
@@ -1535,9 +1602,10 @@ async function runAgent(
 					console.warn(`[重试] 会话可能过期，重新创建: ${e.message.slice(0, 100)}`);
 					archiveAndResetSession(workspace);
 					try {
-						const { result, sessionId } = await execAgent(lockKey, workspace, primaryModel, prompt, {
-							onProgress: opts?.onProgress,
-						});
+					const { result, sessionId } = await execAgent(lockKey, workspace, primaryModel, prompt, {
+						onProgress: opts?.onProgress,
+						context: { platform: 'feishu', chatId: opts?.context?.chatId },
+					});
 						if (sessionId) {
 							setActiveSession(workspace, sessionId);
 							generateSessionTitle(workspace, sessionId, prompt, result);
@@ -1553,10 +1621,11 @@ async function runAgent(
 					console.error(`[降级] ${primaryModel} 欠费: ${e.message.slice(0, 200)}`);
 					const fallbackSessionId = getActiveSessionId(workspace);
 					try {
-						const { result, sessionId: newSid } = await execAgent(lockKey, workspace, "auto", prompt, {
-							sessionId: fallbackSessionId,
-							onProgress: opts?.onProgress,
-						});
+					const { result, sessionId: newSid } = await execAgent(lockKey, workspace, "auto", prompt, {
+						sessionId: fallbackSessionId,
+						onProgress: opts?.onProgress,
+						context: { platform: 'feishu', chatId: opts?.context?.chatId },
+					});
 						if (newSid) {
 							setActiveSession(workspace, newSid);
 							if (!fallbackSessionId) {
@@ -2092,7 +2161,17 @@ async function handleInner(
 	// 对话式路由识别（只调用一次）
 	const routeIntent = detectRouteIntent(text);
 	
-	// 持久切换：直接切换项目并确认
+	// 持久切换到任意路径：提示用户这是临时切换
+	if (routeIntent.type === 'switch' && routeIntent.path) {
+		const pathLabel = routeIntent.path.split('/').pop() || routeIntent.path;
+		const msg = `**临时切换到路径：${pathLabel}**\n\n📁 \`${routeIntent.path}\`\n\n⚠️ 此为临时路径，不会保存到持久配置。\n若要固定使用，请添加到 \`projects.json\`。\n\n下一条消息将在此路径执行。`;
+		if (cardId) await updateCard(cardId, msg, { title: "📂 临时切换", color: "blue" });
+		else await replyCard(messageId, msg, { title: "📂 临时切换", color: "blue" });
+		console.log(`[路由] 临时切换到路径: ${routeIntent.path}`);
+		return;
+	}
+	
+	// 持久切换到项目：直接切换项目并确认
 	if (routeIntent.type === 'switch' && routeIntent.project) {
 		const projectInfo = projectsConfig.projects[routeIntent.project];
 		if (projectInfo) {
@@ -2245,7 +2324,11 @@ async function handleInner(
 		: undefined;
 
 	try {
-		const { result, quotaWarning } = await runAgent(workspace, prompt, { onProgress, onStart });
+		const { result, quotaWarning } = await runAgent(workspace, prompt, { 
+			onProgress, 
+			onStart,
+			context: { chatId }
+		});
 		const usedModel = quotaWarning ? "auto" : model;
 		const elapsed = formatElapsed(Math.round((Date.now() - taskStart) / 1000));
 		console.log(`[${new Date().toISOString()}] 完成 [${label}] model=${usedModel} elapsed=${elapsed} (${result.length} chars)`);
@@ -2289,7 +2372,10 @@ async function handleInner(
 				].join("\n");
 
 				try {
-					const { result: retryResult } = await runAgent(workspace, retryPrompt, { onProgress });
+					const { result: retryResult } = await runAgent(workspace, retryPrompt, { 
+						onProgress,
+						context: { chatId }
+					});
 					const retryElapsed = formatElapsed(Math.round((Date.now() - taskStart) / 1000));
 					const { ok: retryOk } = await updateCard(cardId, retryResult, { title: `完成 · ${retryElapsed}`, color: doneColor });
 					if (retryOk) {

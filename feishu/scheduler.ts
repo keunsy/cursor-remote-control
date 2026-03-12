@@ -30,6 +30,8 @@ export type CronJob = {
 	message: string;
 	workspace?: string;
 	model?: string;
+	platform?: 'feishu' | 'dingtalk';  // 创建任务的平台
+	webhook?: string;  // 创建任务时的回调地址（钉钉）或 chatId（飞书）
 	createdAt: string;
 	updatedAt: string;
 	state: {
