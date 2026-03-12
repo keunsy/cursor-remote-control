@@ -51,3 +51,11 @@ plist/
 
 # 项目路由配置（本机路径，每人不同）
 projects.json
+
+# Cursor 会话日志（本地对话记录）
+.cursor/sessions/
+**/.cursor/sessions/
+
+# 定时任务存储（含 webhook 等敏感信息，运行时写入）
+cron-jobs-dingtalk.json
+cron-jobs-feishu.json
