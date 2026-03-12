@@ -141,6 +141,11 @@ const WORKSPACE_RULES = [
 ];
 
 function ensureWorkspace(wsPath: string): boolean {
+	const normalizedWs = resolve(wsPath);
+	const normalizedRoot = resolve(ROOT);
+	// 仅在本项目（cursor-remote-control）目录下复制 AGENTS.md / .cursor 模板，不污染其他项目
+	const isOwnProject = normalizedWs === normalizedRoot;
+
 	mkdirSync(resolve(wsPath, ".cursor/memory"), { recursive: true });
 	mkdirSync(resolve(wsPath, ".cursor/sessions"), { recursive: true });
 	mkdirSync(resolve(wsPath, ".cursor/rules"), { recursive: true });
@@ -149,40 +154,42 @@ function ensureWorkspace(wsPath: string): boolean {
 	const isNewWorkspace = !existsSync(resolve(wsPath, ".cursor/SOUL.md"));
 	let copied = 0;
 
-	// AGENTS.md 放在根目录（Cursor 自动加载约定）
-	const rootFiles = ["AGENTS.md"];
-	// 首次初始化时额外复制 BOOTSTRAP.md（仅新工作区）
-	const allFiles = isNewWorkspace
-		? [...rootFiles, ...WORKSPACE_FILES, ".cursor/BOOTSTRAP.md", ...WORKSPACE_RULES]
-		: [...rootFiles, ...WORKSPACE_FILES, ...WORKSPACE_RULES];
+	if (isOwnProject) {
+		// AGENTS.md 放在根目录（Cursor 自动加载约定）- 仅在本项目生成
+		const rootFiles = ["AGENTS.md"];
+		// 首次初始化时额外复制 BOOTSTRAP.md（仅新工作区）
+		const allFiles = isNewWorkspace
+			? [...rootFiles, ...WORKSPACE_FILES, ".cursor/BOOTSTRAP.md", ...WORKSPACE_RULES]
+			: [...rootFiles, ...WORKSPACE_FILES, ...WORKSPACE_RULES];
 
-	for (const f of allFiles) {
-		const target = resolve(wsPath, f);
-		if (!existsSync(target)) {
-			const src = resolve(TEMPLATE_DIR, f);
-			if (existsSync(src)) {
-				writeFileSync(target, readFileSync(src, "utf-8"));
-				console.log(`[工作区] 从模板复制: ${f}`);
-				copied++;
+		for (const f of allFiles) {
+			const target = resolve(wsPath, f);
+			if (!existsSync(target)) {
+				const src = resolve(TEMPLATE_DIR, f);
+				if (existsSync(src)) {
+					writeFileSync(target, readFileSync(src, "utf-8"));
+					console.log(`[工作区] 从模板复制: ${f}`);
+					copied++;
+				}
 			}
 		}
-	}
 
-	// Skills（Cursor 官方 skill 规范：.cursor/skills/skill-name/SKILL.md）
-	const skillsSrc = resolve(TEMPLATE_DIR, ".cursor/skills");
-	if (existsSync(skillsSrc)) {
-		for (const name of readdirSync(skillsSrc)) {
-			const srcDir = resolve(skillsSrc, name);
-			if (!statSync(srcDir).isDirectory()) continue;
-			const targetSkill = resolve(wsPath, `.cursor/skills/${name}/SKILL.md`);
-			if (!existsSync(targetSkill)) {
-				const targetDir = resolve(wsPath, `.cursor/skills/${name}`);
-				mkdirSync(targetDir, { recursive: true });
-				for (const file of readdirSync(srcDir)) {
-					writeFileSync(resolve(targetDir, file), readFileSync(resolve(srcDir, file), "utf-8"));
+		// Skills（Cursor 官方 skill 规范：.cursor/skills/skill-name/SKILL.md）
+		const skillsSrc = resolve(TEMPLATE_DIR, ".cursor/skills");
+		if (existsSync(skillsSrc)) {
+			for (const name of readdirSync(skillsSrc)) {
+				const srcDir = resolve(skillsSrc, name);
+				if (!statSync(srcDir).isDirectory()) continue;
+				const targetSkill = resolve(wsPath, `.cursor/skills/${name}/SKILL.md`);
+				if (!existsSync(targetSkill)) {
+					const targetDir = resolve(wsPath, `.cursor/skills/${name}`);
+					mkdirSync(targetDir, { recursive: true });
+					for (const file of readdirSync(srcDir)) {
+						writeFileSync(resolve(targetDir, file), readFileSync(resolve(srcDir, file), "utf-8"));
+					}
+					console.log(`[工作区] 从模板复制 skill: ${name}`);
+					copied++;
 				}
-				console.log(`[工作区] 从模板复制 skill: ${name}`);
-				copied++;
 			}
 		}
 	}
