@@ -250,9 +250,17 @@ const scheduler = new Scheduler({
 			return;
 		}
 		
-		// 发送提醒内容
-		const title = `⏰ 定时提醒`;
-		await sendCard(chatId, result, { title, color: "blue" });
+		// 发送提醒内容（优化格式）
+		const now = new Date();
+		const timeStr = now.toLocaleString('zh-CN', { 
+			month: '2-digit', 
+			day: '2-digit',
+			hour: '2-digit', 
+			minute: '2-digit',
+			hour12: false 
+		});
+		const content = `**${result}**\n\n⏱ 提醒时间：${timeStr}\n📌 任务名称：${job.name}`;
+		await sendCard(chatId, content, { title: "⏰ 定时提醒", color: "blue" });
 		console.log(`[定时] 飞书提醒已发送: ${result}`);
 	},
 	log: (msg: string) => console.log(`[调度] ${msg}`),

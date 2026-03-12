@@ -1596,23 +1596,26 @@ async function handleMessage(msg: any) {
 				setActiveSession(workspace, sessionId, message.slice(0, 40));
 				console.log(`[会话] 已保存 sessionId: ${sessionId}`);
 			}
-		
-		// 确保 result 为字符串（agent 有时返回对象）
-		let resultStr = '';
-		if (typeof result === 'string') {
-			resultStr = result;
-		} else if (result && typeof result === 'object') {
-			const obj = result as any;
-			resultStr = obj.text || obj.content || '';
-		}
-		const cleanOutput = resultStr.trim();
-		
-		console.log(`[发送前] cleanOutput 长度: ${cleanOutput.length}`);
-		
-		// 记录 assistant 回复到会话日志
-		if (memory) {
-			memory.appendSessionLog(workspace, "assistant", cleanOutput.slice(0, 3000), config.CURSOR_MODEL);
-		}
+			
+			// 确保 result 为字符串（agent 有时返回对象）
+			console.log(`[调试] result 类型: ${typeof result}, 值: ${JSON.stringify(result)?.slice(0, 200)}`);
+			
+			let resultStr = '';
+			if (typeof result === 'string') {
+				resultStr = result;
+			} else if (result && typeof result === 'object') {
+				const obj = result as any;
+				resultStr = obj.text || obj.content || '';
+			}
+			const cleanOutput = resultStr.trim();
+			
+			console.log(`[调试] resultStr 长度: ${resultStr.length}, cleanOutput 长度: ${cleanOutput.length}`);
+			console.log(`[调试] cleanOutput 前100字符: ${cleanOutput.slice(0, 100)}`);
+			
+			// 记录 assistant 回复到会话日志
+			if (memory) {
+				memory.appendSessionLog(workspace, "assistant", cleanOutput.slice(0, 3000), config.CURSOR_MODEL);
+			}
 			
 			// Agent 可能修改了 cron-jobs，检查并修正位置
 			await fixCronJobsLocation(workspace, sessionWebhook);
@@ -1708,9 +1711,17 @@ const scheduler = new Scheduler({
 			return;
 		}
 		
-		// 发送提醒内容
-		const title = `⏰ 定时提醒`;
-		await sendMarkdown(webhook, result, title);
+		// 发送提醒内容（优化格式）
+		const now = new Date();
+		const timeStr = now.toLocaleString('zh-CN', { 
+			month: '2-digit', 
+			day: '2-digit',
+			hour: '2-digit', 
+			minute: '2-digit',
+			hour12: false 
+		});
+		const content = `**${result}**\n\n⏱ 提醒时间：${timeStr}\n📌 任务名称：${job.name}`;
+		await sendMarkdown(webhook, content, '⏰ 定时提醒');
 		console.log(`[定时] 钉钉提醒已发送: ${result}`);
 	},
 	log: (msg: string) => console.log(`[调度] ${msg}`),
