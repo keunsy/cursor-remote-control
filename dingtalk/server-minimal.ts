@@ -1529,8 +1529,20 @@ async function handleMessage(msg: any) {
 			memory.appendSessionLog(workspace, "user", message, config.CURSOR_MODEL);
 		}
 		
+		// 检测定时任务请求，注入规则到 prompt
+		let finalMessage = message;
+		const isScheduleRequest = /([0-9]+|一|二|三|四|五|六|七|八|九|十)(分钟|小时|天|周|月).*(后|提醒|通知|告诉)|每(天|周|月|小时).*[提醒通知]|定时|at|every|cron/i.test(message);
+		if (isScheduleRequest) {
+			const cronRulesPath = resolve(ROOT, '.cursor/CRON-TASK-RULES.md');
+			if (existsSync(cronRulesPath)) {
+				const rules = readFileSync(cronRulesPath, 'utf-8');
+				finalMessage = `${rules}\n\n---\n\n用户请求：${message}\n\n⚠️ 请严格按照上述规则创建定时任务！`;
+				console.log('[定时任务] 已注入规则到 prompt');
+			}
+		}
+		
 		try {
-			const { result, sessionId } = await runAgent(workspace, message, session.agentId, {
+			const { result, sessionId } = await runAgent(workspace, finalMessage, session.agentId, {
 				platform: 'dingtalk',
 				webhook: sessionWebhook
 			});
