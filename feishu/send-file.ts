@@ -73,13 +73,12 @@ async function main() {
   // 读取环境变量
   const env = parseEnv();
   const cfg = {
-    accounts: [
-      {
-        accountId: "default",
+    channels: {
+      feishu: {
         appId: env.FEISHU_APP_ID,
         appSecret: env.FEISHU_APP_SECRET,
       }
-    ]
+    }
   };
   
   if (!env.FEISHU_APP_ID || !env.FEISHU_APP_SECRET) {

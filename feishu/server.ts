@@ -941,8 +941,8 @@ function isBillingError(text: string): boolean {
 	return BILLING_PATTERNS.some((p) => p.test(text));
 }
 
-// Agent 全局超时时间（30分钟），防止长时间任务卡死
-const MAX_AGENT_TIMEOUT = 30 * 60 * 1000; // 30分钟
+// Agent 全局超时时间（1小时），防止长时间任务卡死
+const MAX_AGENT_TIMEOUT = 60 * 60 * 1000; // 1小时
 
 const childPids = new Set<number>();
 // lockKey → 正在运行的 agent 子进程（用于 /stop 终止）
@@ -2058,11 +2058,12 @@ async function handleInner(
 			const fileName = "a-stock-pullback-strategy.apk"; // 使用更友好的文件名
 			
 			const cfg = {
-				accounts: [{
-					accountId: "default",
-					appId: config.FEISHU_APP_ID,
-					appSecret: config.FEISHU_APP_SECRET,
-				}]
+				channels: {
+					feishu: {
+						appId: config.FEISHU_APP_ID,
+						appSecret: config.FEISHU_APP_SECRET,
+					}
+				}
 			};
 			
 			await sendMediaFeishu({
@@ -2117,11 +2118,12 @@ async function handleInner(
 			const fileName = expandedPath.split("/").pop() || "file";
 			
 			const cfg = {
-				accounts: [{
-					accountId: "default",
-					appId: config.FEISHU_APP_ID,
-					appSecret: config.FEISHU_APP_SECRET,
-				}]
+				channels: {
+					feishu: {
+						appId: config.FEISHU_APP_ID,
+						appSecret: config.FEISHU_APP_SECRET,
+					}
+				}
 			};
 			
 			await sendMediaFeishu({
@@ -2551,7 +2553,12 @@ async function handleInner(
 
 	// 创建或复用卡片：全局排队卡片 → 同会话排队 → 处理中
 	const currentLockKey = getLockKey(workspace);
-	const needsSessionQueue = !cardId && busySessions.has(currentLockKey);
+	
+	// 检查是否有锁正在等待（检查 sessionLocks 是否有 Promise）
+	const hasSessionLock = sessionLocks.has(currentLockKey);
+	const isBusy = busySessions.has(currentLockKey) || hasSessionLock;
+	
+	const needsSessionQueue = !cardId && isBusy;
 	if (!cardId) {
 		const status = needsSessionQueue
 			? `⏳ 排队中（同会话有任务进行中）\n\n> ${prompt.slice(0, 120)}`
@@ -2562,12 +2569,12 @@ async function handleInner(
 		});
 	} else {
 		// 从全局排队卡片复用，看是否还需要等同会话锁
-		const status = busySessions.has(currentLockKey)
+		const status = isBusy
 			? `⏳ 排队中（同会话有任务进行中）\n\n> ${prompt.slice(0, 120)}`
 			: `⏳ 正在执行...\n\n> ${prompt.slice(0, 120)}`;
 		await updateCard(cardId, status, {
-			title: busySessions.has(currentLockKey) ? "排队中" : "处理中",
-			color: busySessions.has(currentLockKey) ? "grey" : "wathet",
+			title: isBusy ? "排队中" : "处理中",
+			color: isBusy ? "grey" : "wathet",
 		});
 	}
 	console.log(`[Agent] 调用 Cursor CLI workspace=${workspace} model=${model} card=${cardId}`);
@@ -2628,8 +2635,11 @@ async function handleInner(
 
 		// 尝试发送 AI 结果到飞书卡片
 		let sendOk = false;
+		console.log(`[回复] 准备更新卡片 cardId=${cardId} length=${fullResult.length} maxLength=${CARD_MAX}`);
 		if (cardId && fullResult.length <= CARD_MAX) {
+			console.log(`[回复] 开始调用 updateCard...`);
 			const { ok, error } = await updateCard(cardId, fullResult, { title: doneTitle, color: doneColor });
+			console.log(`[回复] updateCard 完成: ok=${ok} error=${error || 'none'}`);
 			if (ok) {
 				sendOk = true;
 			} else {

@@ -503,6 +503,62 @@ bash service.sh logs
 | `/reindex` | `/整理记忆` | 重建记忆索引 |
 | `/任务` | `/cron` `/定时` | 查看/管理定时任务 |
 | `/心跳` | `/heartbeat` | 查看/管理心跳系统 |
+| `/发送文件 <路径>` | `/sendfile` `/send` | 发送本地文件到飞书（最大 30MB） |
+
+### 文件发送功能
+
+发送本地任意文件到飞书：
+
+```
+/发送文件 ~/Desktop/report.pdf
+/send /Users/me/Documents/data.xlsx
+/sendfile ~/Downloads/video.mp4
+```
+
+**特性**：
+- ✅ 支持绝对路径和 `~` 家目录
+- ✅ 自动检查文件存在性
+- ✅ 实时大小验证（最大 30MB）
+- ✅ 进度反馈（上传中卡片）
+- ✅ 支持多种文件类型：
+  - 📱 APK/IPA
+  - 📄 PDF, DOC/DOCX, XLS/XLSX, PPT/PPTX
+  - 🖼️ 图片（JPG, PNG, GIF, WEBP）
+  - 🎵 音频/视频
+  - 📦 压缩包（ZIP, RAR）
+
+**使用示例**：
+
+```bash
+# 发送 PDF 文档
+/发送文件 ~/Documents/月报.pdf
+
+# 发送 APK 文件
+/send ~/Downloads/app-debug.apk
+
+# 发送图片
+/sendfile ~/Pictures/screenshot.png
+```
+
+**命令行工具**（可选）：
+
+也可以通过命令行直接发送文件（无需通过飞书对话）：
+
+```bash
+cd feishu
+bun run send-file.ts /path/to/file.apk <接收人ID>
+```
+
+**如何获取接收人ID**：
+在飞书中发送消息给机器人，查看日志中的 `chat_id` 或 `open_id`：
+
+```bash
+tail -f /tmp/feishu-cursor.log | grep "chat_id\|open_id"
+```
+
+详细说明见：[发送文件到飞书.md](./发送文件到飞书.md)
+
+---
 
 ## 记忆与身份体系
 

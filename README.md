@@ -254,6 +254,7 @@ bash manage-services.sh logs dingtalk    # 查看钉钉日志
 | `/log 内容` | `/记录 内容` | 写入今日日记 |
 | `/任务` | `/cron` `/定时` | 查看/管理定时任务 |
 | `/心跳` | `/heartbeat` | 查看/管理心跳系统 |
+| `/发送文件 <路径>` | `/sendfile` `/send` | **飞书专用** - 发送本地文件（最大 30MB） |
 
 ### 项目路由（多工作区）
 
@@ -283,6 +284,33 @@ cp projects.json.example projects.json
 - `切换到 mycode` → 持久切换到代码项目
 
 **注意**：`projects.json` 已加入 `.gitignore`，不会提交到仓库（本机配置）。
+
+### 文件发送功能（飞书专用）
+
+飞书服务支持发送本地文件到飞书：
+
+```
+/发送文件 ~/Desktop/report.pdf
+/send /Users/me/Documents/data.xlsx
+/sendfile ~/Downloads/app.apk
+```
+
+**特性**：
+- ✅ 支持绝对路径和 `~` 家目录
+- ✅ 自动检查文件存在性和大小
+- ✅ 最大 30MB
+- ✅ 支持多种文件格式：APK、PDF、DOC/DOCX、XLS/XLSX、PPT、图片、音视频等
+
+**命令行工具**（可选）：
+
+也可以通过命令行直接发送文件：
+
+```bash
+cd feishu
+bun run send-file.ts /path/to/file.apk <接收人ID>
+```
+
+详见：[feishu/发送文件到飞书.md](feishu/发送文件到飞书.md)
 
 ---
 

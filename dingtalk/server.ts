@@ -783,8 +783,8 @@ function isBillingError(text: string): boolean {
 	return BILLING_PATTERNS.some((p) => p.test(text));
 }
 
-// Agent 全局超时时间（30分钟），防止长时间任务卡死
-const MAX_AGENT_TIMEOUT = 30 * 60 * 1000; // 30分钟
+// Agent 全局超时时间（1小时），防止长时间任务卡死
+const MAX_AGENT_TIMEOUT = 60 * 60 * 1000; // 1小时
 
 const childPids = new Set<number>();
 // lockKey → 正在运行的 agent 子进程（用于 /stop 终止）
