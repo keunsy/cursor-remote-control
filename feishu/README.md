@@ -60,46 +60,76 @@ Phone (Feishu) ──WebSocket──→ feishu-cursor ──Cursor CLI──→ 
 
 ## Quick Start
 
-### 1. Prerequisites
-
-- macOS with [Bun](https://bun.sh) installed
-- [Cursor IDE](https://cursor.com) with Agent CLI (`~/.local/bin/agent`)
-- A [Feishu](https://open.feishu.cn) bot app (WebSocket mode, no public URL needed)
-
-### 2. Install & Configure
+### Step 1: Install Dependencies (if needed)
 
 ```bash
-git clone https://github.com/nongjun/feishu-cursor-claw.git
-cd feishu-cursor-claw
-bun install
+# Install Bun runtime
+curl -fsSL https://bun.sh/install | bash
 
+# Install Cursor Agent CLI
+curl https://cursor.com/install -fsS | bash
+
+# Login to Cursor (one-time, no API key needed afterward)
+~/.local/bin/agent login
+# Follow the browser prompt to complete login
+```
+
+### Step 2: Feishu App Setup (Part 1)
+
+1. Visit [Feishu Open Platform](https://open.feishu.cn) and create a **self-built enterprise app**
+2. Add **Bot** capability
+3. Grant permissions: `im:message`, `im:message.group_at_msg`, `im:resource`
+4. Copy **App ID** and **App Secret** from "Credentials"
+5. **Do NOT configure event subscription yet**
+
+### Step 3: Configure and Start Service
+
+```bash
+# Create configuration files from templates
+cd /path/to/cursor-remote-control
+cp projects.json.example projects.json
+# Edit projects.json with your workspace paths
+
+cp cron-jobs-feishu.json.example cron-jobs-feishu.json
+
+# Configure Feishu credentials
+cd feishu
 cp .env.example .env
-# Edit .env with your credentials
+# Edit .env:
+# - FEISHU_APP_ID=cli_your_app_id
+# - FEISHU_APP_SECRET=your_secret
+# - CURSOR_MODEL=auto  # Recommended to save quota
+# - Comment out CURSOR_API_KEY (already logged in via agent login)
+
+# Install dependencies and start
+bun install
+bash service.sh install
+
+# Check status
+bash service.sh status
+# Should show: 🟢 Running (PID: xxxxx)
 ```
 
-### 3. Run
+**Note**: `projects.json` and `cron-jobs-*.json` are in `.gitignore` (local config files).
 
-```bash
-bun run server.ts
+### Step 4: Feishu App Setup (Part 2)
+
+**After the service is running**, go back to Feishu Open Platform:
+
+1. Navigate to "Event Subscription"
+2. Choose **"Long Connection"** (WebSocket mode)
+3. Subscribe to: `im.message.receive_v1` - Receive messages
+4. Click "Save"
+
+### Step 5: Test
+
+Send a message to your bot in Feishu:
+
+```
+@YourBot hello
 ```
 
-You should see:
-
-```
-飞书长连接已启动，等待消息...
-```
-
-Send a message to your Feishu bot and watch Cursor work.
-
-### 4. Auto-Start on Boot (Recommended)
-
-```bash
-bash service.sh install    # install + start via macOS launchd
-bash service.sh status     # check if running
-bash service.sh logs       # follow live logs
-```
-
-The service auto-restarts on crash and starts on boot — no manual intervention needed.
+If you get a reply, installation is successful! Send `/help` to see all commands.
 
 | Command | Description |
 |---------|-------------|
@@ -149,21 +179,41 @@ Copy `.env.example` to `.env` and fill in your values:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `CURSOR_API_KEY` | Yes | [Cursor Dashboard](https://cursor.com/dashboard) → Integrations → User API Keys |
+| `CURSOR_API_KEY` | No | **Not needed if you run `agent login`** (recommended). Only required if using API key auth |
 | `FEISHU_APP_ID` | Yes | Feishu app ID |
 | `FEISHU_APP_SECRET` | Yes | Feishu app secret |
-| `CURSOR_MODEL` | No | Default: `opus-4.6-thinking` |
+| `CURSOR_MODEL` | No | Default: `opus-4.6-thinking`, recommend: `auto` (saves quota) |
 | `VOLC_STT_APP_ID` | No | Volcengine app ID (skip to disable cloud STT) |
 | `VOLC_STT_ACCESS_TOKEN` | No | Volcengine access token |
 | `VOLC_EMBEDDING_API_KEY` | No | Volcengine embedding API key (for memory vector search) |
 | `VOLC_EMBEDDING_MODEL` | No | Default: `doubao-embedding-vision-250615` |
 
-### Feishu Bot Setup
+**Important Notes**:
+- Run `agent login` once to authenticate. After login, you don't need `CURSOR_API_KEY`.
+- If using `opus-4.6-thinking`, your team may hit quota limits. Use `auto` or `sonnet-4` instead.
+- Configuration files (`projects.json`, `cron-jobs-*.json`, `.env`) are in `.gitignore` — they won't be committed to git.
 
-1. Create an app at [Feishu Open Platform](https://open.feishu.cn)
-2. Add **Bot** capability
-3. Permissions: `im:message`, `im:message.group_at_msg`, `im:resource`
-4. Events: subscribe to `im.message.receive_v1` via **WebSocket mode** (long connection)
+### Configuration File Management
+
+| File | Purpose | Git |
+|------|---------|-----|
+| `projects.json.example` | Project routing template | ✅ Committed |
+| `projects.json` | Your actual project paths | ❌ Ignored (local config) |
+| `cron-jobs-feishu.json.example` | Empty cron jobs template | ✅ Committed |
+| `cron-jobs-feishu.json` | AI-created scheduled tasks | ❌ Ignored (runtime data) |
+| `.env.example` | Environment variable template | ✅ Committed |
+| `.env` | Your actual credentials | ❌ Ignored (sensitive) |
+
+**First-time setup**: Copy `.example` files to create your local configs.  
+**After git pull**: Your local configs are preserved, won't be overwritten.
+
+### Feishu Bot Setup (order matters)
+
+You must **configure credentials locally and start the service first** so it connects to Feishu; only then can you enable the long-connection event in the Feishu console.
+
+1. **Get credentials**: Create an app at [Feishu Open Platform](https://open.feishu.cn) → Add **Bot** capability → Set permissions: `im:message`, `im:message.group_at_msg`, `im:resource` → Copy **App ID** and **App Secret** from "Credentials". Do **not** configure event subscription yet.
+2. **Run the service locally**: Put App ID and App Secret in `feishu/.env` (no need for Cursor API Key if you ran `agent login`), then `bun install` and `bash service.sh install` so the service connects to Feishu.
+3. **Enable long connection in Feishu**: In the app’s **Event subscription**, choose **WebSocket mode** (long connection) and subscribe to `im.message.receive_v1`.
 
 ### Project Routing
 
@@ -297,42 +347,145 @@ Phase 3: Platform
 
 ## 快速开始
 
-### 前置条件
+### 完整安装步骤
 
-| 项目 | 要求 |
-|------|------|
-| 系统 | macOS (Apple Silicon) |
-| 运行时 | [Bun](https://bun.sh) |
-| IDE | [Cursor](https://cursor.com) 已安装并登录 |
-| CLI | Cursor Agent CLI (`~/.local/bin/agent`) |
-| 语音(可选) | `brew install ffmpeg whisper-cpp` |
-
-### 安装
+#### 步骤 1: 安装依赖工具（如未安装）
 
 ```bash
-git clone https://github.com/nongjun/feishu-cursor-claw.git
-cd feishu-cursor-claw
-bun install
-cp .env.example .env
-# 编辑 .env 填入你的凭据
+# 安装 Bun 运行时
+curl -fsSL https://bun.sh/install | bash
+
+# 安装 Cursor Agent CLI
+curl https://cursor.com/install -fsS | bash
+
+# 登录 Cursor（一次性操作，之后不需要 API Key）
+~/.local/bin/agent login
+# 按提示在浏览器中完成登录
 ```
 
-### 启动
+#### 步骤 2: 飞书开放平台配置（第一部分）
 
-```bash
-bun run server.ts            # 手动启动（调试用）
-bash service.sh install      # 安装开机自启动（推荐）
-```
-
-安装自启动后，重启电脑会自动运行，崩溃也会自动恢复。管理命令见「日常运维」。
-
-### 飞书机器人配置
-
-1. 在[飞书开放平台](https://open.feishu.cn)创建企业自建应用
+1. 访问[飞书开放平台](https://open.feishu.cn)创建**企业自建应用**
 2. 添加**机器人**能力
-3. 权限：`im:message`、`im:message.group_at_msg`、`im:resource`
-4. 事件订阅：选择**长连接模式**，订阅 `im.message.receive_v1`
-5. 将 App ID 和 App Secret 填入 `.env`
+3. 在「权限管理」中开通以下权限：
+   - `im:message` - 获取与发送单聊、群聊消息
+   - `im:message.group_at_msg` - 获取群组中所有消息
+   - `im:resource` - 获取与上传图片或文件资源
+4. 在「凭证与基础信息」中复制 **App ID** 和 **App Secret**
+5. **此时先不要配置事件订阅**
+
+#### 步骤 3: 本机配置并启动服务
+
+```bash
+# 创建配置文件（从模板）
+cd /Users/你的用户名/work/cursor/cursor-remote-control
+cp projects.json.example projects.json
+# 编辑 projects.json，配置你的工作区路径
+
+cp cron-jobs-feishu.json.example cron-jobs-feishu.json
+
+# 配置飞书凭据
+cd feishu
+cp .env.example .env
+# 编辑 .env，填入以下内容：
+# FEISHU_APP_ID=cli_你的APP_ID
+# FEISHU_APP_SECRET=你的APP_SECRET
+# CURSOR_MODEL=auto  # 建议改为 auto 节省配额
+# 注释掉 CURSOR_API_KEY（已通过 agent login 登录）
+
+# 安装依赖并启动服务
+bun install
+bash service.sh install
+
+# 检查服务状态
+bash service.sh status
+# 应该显示：🟢 运行中 (PID: xxxxx)
+```
+
+**配置文件说明**：
+- `projects.json` - 项目路由配置（已加入 .gitignore，本机配置）
+- `cron-jobs-feishu.json` - 定时任务存储（已加入 .gitignore，运行时写入）
+- `.env` - 环境变量（已加入 .gitignore，敏感信息）
+
+#### 步骤 4: 飞书开放平台配置（第二部分）
+
+**等本机服务启动成功后**，回到飞书开放平台：
+
+1. 进入应用的「事件订阅」页面
+2. 在「订阅方式」中选择**「长连接」**（WebSocket 模式）
+3. 在「事件列表」中订阅：`im.message.receive_v1` - 接收消息
+4. 点击「保存」
+
+#### 步骤 5: 测试
+
+在飞书中找到你的机器人，发送：
+
+```
+@机器人 你好
+```
+
+如果收到回复，说明安装成功！可以发送 `/帮助` 查看所有命令。
+
+---
+
+## 完整安装示例（实测流程）
+
+以下是一台全新 Mac 的完整安装流程：
+
+```bash
+# 1. 安装 Bun
+curl -fsSL https://bun.sh/install | bash
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
+
+# 2. 安装 Cursor Agent CLI
+curl https://cursor.com/install -fsS | bash
+export PATH="$HOME/.local/bin:$PATH"
+
+# 3. 登录 Cursor
+~/.local/bin/agent login
+# 在浏览器中完成登录（会显示登录成功的邮箱）
+
+# 4. 克隆项目（或进入已有项目）
+cd ~/work/cursor/cursor-remote-control
+
+# 5. 创建配置文件（从模板）
+cp projects.json.example projects.json
+nano projects.json
+# 配置你的工作区路径，例如：
+# "mycode": { "path": "/Users/你的用户名/Projects/myapp", ... }
+
+cp cron-jobs-feishu.json.example cron-jobs-feishu.json
+
+# 6. 配置飞书凭据
+cd feishu
+cp .env.example .env
+nano .env
+# 填入：
+# FEISHU_APP_ID=cli_你的APP_ID
+# FEISHU_APP_SECRET=你的SECRET
+# CURSOR_MODEL=auto  # 改为 auto 节省配额
+# 注释掉 CURSOR_API_KEY 行（保持为 # CURSOR_API_KEY=）
+
+# 7. 安装并启动
+bun install
+bash service.sh install
+
+# 8. 检查状态
+bash service.sh status
+# 应该显示：🟢 运行中
+
+# 9. 查看日志确认连接成功
+bash service.sh logs
+# 应该看到：飞书长连接已启动，等待消息...
+```
+
+**配置文件说明**：
+- `projects.json`, `cron-jobs-*.json`, `.env` 已加入 `.gitignore`
+- 这些是本机运行时配置，不会提交到仓库
+- 每次 git pull 不会覆盖你的配置
+
+**然后在飞书开放平台配置长连接事件，就完成了！**
 
 ### 飞书指令
 
@@ -467,7 +620,15 @@ bash service.sh install      # 安装开机自启动（推荐）
 
 ## 项目路由
 
-在上层目录创建 `projects.json`：
+**首次配置**（从模板创建）：
+
+```bash
+cd /path/to/cursor-remote-control
+cp projects.json.example projects.json
+nano projects.json
+```
+
+配置示例：
 
 ```json
 {
@@ -475,11 +636,30 @@ bash service.sh install      # 安装开机自启动（推荐）
     "code": { "path": "/Users/你/Projects/myapp", "description": "代码项目" },
     "strategy": { "path": "/Users/你/Documents/战略", "description": "战略文档" }
   },
-  "default_project": "code"
+  "default_project": "code",
+  "memory_workspace": "code"
 }
 ```
 
 飞书中发送 `strategy: 帮我审阅季度规划` → 路由到战略文档工作区。
+
+**注意**：`projects.json` 已加入 `.gitignore`，不会提交到仓库（本机配置）。
+
+## 配置文件管理
+
+| 文件 | 用途 | Git 管理 |
+|------|------|---------|
+| `projects.json.example` | 项目路由模板 | ✅ 提交到仓库 |
+| `projects.json` | 你的实际项目路径 | ❌ 已忽略（本机配置） |
+| `cron-jobs-feishu.json.example` | 空的定时任务模板 | ✅ 提交到仓库 |
+| `cron-jobs-feishu.json` | AI 创建的定时任务 | ❌ 已忽略（运行时数据） |
+| `.env.example` | 环境变量模板 | ✅ 提交到仓库 |
+| `.env` | 你的实际凭据 | ❌ 已忽略（敏感信息） |
+
+**工作流程**：
+1. 首次安装：从 `.example` 文件复制创建配置
+2. Git pull 更新：你的本地配置不会被覆盖
+3. 分享代码：敏感信息和本机路径不会泄露
 
 ## 日常运维
 
@@ -510,11 +690,25 @@ nohup bun run server.ts > /tmp/feishu-cursor.log 2>&1 &  # 后台运行
 
 ## 故障排查
 
-| 问题 | 解决 |
-|------|------|
-| 飞书无响应 | `bash service.sh status` 检查进程；`bash service.sh restart` 重启；node_modules 损坏时删除后重新 `bun install` |
-| API Key 无效 | 飞书发 `/密钥 新的key`，或编辑 .env |
-| 语音识别出繁体/乱码 | 火山引擎配置有误，正在用 whisper 兜底，检查 VOLC_STT 配置 |
-| `resource not granted` | 火山引擎控制台开通「大模型流式语音识别」 |
-| 模型欠费 | 自动降级 auto，充值后恢复 |
-| 群聊里发了 Key | 系统自动拦截，不会执行；建议到 Dashboard 轮换 Key |
+| 问题 | 原因 | 解决方案 |
+|------|------|----------|
+| 飞书无响应 | 服务未启动或崩溃 | `bash service.sh status` 检查；`bash service.sh restart` 重启 |
+| `API Key 无效` | .env 中有占位符 key | 运行 `agent login` 登录，然后注释掉 .env 中的 `CURSOR_API_KEY` |
+| `团队配额已用完` | 使用 opus-4.6-thinking 模型 | 改用 `auto` 或 `sonnet-4` 模型（编辑 .env 中的 `CURSOR_MODEL`） |
+| `permission denied /Users/user` | projects.json 用户名错误 | 把 projects.json 中的 `/Users/user` 改为你的实际用户名 |
+| `agent: command not found` | Agent CLI 未安装 | 运行 `curl https://cursor.com/install -fsS \| bash` |
+| `bun: command not found` | Bun 未安装 | 运行 `curl -fsSL https://bun.sh/install \| bash` |
+| 语音识别乱码 | whisper 质量低 | 配置火山引擎 STT（VOLC_STT_APP_ID 和 VOLC_STT_ACCESS_TOKEN） |
+| `resource not granted` | 火山引擎未开通服务 | 火山引擎控制台开通「大模型流式语音识别」 |
+| 群聊里发了敏感命令 | 安全保护 | 系统自动拦截，敏感命令仅限私聊使用 |
+
+### 常见问题
+
+**Q: 需要配置 Cursor API Key 吗？**  
+A: 不需要。运行 `agent login` 登录后，Agent CLI 会自动使用登录凭据。只有在特殊情况下（如使用独立 API Key）才需要配置 `CURSOR_API_KEY`。
+
+**Q: 为什么提示配额用完？**  
+A: 默认模型 `opus-4.6-thinking` 是最高级模型，消耗配额大。建议改用 `auto` 或 `sonnet-4`。
+
+**Q: projects.json 怎么配置？**  
+A: 把文件中的 `/Users/user` 批量替换为你的实际用户名（如 `/Users/keunsy`），或删除不需要的项目配置。

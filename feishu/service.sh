@@ -1,6 +1,11 @@
 #!/bin/bash
 # feishu-cursor-claw 服务管理脚本
 # 用法: bash service.sh [install|uninstall|start|stop|restart|status|logs]
+#
+# 功能：
+# ✅ caffeinate 防休眠（通过 start-with-keepawake.ts）
+# ✅ 清理历史进程（stop 时 pkill 清理残留）
+# ✅ 开机自启动（launchd RunAtLoad + KeepAlive）
 set -e
 
 LABEL="com.feishu-cursor-claw"
@@ -22,7 +27,7 @@ generate_plist() {
 	<array>
 		<string>$BUN_BIN</string>
 		<string>run</string>
-		<string>$BOT_DIR/start.ts</string>
+		<string>$BOT_DIR/start-with-keepawake.ts</string>
 	</array>
 
 	<key>WorkingDirectory</key>
@@ -81,7 +86,22 @@ cmd_start() {
 }
 
 cmd_stop() {
-    launchctl kill SIGTERM "gui/$(id -u)/$LABEL" 2>/dev/null && echo "  ✅ 服务已停止" || echo "  ⚠️  服务未在运行"
+    echo "🛑 停止服务..."
+    # 先通过 launchd 停止
+    launchctl kill SIGTERM "gui/$(id -u)/$LABEL" 2>/dev/null && echo "  ✅ launchd 服务已停止" || echo "  ⚠️  launchd 服务未在运行"
+    
+    # 等待进程退出
+    sleep 1
+    
+    # 清理可能残留的进程
+    if pkill -9 -f "bun.*feishu.*start" 2>/dev/null; then
+        echo "  ✅ 已清理残留的 bun 进程"
+    fi
+    if pkill -9 -f "caffeinate.*feishu" 2>/dev/null; then
+        echo "  ✅ 已清理残留的 caffeinate 进程"
+    fi
+    
+    echo "  ✅ 服务已完全停止"
 }
 
 cmd_restart() {

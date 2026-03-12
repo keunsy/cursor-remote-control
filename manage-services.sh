@@ -2,8 +2,8 @@
 
 # 飞书和钉钉服务管理脚本
 
-FEISHU_DIR="/Users/user/work/cursor/cursor-remote-control/feishu"
-DINGTALK_DIR="/Users/user/work/cursor/cursor-remote-control/dingtalk"
+FEISHU_DIR="/Users/keunsy/work/cursor/cursor-remote-control/feishu"
+DINGTALK_DIR="/Users/keunsy/work/cursor/cursor-remote-control/dingtalk"
 
 case "$1" in
   start)

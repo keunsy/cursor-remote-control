@@ -1,10 +1,16 @@
 {
+  "// 使用说明": "首次使用: cp projects.json.example projects.json",
+  "// Usage": "First-time setup: cp projects.json.example projects.json",
   "projects": {
     "example": {
-      "path": "/path/to/your/project",
+      "path": "/Users/你的用户名/Projects/示例项目",
       "description": "示例项目"
+    },
+    "cursor-remote-control": {
+      "path": "/Users/你的用户名/work/cursor/cursor-remote-control",
+      "description": "Cursor远程控制项目"
     }
   },
-  "default_project": "example",
-  "memory_workspace": "example"
+  "default_project": "cursor-remote-control",
+  "memory_workspace": "cursor-remote-control"
 }
