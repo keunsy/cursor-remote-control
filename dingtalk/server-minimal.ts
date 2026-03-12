@@ -503,16 +503,14 @@ process.on('SIGTERM', () => {
 	process.exit(0);
 });
 
-// ── Cursor Agent 调用 ────────────────────────────
+// ── Cursor Agent 调用（与首次提交 4dbf84c 一致，仅保留 context/stdio/result 兼容）──
 async function runAgent(
-	workspace: string, 
-	message: string, 
+	workspace: string,
+	message: string,
 	agentId?: string,
 	context?: { platform?: string; webhook?: string }
 ): Promise<{ result: string; sessionId?: string }> {
-	console.log(`[时序A] runAgent 函数被调用`);
-	return new Promise<{ result: string; sessionId?: string }>((resolve, reject) => {
-		console.log(`[时序B] Promise callback 开始执行`);
+	return new Promise((resolve, reject) => {
 		const args = [
 			'-p', '--force', '--trust', '--approve-mcps',
 			'--workspace', workspace,
@@ -520,140 +518,64 @@ async function runAgent(
 			'--output-format', 'stream-json',
 			'--stream-partial-output',
 		];
-		
-		if (agentId) {
-			args.push('--resume', agentId);
-		}
-		
+		if (agentId) args.push('--resume', agentId);
 		args.push('--', message);
-		
-		console.log(`[Cursor CLI] workspace=${workspace} model=${config.CURSOR_MODEL} agentId=${agentId || '(新会话)'}`);
-		console.log(`[Cursor CLI] 传递消息: "${message.slice(0, 100)}${message.length > 100 ? '...' : ''}"`);
-		
+
 		const env = config.CURSOR_API_KEY
 			? { ...process.env, CURSOR_API_KEY: config.CURSOR_API_KEY }
 			: process.env;
-		
-		// 传递平台和回调地址给 agent（用于创建定时任务）
-		if (context?.platform) {
-			env.CURSOR_PLATFORM = context.platform;
-			console.log(`[ENV] 设置 CURSOR_PLATFORM=${context.platform}`);
-		}
-		if (context?.webhook) {
-			env.CURSOR_WEBHOOK = context.webhook;
-			console.log(`[ENV] 设置 CURSOR_WEBHOOK=${context.webhook.slice(0, 50)}...`);
-		}
-		
-		// 传递定时任务文件的绝对路径（Agent 直接写入，不依赖工作区）
+		if (context?.platform) env.CURSOR_PLATFORM = context.platform;
+		if (context?.webhook) env.CURSOR_WEBHOOK = context.webhook;
 		env.CURSOR_CRON_FILE = resolve(ROOT, 'cron-jobs-dingtalk.json');
-		
-		const proc = spawn('agent', args, { 
-			env,
-			stdio: ['ignore', 'pipe', 'pipe']
-		});
-		
-		console.log(`[时序C] spawn 完成，pid: ${proc.pid}`);
-		
-		// 追踪进程（用于 /终止）
+
+		const proc = spawn('agent', args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+
 		const lockKey = getLockKey(workspace);
-		console.log(`[时序D] lockKey: ${lockKey}`);
 		if (proc.pid) {
 			childPids.push(proc.pid);
-			activeAgents.set(lockKey, { 
-				pid: proc.pid, 
-				kill: () => proc.kill('SIGTERM') 
-			});
+			activeAgents.set(lockKey, { pid: proc.pid, kill: () => proc.kill('SIGTERM') });
 		}
-		
-		let resultText = '';
+
+		let resultFromEvent = '';  // type:'result' 的最终结果（不覆盖 assistant）
+		let assistantBuf = '';     // 累积 assistant 的 text，避免被空 result 覆盖
 		let sessionId: string | undefined = agentId;
 		let lineBuf = '';
-		let stderrBuf = '';
-		let hasOutput = false;
-		
-		// 添加超时机制（5分钟）
-		const timeout = setTimeout(() => {
-			console.error('[CLI] 进程超时（5分钟），强制结束');
-			proc.kill('SIGKILL');
-			reject(new Error('Agent 执行超时（5分钟）'));
-		}, 5 * 60 * 1000);
-		
-		console.log(`[时序E] 准备注册事件监听器`);
-		
-		proc.stdout.on('data', (chunk) => {
-			console.log(`[时序F] stdout收到数据`);
 
-			hasOutput = true;
+		proc.stdout.on('data', (chunk) => {
 			lineBuf += chunk.toString();
 			const lines = lineBuf.split('\n');
 			lineBuf = lines.pop() || '';
-			
 			for (const line of lines) {
 				if (!line.trim()) continue;
-				
 				try {
 					const ev = JSON.parse(line);
-					
-					// 提取 session_id
-					if (ev.session_id && !sessionId) {
-						sessionId = ev.session_id;
-						console.log(`[CLI] 捕获 session_id: ${sessionId}`);
-					}
-					
-					// 提取最终结果（兼容 result 为字符串或对象 { text/content }）
+					if (ev.session_id && !sessionId) sessionId = ev.session_id;
 					if (ev.type === 'result' && ev.result !== undefined) {
 						const r = ev.result;
-						resultText = typeof r === 'string' ? r : (r?.text ?? r?.content ?? String(r));
-						console.log(`[CLI] 收到 result，长度: ${resultText.length}`);
+						resultFromEvent = typeof r === 'string' ? r : (r?.text ?? r?.content ?? String(r ?? ''));
 					}
-					
-					// 实时拼接 assistant 消息（兼容多种 content 结构）
 					if (ev.type === 'assistant' && ev.message?.content) {
 						const parts = Array.isArray(ev.message.content) ? ev.message.content : [ev.message.content];
 						for (const c of parts) {
-							if (!c || typeof c !== 'object') continue;
-							const text = c.type === 'text' ? (c as { text?: string }).text : (c as { text?: string }).text;
-							if (typeof text === 'string' && text) resultText += text;
+							if (c?.type === 'text' && typeof c.text === 'string') assistantBuf += c.text;
 						}
 					}
-				} catch (e) {
-					// 非 JSON 行，记录调试信息
-					console.log('[CLI stdout 非JSON]', line.slice(0, 100));
-				}
+				} catch (_) {}
 			}
 		});
-		
-		proc.stderr.on('data', (chunk) => {
-			const text = chunk.toString();
-			stderrBuf += text;
-			console.error('[CLI stderr]', text);
-		});
-		
-		console.log(`[时序G] 事件监听器注册完成，Promise callback 执行完毕`);
-		
+
+		proc.stderr.on('data', (chunk) => { console.error('[CLI stderr]', chunk.toString()); });
+
 		proc.on('close', (code) => {
-			console.log(`[时序H] close 事件触发`);
-			clearTimeout(timeout);
-			
-			console.log(`[CLI] 进程结束 code=${code} hasOutput=${hasOutput} resultLen=${resultText.length} stderrLen=${stderrBuf.length}`);
-			
-			// 清理追踪
-			const lockKey = getLockKey(workspace);
 			activeAgents.delete(lockKey);
 			if (proc.pid) {
 				const idx = childPids.indexOf(proc.pid);
 				if (idx >= 0) childPids.splice(idx, 1);
 			}
-			
-			if (code === 0) {
-				console.log(`[CLI] 成功完成，返回结果长度: ${resultText.length}`);
-				console.log(`[时序C] 准备调用 resolve`);
-				resolve({ result: resultText, sessionId });
-				console.log(`[时序D] resolve 已调用`);
-			} else {
-				console.error(`[CLI] 失败退出 code=${code} stderr=${stderrBuf.slice(0, 500)}`);
-				reject(new Error(`Agent exited with code ${code}: ${stderrBuf.slice(0, 200)}`));
-			}
+			// 优先用 result 事件内容，否则用 assistant 累积（与飞书一致，避免空 result 覆盖整段回复）
+			const result = (resultFromEvent || assistantBuf).trim();
+			if (code === 0) resolve({ result, sessionId });
+			else reject(new Error(`Agent exited with code ${code}`));
 		});
 	});
 }
@@ -1618,40 +1540,24 @@ async function handleMessage(msg: any) {
 			memory.appendSessionLog(workspace, "user", message, config.CURSOR_MODEL);
 		}
 		
-			const t1 = Date.now();
-		console.log(`[时序1] 准备调用 runAgent, 时间: ${t1}`);
-		
 		try {
 			const { result, sessionId } = await runAgent(workspace, message, session.agentId, {
 				platform: 'dingtalk',
 				webhook: sessionWebhook
 			});
-			
-			const t2 = Date.now();
-			console.log(`[时序2] runAgent 返回, 耗时: ${t2 - t1}ms`);
-			
-			// 保存 session ID（用于会话恢复和历史记录）
+
 			if (sessionId) {
 				session.agentId = sessionId;
-				// 同步到会话历史存储
 				setActiveSession(workspace, sessionId, message.slice(0, 40));
-				console.log(`[会话] 已保存 sessionId: ${sessionId}`);
 			}
-			
-			// 确保 result 为字符串（agent 有时返回对象）
-			console.log(`[调试] result 类型: ${typeof result}, 值: ${JSON.stringify(result)?.slice(0, 200)}`);
-			
+
 			let resultStr = '';
-			if (typeof result === 'string') {
-				resultStr = result;
-			} else if (result && typeof result === 'object') {
+			if (typeof result === 'string') resultStr = result;
+			else if (result && typeof result === 'object') {
 				const obj = result as any;
 				resultStr = obj.text || obj.content || '';
 			}
 			const cleanOutput = resultStr.trim();
-			
-			console.log(`[调试] resultStr 长度: ${resultStr.length}, cleanOutput 长度: ${cleanOutput.length}`);
-			console.log(`[调试] cleanOutput 前100字符: ${cleanOutput.slice(0, 100)}`);
 			
 			// 记录 assistant 回复到会话日志
 			if (memory) {
