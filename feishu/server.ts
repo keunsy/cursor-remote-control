@@ -2078,21 +2078,35 @@ async function handleInner(
 		const subCmd = taskMatch[2].trim().toLowerCase();
 
 		if (!subCmd || subCmd === "list" || subCmd === "列表") {
-			const jobs = await scheduler.list();
+			// 直接从文件读取最新任务（避免 reload 的 3 秒保护机制）
+			const cronFilePath = resolve(ROOT, 'cron-jobs-feishu.json');
+			let jobs: any[] = [];
+			try {
+				const data = JSON.parse(readFileSync(cronFilePath, 'utf-8'));
+				jobs = (data.jobs || []).filter((j: any) => j.enabled && j.platform === 'feishu');
+			} catch (e) {
+				console.warn(`[任务] 读取文件失败: ${e}`);
+			}
+			
 			if (jobs.length === 0) {
 				await replyCard(messageId, "暂无定时任务。\n\n在对话中告诉 AI「每天早上9点检查邮件」即可自动创建，\n或手动编辑全局文件 `cron-jobs-feishu.json`。", { title: "📋 定时任务", color: "blue" });
 				return;
 			}
-			const lines = jobs.map((j, i) => {
+			const lines = jobs.map((j: any, i: number) => {
 				const status = j.enabled ? "✅" : "⏸";
-				const schedDesc = j.schedule.kind === "at" ? `一次性 ${j.schedule.at}` :
-					j.schedule.kind === "every" ? `每 ${Math.round(j.schedule.everyMs / 60000)} 分钟` :
-					`cron: ${j.schedule.expr}`;
-				const lastRun = j.state.lastRunAtMs ? new Date(j.state.lastRunAtMs).toLocaleString("zh-CN") : "从未执行";
+				let schedDesc = "";
+				if (j.schedule.kind === "at") {
+					const atTime = new Date(j.schedule.at);
+					schedDesc = `一次性 ${atTime.toLocaleString("zh-CN", { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}`;
+				} else if (j.schedule.kind === "every") {
+					schedDesc = `每 ${Math.round(j.schedule.everyMs / 60000)} 分钟`;
+				} else {
+					schedDesc = `cron: ${j.schedule.expr}`;
+				}
+				const lastRun = j.state?.lastRunAtMs ? new Date(j.state.lastRunAtMs).toLocaleString("zh-CN") : "从未执行";
 				return `${status} **${i + 1}. ${j.name}**\n   调度: ${schedDesc}\n   上次: ${lastRun}\n   ID: \`${j.id.slice(0, 8)}\``;
 			});
-			const stats = scheduler.getStats();
-			lines.push("", `共 ${stats.total} 个任务（${stats.enabled} 启用）${stats.nextRunIn ? `，下次执行: ${stats.nextRunIn}` : ""}`);
+			lines.push("", `📊 共 ${jobs.length} 个待执行任务`);
 			await replyCard(messageId, lines.join("\n"), { title: "📋 定时任务", color: "blue" });
 			return;
 		}

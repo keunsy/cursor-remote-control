@@ -523,12 +523,12 @@ async function runAgent(
 			args.push('--resume', agentId);
 		}
 		
-	args.push('--', message);
-	
-	console.log(`[Cursor CLI] workspace=${workspace} model=${config.CURSOR_MODEL} agentId=${agentId || '(新会话)'}`);
-	console.log(`[Cursor CLI] 传递消息: "${message.slice(0, 100)}${message.length > 100 ? '...' : ''}"`);
-	
-	const env = config.CURSOR_API_KEY
+		args.push('--', message);
+		
+		console.log(`[Cursor CLI] workspace=${workspace} model=${config.CURSOR_MODEL} agentId=${agentId || '(新会话)'}`);
+		console.log(`[Cursor CLI] 传递消息: "${message.slice(0, 100)}${message.length > 100 ? '...' : ''}"`);
+		
+		const env = config.CURSOR_API_KEY
 			? { ...process.env, CURSOR_API_KEY: config.CURSOR_API_KEY }
 			: process.env;
 		
@@ -545,102 +545,102 @@ async function runAgent(
 		// 传递定时任务文件的绝对路径（Agent 直接写入，不依赖工作区）
 		env.CURSOR_CRON_FILE = resolve(ROOT, 'cron-jobs-dingtalk.json');
 		
-	const proc = spawn('agent', args, { 
-		env,
-		stdio: ['ignore', 'pipe', 'pipe']
-	});
-	
-	// 追踪进程（用于 /终止）
-	const lockKey = getLockKey(workspace);
-	if (proc.pid) {
-		childPids.push(proc.pid);
-		activeAgents.set(lockKey, { 
-			pid: proc.pid, 
-			kill: () => proc.kill('SIGTERM') 
+		const proc = spawn('agent', args, { 
+			env,
+			stdio: ['ignore', 'pipe', 'pipe']
 		});
-	}
-	
-	let resultText = '';
-	let sessionId: string | undefined = agentId;
-	let lineBuf = '';
-	let stderrBuf = '';
-	let hasOutput = false;
-	
-	// 添加超时机制（5分钟）
-	const timeout = setTimeout(() => {
-		console.error('[CLI] 进程超时（5分钟），强制结束');
-		proc.kill('SIGKILL');
-		reject(new Error('Agent 执行超时（5分钟）'));
-	}, 5 * 60 * 1000);
-	
-	proc.stdout.on('data', (chunk) => {
-		hasOutput = true;
-		lineBuf += chunk.toString();
-		const lines = lineBuf.split('\n');
-		lineBuf = lines.pop() || '';
 		
-		for (const line of lines) {
-			if (!line.trim()) continue;
-			
-			try {
-				const ev = JSON.parse(line);
-				
-				// 提取 session_id
-				if (ev.session_id && !sessionId) {
-					sessionId = ev.session_id;
-					console.log(`[CLI] 捕获 session_id: ${sessionId}`);
-				}
-				
-				// 提取最终结果（兼容 result 为字符串或对象 { text/content }）
-				if (ev.type === 'result' && ev.result !== undefined) {
-					const r = ev.result;
-					resultText = typeof r === 'string' ? r : (r?.text ?? r?.content ?? String(r));
-					console.log(`[CLI] 收到 result，长度: ${resultText.length}`);
-				}
-				
-				// 实时拼接 assistant 消息（兼容多种 content 结构）
-				if (ev.type === 'assistant' && ev.message?.content) {
-					const parts = Array.isArray(ev.message.content) ? ev.message.content : [ev.message.content];
-					for (const c of parts) {
-						if (!c || typeof c !== 'object') continue;
-						const text = c.type === 'text' ? (c as { text?: string }).text : (c as { text?: string }).text;
-						if (typeof text === 'string' && text) resultText += text;
-					}
-				}
-			} catch (e) {
-				// 非 JSON 行，记录调试信息
-				console.log('[CLI stdout 非JSON]', line.slice(0, 100));
-			}
-		}
-	});
-	
-	proc.stderr.on('data', (chunk) => {
-		const text = chunk.toString();
-		stderrBuf += text;
-		console.error('[CLI stderr]', text);
-	});
-	
-	proc.on('close', (code) => {
-		clearTimeout(timeout);
-		
-		console.log(`[CLI] 进程结束 code=${code} hasOutput=${hasOutput} resultLen=${resultText.length} stderrLen=${stderrBuf.length}`);
-		
-		// 清理追踪
+		// 追踪进程（用于 /终止）
 		const lockKey = getLockKey(workspace);
-		activeAgents.delete(lockKey);
 		if (proc.pid) {
-			const idx = childPids.indexOf(proc.pid);
-			if (idx >= 0) childPids.splice(idx, 1);
+			childPids.push(proc.pid);
+			activeAgents.set(lockKey, { 
+				pid: proc.pid, 
+				kill: () => proc.kill('SIGTERM') 
+			});
 		}
 		
-		if (code === 0) {
-			console.log(`[CLI] 成功完成，返回结果长度: ${resultText.length}`);
-			resolve({ result: resultText, sessionId });
-		} else {
-			console.error(`[CLI] 失败退出 code=${code} stderr=${stderrBuf.slice(0, 500)}`);
-			reject(new Error(`Agent exited with code ${code}: ${stderrBuf.slice(0, 200)}`));
-		}
-	});
+		let resultText = '';
+		let sessionId: string | undefined = agentId;
+		let lineBuf = '';
+		let stderrBuf = '';
+		let hasOutput = false;
+		
+		// 添加超时机制（5分钟）
+		const timeout = setTimeout(() => {
+			console.error('[CLI] 进程超时（5分钟），强制结束');
+			proc.kill('SIGKILL');
+			reject(new Error('Agent 执行超时（5分钟）'));
+		}, 5 * 60 * 1000);
+		
+		proc.stdout.on('data', (chunk) => {
+			hasOutput = true;
+			lineBuf += chunk.toString();
+			const lines = lineBuf.split('\n');
+			lineBuf = lines.pop() || '';
+			
+			for (const line of lines) {
+				if (!line.trim()) continue;
+				
+				try {
+					const ev = JSON.parse(line);
+					
+					// 提取 session_id
+					if (ev.session_id && !sessionId) {
+						sessionId = ev.session_id;
+						console.log(`[CLI] 捕获 session_id: ${sessionId}`);
+					}
+					
+					// 提取最终结果（兼容 result 为字符串或对象 { text/content }）
+					if (ev.type === 'result' && ev.result !== undefined) {
+						const r = ev.result;
+						resultText = typeof r === 'string' ? r : (r?.text ?? r?.content ?? String(r));
+						console.log(`[CLI] 收到 result，长度: ${resultText.length}`);
+					}
+					
+					// 实时拼接 assistant 消息（兼容多种 content 结构）
+					if (ev.type === 'assistant' && ev.message?.content) {
+						const parts = Array.isArray(ev.message.content) ? ev.message.content : [ev.message.content];
+						for (const c of parts) {
+							if (!c || typeof c !== 'object') continue;
+							const text = c.type === 'text' ? (c as { text?: string }).text : (c as { text?: string }).text;
+							if (typeof text === 'string' && text) resultText += text;
+						}
+					}
+				} catch (e) {
+					// 非 JSON 行，记录调试信息
+					console.log('[CLI stdout 非JSON]', line.slice(0, 100));
+				}
+			}
+		});
+		
+		proc.stderr.on('data', (chunk) => {
+			const text = chunk.toString();
+			stderrBuf += text;
+			console.error('[CLI stderr]', text);
+		});
+		
+		proc.on('close', (code) => {
+			clearTimeout(timeout);
+			
+			console.log(`[CLI] 进程结束 code=${code} hasOutput=${hasOutput} resultLen=${resultText.length} stderrLen=${stderrBuf.length}`);
+			
+			// 清理追踪
+			const lockKey = getLockKey(workspace);
+			activeAgents.delete(lockKey);
+			if (proc.pid) {
+				const idx = childPids.indexOf(proc.pid);
+				if (idx >= 0) childPids.splice(idx, 1);
+			}
+			
+			if (code === 0) {
+				console.log(`[CLI] 成功完成，返回结果长度: ${resultText.length}`);
+				resolve({ result: resultText, sessionId });
+			} else {
+				console.error(`[CLI] 失败退出 code=${code} stderr=${stderrBuf.slice(0, 500)}`);
+				reject(new Error(`Agent exited with code ${code}: ${stderrBuf.slice(0, 200)}`));
+			}
+		});
 	});
 }
 

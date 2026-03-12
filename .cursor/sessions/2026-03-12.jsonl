@@ -25,3 +25,5 @@
 {"ts":"2026-03-12T09:56:11.520Z","workspace":"/Users/user/IdeaProjects/user-moa","role":"assistant","content":"","model":"auto"}
 {"ts":"2026-03-12T10:04:22.270Z","workspace":"/Users/user/IdeaProjects/user-moa","role":"user","content":"你好","model":"auto"}
 {"ts":"2026-03-12T10:04:22.275Z","workspace":"/Users/user/IdeaProjects/user-moa","role":"assistant","content":"","model":"auto"}
+{"ts":"2026-03-12T10:08:21.989Z","workspace":"/Users/user/IdeaProjects/user-moa","role":"user","content":"测试","model":"auto"}
+{"ts":"2026-03-12T10:08:21.993Z","workspace":"/Users/user/IdeaProjects/user-moa","role":"assistant","content":"","model":"auto"}
