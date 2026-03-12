@@ -762,8 +762,9 @@ function detectRouteIntent(text: string): RouteIntent {
 // ── 项目路由 ─────────────────────────────────────
 function route(
 	text: string,
-	currentProject?: string
-): { workspace: string; prompt: string; label: string; routeChanged?: boolean } {
+	currentProject?: string,
+	intent?: RouteIntent
+): { workspace: string; prompt: string; label: string; routeChanged?: boolean; intent: RouteIntent } {
 	const { projects, default_project } = projectsConfig;
 	
 	// 1. 传统路由：项目名:消息
@@ -774,17 +775,19 @@ function route(
 			prompt: colonMatch[2].trim(),
 			label: colonMatch[1].toLowerCase(),
 			routeChanged: true,
+			intent: intent || { type: 'none', cleanedText: colonMatch[2].trim() },
 		};
 	}
 	
-	// 2. 对话式路由
-	const intent = detectRouteIntent(text);
-	if (intent.type !== 'none' && intent.project) {
+	// 2. 对话式路由（使用传入的 intent，避免重复检测）
+	const routeIntent = intent || detectRouteIntent(text);
+	if (routeIntent.type !== 'none' && routeIntent.project) {
 		return {
-			workspace: projects[intent.project].path,
-			prompt: intent.cleanedText || text,
-			label: intent.project,
-			routeChanged: intent.type === 'switch',  // switch 会触发确认消息
+			workspace: projects[routeIntent.project].path,
+			prompt: routeIntent.cleanedText || text,
+			label: routeIntent.project,
+			routeChanged: routeIntent.type === 'switch',
+			intent: routeIntent,
 		};
 	}
 	
@@ -794,6 +797,7 @@ function route(
 			workspace: projects[currentProject].path,
 			prompt: text.trim(),
 			label: currentProject,
+			intent: routeIntent,
 		};
 	}
 	
@@ -802,6 +806,7 @@ function route(
 		workspace: projects[default_project]?.path || ROOT,
 		prompt: text.trim(),
 		label: default_project,
+		intent: routeIntent,
 	};
 }
 
@@ -1630,11 +1635,7 @@ async function handleInner(
 				: `用户发了一张图片，已保存到 ${path}，请查看并回复。`;
 		}
 		if (parsed.fileKey && messageType === "audio") {
-			if (!cardId) {
-				cardId = await replyCard(messageId, "🎙️ 正在识别语音...", { title: "语音识别中", color: "wathet" });
-			} else {
-				await updateCard(cardId, "🎙️ 正在识别语音...", { title: "语音识别中", color: "wathet" });
-			}
+			cardId = await replyCard(messageId, "🎙️ 正在识别语音...", { title: "语音识别中", color: "wathet" });
 			const audioPath = await downloadMedia(messageId, parsed.fileKey, "file", ".ogg");
 			const transcript = await transcribeAudio(audioPath);
 			try { unlinkSync(audioPath); } catch {}
@@ -1834,7 +1835,9 @@ async function handleInner(
 
 	// /stop、/终止、/停止 → 终止当前会话运行的 agent
 	if (/^\/(stop|终止|停止)\s*$/i.test(text.trim())) {
-		const { workspace: ws } = route(text);
+		// /stop 命令使用默认项目路由
+		const { projects, default_project } = projectsConfig;
+		const ws = projects[default_project]?.path || ROOT;
 		const lk = getLockKey(ws);
 		const agent = activeAgents.get(lk);
 		if (agent) {
@@ -2086,7 +2089,7 @@ async function handleInner(
 	const defaultWorkspace = projectsConfig.projects[projectsConfig.default_project]?.path || ROOT;
 	const currentProject = sessionsStore.get(defaultWorkspace)?.currentProject;
 	
-	// 对话式路由识别
+	// 对话式路由识别（只调用一次）
 	const routeIntent = detectRouteIntent(text);
 	
 	// 持久切换：直接切换项目并确认
@@ -2107,10 +2110,11 @@ async function handleInner(
 		}
 	}
 	
-	const { workspace, prompt, label, routeChanged } = route(text, currentProject);
+	// 路由解析（传入 intent 避免重复检测）
+	const { workspace, prompt, label, intent } = route(text, currentProject, routeIntent);
 	
 	// 临时路由提示
-	if (routeChanged && routeIntent.type === 'temp') {
+	if (intent.type === 'temp') {
 		console.log(`[路由] 临时路由到项目: ${label}`);
 	}
 	
@@ -2255,7 +2259,7 @@ async function handleInner(
 		scheduler.reload().catch(() => {});
 
 		const fullResult = quotaWarning ? `${quotaWarning}\n\n---\n\n${result}` : result;
-		const doneTitle = quotaWarning ? `完成 · ${elapsed}` : `完成 · ${elapsed}`;
+		const doneTitle = `完成 · ${elapsed}`;
 		const doneColor = quotaWarning ? "orange" : "green";
 
 		// 尝试发送 AI 结果到飞书卡片

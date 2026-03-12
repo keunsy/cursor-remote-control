@@ -604,8 +604,9 @@ function detectRouteIntent(text: string): RouteIntent {
 // ── 项目路由 ─────────────────────────────────────
 function resolveWorkspace(
 	text: string,
-	currentProject?: string
-): { workspace: string; message: string; label: string; routeChanged?: boolean } {
+	currentProject?: string,
+	intent?: RouteIntent
+): { workspace: string; message: string; label: string; routeChanged?: boolean; intent: RouteIntent } {
 	const { projects, default_project } = projectsConfig;
 	
 	// 1. 传统路由：/项目名 消息
@@ -616,17 +617,19 @@ function resolveWorkspace(
 			message: slashMatch[2].trim(),
 			label: slashMatch[1].toLowerCase(),
 			routeChanged: true,
+			intent: intent || { type: 'none', cleanedText: slashMatch[2].trim() },
 		};
 	}
 	
-	// 2. 对话式路由
-	const intent = detectRouteIntent(text);
-	if (intent.type !== 'none' && intent.project) {
+	// 2. 对话式路由（使用传入的 intent，避免重复检测）
+	const routeIntent = intent || detectRouteIntent(text);
+	if (routeIntent.type !== 'none' && routeIntent.project) {
 		return {
-			workspace: projects[intent.project].path,
-			message: intent.cleanedText || text,
-			label: intent.project,
-			routeChanged: intent.type === 'switch',  // switch 会触发确认消息
+			workspace: projects[routeIntent.project].path,
+			message: routeIntent.cleanedText || text,
+			label: routeIntent.project,
+			routeChanged: routeIntent.type === 'switch',
+			intent: routeIntent,
 		};
 	}
 	
@@ -636,6 +639,7 @@ function resolveWorkspace(
 			workspace: projects[currentProject].path,
 			message: text.trim(),
 			label: currentProject,
+			intent: routeIntent,
 		};
 	}
 	
@@ -645,6 +649,7 @@ function resolveWorkspace(
 		workspace: defaultProj?.path || ROOT,
 		message: text.trim(),
 		label: default_project,
+		intent: routeIntent,
 	};
 }
 
@@ -793,7 +798,7 @@ async function handleMessage(msg: any) {
 		const session = getSession(conversationId, senderId, defaultWorkspace);
 		const currentProject = session.currentProject;
 		
-		// 对话式路由识别
+		// 对话式路由识别（只调用一次）
 		const routeIntent = detectRouteIntent(text);
 		
 		// 持久切换：直接切换项目并确认
@@ -810,11 +815,11 @@ async function handleMessage(msg: any) {
 			}
 		}
 		
-		// 解析项目路由
-		const { workspace, message, label, routeChanged } = resolveWorkspace(text, currentProject);
+		// 解析项目路由（传入 intent 避免重复检测）
+		const { workspace, message, label, intent } = resolveWorkspace(text, currentProject, routeIntent);
 		
 		// 临时路由提示
-		if (routeChanged && routeIntent.type === 'temp') {
+		if (intent.type === 'temp') {
 			console.log(`[路由] 临时路由到项目: ${label}`);
 		}
 		
