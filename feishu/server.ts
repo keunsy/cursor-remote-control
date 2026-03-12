@@ -232,15 +232,9 @@ const scheduler = new Scheduler({
 	storePath: cronStorePath,
 	defaultWorkspace,
 	onExecute: async (job: CronJob) => {
-		try {
-			const ws = job.workspace || defaultWorkspace;
-			memory?.appendSessionLog(ws, "user", `[定时任务:${job.name}] ${job.message}`, config.CURSOR_MODEL);
-			const { result } = await runAgent(ws, job.message);
-			memory?.appendSessionLog(ws, "assistant", result.slice(0, 3000), config.CURSOR_MODEL);
-			return { status: "ok" as const, result };
-		} catch (err) {
-			return { status: "error" as const, error: err instanceof Error ? err.message : String(err) };
-		}
+		// 直接返回提醒内容，不经过 Agent
+		console.log(`[定时] 触发任务: ${job.name}`);
+		return { status: "ok" as const, result: job.message };
 	},
 	onDelivery: async (job: CronJob, result: string) => {
 		// 优先使用任务中保存的 chatId（确保发送到创建任务的平台）
@@ -256,12 +250,10 @@ const scheduler = new Scheduler({
 			return;
 		}
 		
-		const title = `⏰ 定时任务: ${job.name}`;
-		if (result.length <= 3800) {
-			await sendCard(chatId, result, { title, color: "purple" });
-		} else {
-			await sendCard(chatId, result.slice(0, 3800) + "\n\n...(已截断)", { title, color: "purple" });
-		}
+		// 发送提醒内容
+		const title = `⏰ 定时提醒`;
+		await sendCard(chatId, result, { title, color: "blue" });
+		console.log(`[定时] 飞书提醒已发送: ${result}`);
 	},
 	log: (msg: string) => console.log(`[调度] ${msg}`),
 });

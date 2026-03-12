@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "name": "1分钟后提醒",
+      "enabled": true,
+      "deleteAfterRun": true,
+      "schedule": {
+        "kind": "at",
+        "at": "2026-03-12T09:53:43.241Z"
+      },
+      "message": "上厕所",
+      "platform": "feishu",
+      "webhook": "oc_672ad3c25adbe2e707730799a0b133ec",
+      "id": "cad57cea-e088-44d1-912b-de95b87934e2",
+      "createdAt": "2026-03-12T09:52:43.241Z",
+      "updatedAt": "2026-03-12T09:52:43.241Z",
+      "state": {
+        "nextRunAtMs": 1773309223241
+      }
+    }
+  ]
+}

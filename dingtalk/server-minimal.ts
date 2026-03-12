@@ -591,18 +591,20 @@ async function runAgent(
 					console.log(`[CLI] 捕获 session_id: ${sessionId}`);
 				}
 				
-				// 提取最终结果
-				if (ev.type === 'result' && ev.result) {
-					resultText = ev.result;
-					console.log(`[CLI] 收到 result，长度: ${ev.result.length}`);
+				// 提取最终结果（兼容 result 为字符串或对象 { text/content }）
+				if (ev.type === 'result' && ev.result !== undefined) {
+					const r = ev.result;
+					resultText = typeof r === 'string' ? r : (r?.text ?? r?.content ?? String(r));
+					console.log(`[CLI] 收到 result，长度: ${resultText.length}`);
 				}
 				
-				// 实时拼接 assistant 消息
+				// 实时拼接 assistant 消息（兼容多种 content 结构）
 				if (ev.type === 'assistant' && ev.message?.content) {
-					for (const c of ev.message.content) {
-						if (c.type === 'text' && c.text) {
-							resultText += c.text;
-						}
+					const parts = Array.isArray(ev.message.content) ? ev.message.content : [ev.message.content];
+					for (const c of parts) {
+						if (!c || typeof c !== 'object') continue;
+						const text = c.type === 'text' ? (c as { text?: string }).text : (c as { text?: string }).text;
+						if (typeof text === 'string' && text) resultText += text;
 					}
 				}
 			} catch (e) {
@@ -1595,7 +1597,17 @@ async function handleMessage(msg: any) {
 				console.log(`[会话] 已保存 sessionId: ${sessionId}`);
 			}
 		
-		const cleanOutput = (result || '').trim();
+		// 确保 result 为字符串（agent 有时返回对象）
+		let resultStr = '';
+		if (typeof result === 'string') {
+			resultStr = result;
+		} else if (result && typeof result === 'object') {
+			const obj = result as any;
+			resultStr = obj.text || obj.content || '';
+		}
+		const cleanOutput = resultStr.trim();
+		
+		console.log(`[发送前] cleanOutput 长度: ${cleanOutput.length}`);
 		
 		// 记录 assistant 回复到会话日志
 		if (memory) {
@@ -1678,13 +1690,9 @@ const scheduler = new Scheduler({
 	storePath: cronStorePath,
 	defaultWorkspace,
 	onExecute: async (job: CronJob) => {
-		try {
-			const ws = job.workspace || defaultWorkspace;
-			const { result } = await runAgent(ws, job.message);
-			return { status: 'ok' as const, result };
-		} catch (err) {
-			return { status: 'error' as const, error: err instanceof Error ? err.message : String(err) };
-		}
+		// 直接返回提醒内容，不经过 Agent
+		console.log(`[定时] 触发任务: ${job.name}`);
+		return { status: 'ok' as const, result: job.message };
 	},
 	onDelivery: async (job: CronJob, result: string) => {
 		// 优先使用任务中保存的 webhook（确保发送到创建任务的平台）
@@ -1693,7 +1701,7 @@ const scheduler = new Scheduler({
 			console.warn('[调度] 无活跃 webhook，跳过推送（用户需要先发送至少一条消息）');
 			return;
 		}
-		
+
 		// 只有钉钉创建的任务才发送到钉钉
 		if (job.platform && job.platform !== 'dingtalk') {
 			console.log(`[调度] 任务 ${job.name} 属于 ${job.platform}，跳过钉钉推送`);
