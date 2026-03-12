@@ -1524,25 +1524,22 @@ async function handleMessage(msg: any) {
 		console.log(`[执行] workspace=${workspace} message="${message.slice(0, 60)}"`);
 		await sendMarkdown(sessionWebhook, '⏳ Cursor AI 正在思考...', '💭 思考中', 'wathet');
 		
+		// 确保工作区有规则文件（每次都检查，轻量操作）
+		const cronRulesSource = resolve(ROOT, '.cursor/CRON-TASK-RULES.md');
+		const cronRulesTarget = resolve(workspace, '.cursor/CRON-TASK-RULES.md');
+		if (existsSync(cronRulesSource) && !existsSync(cronRulesTarget)) {
+			mkdirSync(resolve(workspace, '.cursor'), { recursive: true });
+			writeFileSync(cronRulesTarget, readFileSync(cronRulesSource, 'utf-8'));
+			console.log(`[工作区] 已同步规则: ${cronRulesTarget}`);
+		}
+		
 		// 记忆由 Cursor 自主通过 memory-tool.ts 调用，server 记录会话日志
 		if (memory) {
 			memory.appendSessionLog(workspace, "user", message, config.CURSOR_MODEL);
 		}
 		
-		// 检测定时任务请求，注入规则到 prompt
-		let finalMessage = message;
-		const isScheduleRequest = /([0-9]+|一|二|三|四|五|六|七|八|九|十)(分钟|小时|天|周|月).*(后|提醒|通知|告诉)|每(天|周|月|小时).*[提醒通知]|定时|at|every|cron/i.test(message);
-		if (isScheduleRequest) {
-			const cronRulesPath = resolve(ROOT, '.cursor/CRON-TASK-RULES.md');
-			if (existsSync(cronRulesPath)) {
-				const rules = readFileSync(cronRulesPath, 'utf-8');
-				finalMessage = `${rules}\n\n---\n\n用户请求：${message}\n\n⚠️ 请严格按照上述规则创建定时任务！`;
-				console.log('[定时任务] 已注入规则到 prompt');
-			}
-		}
-		
 		try {
-			const { result, sessionId } = await runAgent(workspace, finalMessage, session.agentId, {
+			const { result, sessionId } = await runAgent(workspace, message, session.agentId, {
 				platform: 'dingtalk',
 				webhook: sessionWebhook
 			});

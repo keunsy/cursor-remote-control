@@ -1581,26 +1581,23 @@ async function runAgent(
 	const lockKey = getLockKey(workspace);
 
 	return withSessionLock(lockKey, async () => {
-		busySessions.add(lockKey);
-		opts?.onStart?.();
-		
-		// 检测定时任务请求，注入规则到 prompt
-		let finalPrompt = prompt;
-		const isScheduleRequest = /([0-9]+|一|二|三|四|五|六|七|八|九|十)(分钟|小时|天|周|月).*(后|提醒|通知|告诉)|每(天|周|月|小时).*[提醒通知]|定时|at|every|cron/i.test(prompt);
-		if (isScheduleRequest) {
-			const cronRulesPath = resolve(ROOT, '.cursor/CRON-TASK-RULES.md');
-			if (existsSync(cronRulesPath)) {
-				const rules = readFileSync(cronRulesPath, 'utf-8');
-				finalPrompt = `${rules}\n\n---\n\n用户请求：${prompt}\n\n⚠️ 请严格按照上述规则创建定时任务！`;
-			}
+		// 确保工作区有规则文件（每次都检查，轻量操作）
+		const cronRulesSource = resolve(ROOT, '.cursor/CRON-TASK-RULES.md');
+		const cronRulesTarget = resolve(workspace, '.cursor/CRON-TASK-RULES.md');
+		if (existsSync(cronRulesSource) && !existsSync(cronRulesTarget)) {
+			mkdirSync(resolve(workspace, '.cursor'), { recursive: true });
+			writeFileSync(cronRulesTarget, readFileSync(cronRulesSource, 'utf-8'));
+			console.log(`[工作区] 已同步规则: ${cronRulesTarget}`);
 		}
 		
+		busySessions.add(lockKey);
+		opts?.onStart?.();
 		try {
 			const existingSessionId = getActiveSessionId(workspace);
 			const isNewSession = !existingSessionId;
 
 			try {
-				const { result, sessionId } = await execAgent(lockKey, workspace, primaryModel, finalPrompt, {
+				const { result, sessionId } = await execAgent(lockKey, workspace, primaryModel, prompt, {
 					sessionId: existingSessionId,
 					onProgress: opts?.onProgress,
 					context: { platform: 'feishu', chatId: opts?.context?.chatId },
