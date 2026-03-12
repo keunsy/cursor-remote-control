@@ -534,9 +534,11 @@ async function runAgent(
 		// 传递平台和回调地址给 agent（用于创建定时任务）
 		if (context?.platform) {
 			env.CURSOR_PLATFORM = context.platform;
+			console.log(`[ENV] 设置 CURSOR_PLATFORM=${context.platform}`);
 		}
 		if (context?.webhook) {
 			env.CURSOR_WEBHOOK = context.webhook;
+			console.log(`[ENV] 设置 CURSOR_WEBHOOK=${context.webhook.slice(0, 50)}...`);
 		}
 		
 		const proc = spawn('agent', args, { 
