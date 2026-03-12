@@ -27,3 +27,17 @@
 {"ts":"2026-03-12T10:04:22.275Z","workspace":"/Users/user/IdeaProjects/user-moa","role":"assistant","content":"","model":"auto"}
 {"ts":"2026-03-12T10:08:21.989Z","workspace":"/Users/user/IdeaProjects/user-moa","role":"user","content":"测试","model":"auto"}
 {"ts":"2026-03-12T10:08:21.993Z","workspace":"/Users/user/IdeaProjects/user-moa","role":"assistant","content":"","model":"auto"}
+{"ts":"2026-03-12T10:12:24.024Z","workspace":"/Users/user/IdeaProjects/user-moa","role":"user","content":"123","model":"auto"}
+{"ts":"2026-03-12T10:12:24.041Z","workspace":"/Users/user/IdeaProjects/user-moa","role":"assistant","content":"","model":"auto"}
+{"ts":"2026-03-12T10:13:14.340Z","workspace":"/Users/user/IdeaProjects/user-moa","role":"user","content":"123","model":"auto"}
+{"ts":"2026-03-12T10:13:14.342Z","workspace":"/Users/user/IdeaProjects/user-moa","role":"assistant","content":"","model":"auto"}
+{"ts":"2026-03-12T10:13:17.766Z","workspace":"/Users/user/IdeaProjects/user-moa","role":"user","content":"456","model":"auto"}
+{"ts":"2026-03-12T10:13:17.769Z","workspace":"/Users/user/IdeaProjects/user-moa","role":"assistant","content":"","model":"auto"}
+{"ts":"2026-03-12T10:14:14.486Z","workspace":"/Users/user/IdeaProjects/user-moa","role":"user","content":"123","model":"auto"}
+{"ts":"2026-03-12T10:14:14.491Z","workspace":"/Users/user/IdeaProjects/user-moa","role":"assistant","content":"","model":"auto"}
+{"ts":"2026-03-12T10:14:17.755Z","workspace":"/Users/user/IdeaProjects/user-moa","role":"user","content":"456","model":"auto"}
+{"ts":"2026-03-12T10:14:17.756Z","workspace":"/Users/user/IdeaProjects/user-moa","role":"assistant","content":"","model":"auto"}
+{"ts":"2026-03-12T10:17:49.558Z","workspace":"/Users/user/IdeaProjects/user-moa","role":"user","content":"hi","model":"auto"}
+{"ts":"2026-03-12T10:17:49.563Z","workspace":"/Users/user/IdeaProjects/user-moa","role":"assistant","content":"","model":"auto"}
+{"ts":"2026-03-12T10:20:13.678Z","workspace":"/Users/user/IdeaProjects/ultron-relation","role":"user","content":"这个是默认目录么","model":"auto"}
+{"ts":"2026-03-12T10:20:35.025Z","workspace":"/Users/user/IdeaProjects/ultron-relation","role":"assistant","content":"不完全是“系统默认”，而是**当前项目**的默认目录。\n\n- **在 Cursor 里**：你打开的是 `ultron-relation` 项目，所以工作区根目录就是  \n  **`/Users/user/IdeaProjects/ultron-relation`**  \n  新开的终端一般也会在这个目录下启动。  \n  所以对**这个工作区**来说，它就是“默认当前目录”。\n\n- **换项目就变了**：如果你用「打开文件夹」打开别的项目（比如 `ultron-api`），那时的默认目录就会变成那个项目的路径。\n\n总结：**`/Users/user/IdeaProjects/ultron-relation` 是当前打开的这个项目在 Cursor 里的默认/当前目录**，不是整台电脑的全局默认目录。","model":"auto"}

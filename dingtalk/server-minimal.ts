@@ -510,7 +510,9 @@ async function runAgent(
 	agentId?: string,
 	context?: { platform?: string; webhook?: string }
 ): Promise<{ result: string; sessionId?: string }> {
+	console.log(`[时序A] runAgent 函数被调用`);
 	return new Promise((resolve, reject) => {
+		console.log(`[时序B] Promise callback 开始执行`);
 		const args = [
 			'-p', '--force', '--trust', '--approve-mcps',
 			'--workspace', workspace,
@@ -550,8 +552,11 @@ async function runAgent(
 			stdio: ['ignore', 'pipe', 'pipe']
 		});
 		
+		console.log(`[时序C] spawn 完成，pid: ${proc.pid}`);
+		
 		// 追踪进程（用于 /终止）
 		const lockKey = getLockKey(workspace);
+		console.log(`[时序D] lockKey: ${lockKey}`);
 		if (proc.pid) {
 			childPids.push(proc.pid);
 			activeAgents.set(lockKey, { 
@@ -573,7 +578,11 @@ async function runAgent(
 			reject(new Error('Agent 执行超时（5分钟）'));
 		}, 5 * 60 * 1000);
 		
+		console.log(`[时序E] 准备注册事件监听器`);
+		
 		proc.stdout.on('data', (chunk) => {
+			console.log(`[时序F] stdout收到数据`);
+
 			hasOutput = true;
 			lineBuf += chunk.toString();
 			const lines = lineBuf.split('\n');
@@ -620,7 +629,10 @@ async function runAgent(
 			console.error('[CLI stderr]', text);
 		});
 		
+		console.log(`[时序G] 事件监听器注册完成，Promise callback 执行完毕`);
+		
 		proc.on('close', (code) => {
+			console.log(`[时序H] close 事件触发`);
 			clearTimeout(timeout);
 			
 			console.log(`[CLI] 进程结束 code=${code} hasOutput=${hasOutput} resultLen=${resultText.length} stderrLen=${stderrBuf.length}`);
@@ -635,7 +647,9 @@ async function runAgent(
 			
 			if (code === 0) {
 				console.log(`[CLI] 成功完成，返回结果长度: ${resultText.length}`);
+				console.log(`[时序C] 准备调用 resolve`);
 				resolve({ result: resultText, sessionId });
+				console.log(`[时序D] resolve 已调用`);
 			} else {
 				console.error(`[CLI] 失败退出 code=${code} stderr=${stderrBuf.slice(0, 500)}`);
 				reject(new Error(`Agent exited with code ${code}: ${stderrBuf.slice(0, 200)}`));
@@ -707,9 +721,9 @@ function detectRouteIntent(text: string): RouteIntent {
 		};
 	}
 	
-	// 2b. 持久切换到项目："切换到 XXX" / "现在用 XXX" / "改成 XXX 项目"
+	// 2b. 持久切换到项目："切换到 XXX" / "切到 XXX" / "现在用 XXX" / "改成 XXX 项目"
 	const switchPatterns = [
-		new RegExp(`^(?:切换到|切换|现在用|改成|使用)\\s*(${projectPattern})(?:项目)?\\s*$`, 'i'),
+		new RegExp(`^(?:切换到|切到|切换|现在用|改成|使用)\\s*(${projectPattern})(?:项目)?\\s*$`, 'i'),
 		new RegExp(`^(?:进入|打开)\\s*(${projectPattern})(?:项目)?\\s*$`, 'i'),
 	];
 	for (const pattern of switchPatterns) {
@@ -1595,11 +1609,17 @@ async function handleMessage(msg: any) {
 			memory.appendSessionLog(workspace, "user", message, config.CURSOR_MODEL);
 		}
 		
+			const t1 = Date.now();
+		console.log(`[时序1] 准备调用 runAgent, 时间: ${t1}`);
+		
 		try {
 			const { result, sessionId } = await runAgent(workspace, message, session.agentId, {
 				platform: 'dingtalk',
 				webhook: sessionWebhook
 			});
+			
+			const t2 = Date.now();
+			console.log(`[时序2] runAgent 返回, 耗时: ${t2 - t1}ms`);
 			
 			// 保存 session ID（用于会话恢复和历史记录）
 			if (sessionId) {

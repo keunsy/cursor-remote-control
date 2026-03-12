@@ -766,9 +766,9 @@ function detectRouteIntent(text: string): RouteIntent {
 		};
 	}
 	
-	// 2b. 持久切换到项目："切换到 XXX" / "现在用 XXX" / "改成 XXX 项目"
+	// 2b. 持久切换到项目："切换到 XXX" / "切到 XXX" / "现在用 XXX" / "改成 XXX 项目"
 	const switchPatterns = [
-		new RegExp(`^(?:切换到|切换|现在用|改成|使用)\\s*(${projectPattern})(?:项目)?\\s*$`, 'i'),
+		new RegExp(`^(?:切换到|切到|切换|现在用|改成|使用)\\s*(${projectPattern})(?:项目)?\\s*$`, 'i'),
 		new RegExp(`^(?:进入|打开)\\s*(${projectPattern})(?:项目)?\\s*$`, 'i'),
 	];
 	for (const pattern of switchPatterns) {
