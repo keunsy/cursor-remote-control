@@ -541,8 +541,8 @@ async function runAgent(
 			console.log(`[ENV] 设置 CURSOR_WEBHOOK=${context.webhook.slice(0, 50)}...`);
 		}
 		
-		// 传递规则文档路径（Agent 可以读取全局规则）
-		env.CURSOR_CRON_RULES_PATH = resolve(ROOT, '.cursor/CRON-TASK-RULES.md');
+		// 传递定时任务文件的绝对路径（Agent 直接写入，不依赖工作区）
+		env.CURSOR_CRON_FILE = resolve(ROOT, 'cron-jobs-dingtalk.json');
 		
 		const proc = spawn('agent', args, { 
 			env,

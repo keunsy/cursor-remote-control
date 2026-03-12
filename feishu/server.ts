@@ -1392,8 +1392,8 @@ function execAgent(
 			env.CURSOR_WEBHOOK = opts.context.chatId;
 		}
 		
-		// 传递规则文档路径（Agent 可以读取全局规则）
-		env.CURSOR_CRON_RULES_PATH = resolve(ROOT, '.cursor/CRON-TASK-RULES.md');
+		// 传递定时任务文件的绝对路径（Agent 直接写入，不依赖工作区）
+		env.CURSOR_CRON_FILE = resolve(ROOT, 'cron-jobs-feishu.json');
 
 		const child = spawn(AGENT_BIN, args, {
 			env,
@@ -2251,18 +2251,8 @@ async function handleInner(
 		}
 	}
 	
-	// 检测定时任务请求，强制使用 cursor-remote-control 工作区
-	const isScheduleRequest = /([0-9]+|一|二|三|四|五|六|七|八|九|十)(分钟|小时|天|周|月).*(后|提醒|通知|告诉)|每(天|周|月|小时).*[提醒通知]|定时/i.test(text);
-	
 	// 路由解析（传入 intent 避免重复检测）
-	let { workspace, prompt, label, intent } = route(text, currentProject, routeIntent);
-	
-	// 定时任务强制使用全局工作区（规则文件所在位置）
-	if (isScheduleRequest) {
-		workspace = ROOT;
-		label = 'remote-control';
-		console.log(`[路由] 定时任务请求 → 强制使用全局工作区: ${workspace}`);
-	}
+	const { workspace, prompt, label, intent } = route(text, currentProject, routeIntent);
 	
 	// 临时路由提示
 	if (intent.type === 'temp') {
