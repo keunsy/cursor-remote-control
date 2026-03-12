@@ -1,0 +1,10 @@
+{
+  "projects": {
+    "example": {
+      "path": "/path/to/your/project",
+      "description": "示例项目"
+    }
+  },
+  "default_project": "example",
+  "memory_workspace": "example"
+}

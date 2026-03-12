@@ -45,3 +45,9 @@ inbox/
 # 本地配置
 plist/
 *.plist
+
+# 定时任务备份（scheduler 写入的 .bak，不应进仓库）
+*.bak
+
+# 项目路由配置（本机路径，每人不同）
+projects.json
