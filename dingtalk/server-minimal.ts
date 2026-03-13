@@ -503,6 +503,83 @@ process.on('SIGTERM', () => {
 	process.exit(0);
 });
 
+// ── 工具调用描述辅助函数 ──────────────────────────
+const TOOL_LABELS: Record<string, string> = {
+	read: "📖 读取", write: "✏️ 写入", strReplace: "✏️ 编辑",
+	shell: "⚡ 执行", grep: "🔍 搜索", glob: "📂 查找",
+	semanticSearch: "🔎 语义搜索", webSearch: "🌐 搜索网页", webFetch: "🌐 抓取网页",
+	delete: "🗑️ 删除", editNotebook: "📓 编辑笔记本",
+	callMcpTool: "🔌 MCP工具", task: "🤖 子任务",
+};
+
+function basename(p: string): string {
+	const parts = p.split("/");
+	return parts[parts.length - 1] || p;
+}
+
+function describeToolCall(tc: Record<string, { args?: Record<string, unknown> }>): string {
+	for (const [key, val] of Object.entries(tc)) {
+		const name = key.replace(/ToolCall$/, "");
+		const label = TOOL_LABELS[name] || `🔧 ${name}`;
+		const a = val?.args;
+		if (!a) return label;
+		if (a.path) return `${label} ${basename(String(a.path))}`;
+		if (a.command) return `${label} ${String(a.command).slice(0, 80)}`;
+		if (a.pattern) return `${label} "${a.pattern}"${a.path ? ` in ${basename(String(a.path))}` : ""}`;
+		if (a.glob_pattern) return `${label} ${a.glob_pattern}`;
+		if (a.query) return `${label} ${String(a.query).slice(0, 60)}`;
+		if (a.search_term) return `${label} ${String(a.search_term).slice(0, 60)}`;
+		if (a.url) return `${label} ${String(a.url).slice(0, 60)}`;
+		if (a.description) return `${label} ${String(a.description).slice(0, 60)}`;
+		return label;
+	}
+	return "🔧 工具调用";
+}
+
+function describeToolResult(tc: Record<string, { args?: Record<string, unknown>; result?: Record<string, { content?: string }> }>): string {
+	for (const val of Object.values(tc)) {
+		const r = val?.result;
+		if (!r) return "";
+		const success = r.success as Record<string, unknown> | undefined;
+		if (success?.content) return String(success.content).slice(0, 200);
+		const err = r.error as Record<string, unknown> | undefined;
+		if (err?.message) return `❌ ${String(err.message).slice(0, 150)}`;
+	}
+	return "";
+}
+
+function buildToolSummary(tools: string[]): string {
+	if (tools.length === 0) return "";
+	
+	// 按工具类型分组，保留所有详细信息
+	const groups = new Map<string, { emoji: string; items: string[] }>();
+	
+	for (const tool of tools) {
+		const match = tool.match(/^([🔧📖✏️⚡🔍📂🔎🌐🗑️📓🔌🤖]+)\s+(.+)/);
+		if (!match) continue;
+		
+		const emoji = match[1];
+		const detail = match[2];
+		
+		if (!groups.has(emoji)) {
+			groups.set(emoji, { emoji, items: [] });
+		}
+		groups.get(emoji)!.items.push(detail);
+	}
+	
+	// 生成详细列表
+	const lines: string[] = ['📋 **本次操作：**'];
+	for (const { emoji, items } of groups.values()) {
+		const label = Object.values(TOOL_LABELS).find(l => l.startsWith(emoji))?.replace(/^.+?\s/, '') || '操作';
+		lines.push(`${emoji} **${label}** (${items.length}个)：`);
+		for (const item of items) {
+			lines.push(`  · ${item}`);
+		}
+	}
+	
+	return lines.join('\n');
+}
+
 // ── Cursor Agent 调用（基于飞书的稳定实现）────────
 async function runAgent(
 	workspace: string,
@@ -541,6 +618,7 @@ async function runAgent(
 		let sessionId: string | undefined = agentId;
 		let assistantBuf = '';
 		let lastSegment = '';
+		let toolSummary: string[] = [];
 		let lineBuf = '';
 		let done = false;
 
@@ -574,6 +652,12 @@ async function runAgent(
 							}
 						}
 					}
+					if (ev.type === 'tool_call' && ev.tool_call) {
+						if (ev.subtype === 'started') {
+							const desc = describeToolCall(ev.tool_call);
+							toolSummary.push(desc);
+						}
+					}
 				} catch (_) {}
 			}
 		});
@@ -595,9 +679,18 @@ async function runAgent(
 			const finalSegment = lastSegment.trim();
 			const rawOutput = rawResultText || finalSegment || assistantBuf.trim() || stderr.trim() || '(无输出)';
 			
-			console.log(`[runAgent完成] rawResultText.length=${rawResultText.length} finalSegment.length=${finalSegment.length} assistantBuf.length=${assistantBuf.trim().length}`);
+			// 构建工具调用摘要（添加到回复开头）
+			let finalOutput = rawOutput;
+			if (toolSummary.length > 0) {
+				const summary = buildToolSummary(toolSummary);
+				if (summary) {
+					finalOutput = summary + '\n\n---\n\n' + rawOutput;
+				}
+			}
 			
-			if (code === 0) res({ result: rawOutput, sessionId });
+			console.log(`[runAgent完成] rawResultText.length=${rawResultText.length} finalSegment.length=${finalSegment.length} assistantBuf.length=${assistantBuf.trim().length} tools=${toolSummary.length}`);
+			
+			if (code === 0) res({ result: finalOutput, sessionId });
 			else reject(new Error(`Agent exited with code ${code}`));
 		});
 

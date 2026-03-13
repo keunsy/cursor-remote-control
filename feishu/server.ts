@@ -1333,38 +1333,33 @@ function basename(p: string): string {
 function buildToolSummary(tools: string[]): string {
 	if (tools.length === 0) return "";
 	
-	// 统计工具类型
-	const counts = new Map<string, { emoji: string; count: number; samples: string[] }>();
+	// 按工具类型分组，保留所有详细信息
+	const groups = new Map<string, { emoji: string; items: string[] }>();
 	
 	for (const tool of tools) {
-		const match = tool.match(/^([🔧📖✏️⚡🔍📂🔎🌐🗑️📓🔌🤖]+)\s+(\S+)/);
+		const match = tool.match(/^([🔧📖✏️⚡🔍📂🔎🌐🗑️📓🔌🤖]+)\s+(.+)/);
 		if (!match) continue;
 		
 		const emoji = match[1];
-		const key = emoji;
-		const detail = tool.slice(emoji.length).trim();
+		const detail = match[2];
 		
-		if (!counts.has(key)) {
-			counts.set(key, { emoji, count: 0, samples: [] });
+		if (!groups.has(emoji)) {
+			groups.set(emoji, { emoji, items: [] });
 		}
-		const entry = counts.get(key)!;
-		entry.count++;
-		if (entry.samples.length < 3) {
-			entry.samples.push(detail);
+		groups.get(emoji)!.items.push(detail);
+	}
+	
+	// 生成详细列表
+	const lines: string[] = ['> 📋 **本次操作：**'];
+	for (const { emoji, items } of groups.values()) {
+		const label = Object.values(TOOL_LABELS).find(l => l.startsWith(emoji))?.replace(/^.+?\s/, '') || '操作';
+		lines.push(`> ${emoji} **${label}** (${items.length}个)：`);
+		for (const item of items) {
+			lines.push(`>   · ${item}`);
 		}
 	}
 	
-	// 生成摘要（如果工具很少，直接列出；如果很多，收缩）
-	const items = Array.from(counts.values());
-	
-	if (tools.length <= 3) {
-		// 工具少，直接列出
-		return `> 📋 ${tools.join(' · ')}`;
-	}
-	
-	// 工具多，只显示简短统计（飞书不支持 HTML 折叠）
-	const brief = items.map(({ emoji, count }) => `${emoji}×${count}`).join(' ');
-	return `> 📋 本次执行: ${brief}`;
+	return lines.join('\n');
 }
 
 // 核心：spawn agent CLI，解析 stream-json，返回结果
