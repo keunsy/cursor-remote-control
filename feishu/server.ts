@@ -666,7 +666,7 @@ async function transcribeAudio(audioPath: string): Promise<string | null> {
 function parseContent(
 	messageType: string,
 	content: string,
-): { text: string; imageKey?: string; fileKey?: string; fileName?: string } {
+): { text: string; imageKey?: string; imageKeys?: string[]; fileKey?: string; fileName?: string } {
 	try {
 		const p = JSON.parse(content);
 		switch (messageType) {
@@ -678,19 +678,26 @@ function parseContent(
 				return { text: "", fileKey: p.file_key };
 			case "file":
 				return { text: "", fileKey: p.file_key, fileName: p.file_name };
-			case "post": {
-				const texts: string[] = [];
-				for (const lang of Object.values(p) as Array<{
-					title?: string;
-					content?: Array<Array<{ tag: string; text?: string }>>;
-				}>) {
-					if (lang?.title) texts.push(lang.title);
-					if (Array.isArray(lang?.content))
-						for (const para of lang.content)
-							for (const e of para) if (e.tag === "text" && e.text) texts.push(e.text);
+		case "post": {
+			const texts: string[] = [];
+			const images: string[] = [];
+			
+			// 直接处理 post 对象（不是多语言结构）
+			if (p.title) texts.push(p.title);
+			if (Array.isArray(p.content)) {
+				for (const para of p.content) {
+					for (const e of para) {
+						if (e.tag === "text" && e.text) texts.push(e.text);
+						if (e.tag === "img" && e.image_key) images.push(e.image_key);
+					}
 				}
-				return { text: texts.join(" ") };
 			}
+			
+			return { 
+				text: texts.join(" "), 
+				imageKeys: images.length > 0 ? images : undefined
+			};
+		}
 			default:
 				return { text: `[不支持: ${messageType}]` };
 		}
@@ -1790,11 +1797,26 @@ async function handleInner(
 	// 处理媒体附件
 	const parsed = parseContent(messageType, content);
 	try {
+		// 处理单张图片（旧格式 image 消息）
 		if (parsed.imageKey) {
 			const path = await downloadMedia(messageId, parsed.imageKey, "image", ".png");
+			const instruction = "\n\n**注意**：这张图片来自飞书消息系统的临时存储，请直接用 Read 工具读取分析，不要复制到当前工作区。";
 			text = text
-				? `${text}\n\n[附件图片: ${path}]`
-				: `用户发了一张图片，已保存到 ${path}，请查看并回复。`;
+				? `${text}\n\n图片：${path}${instruction}`
+				: `用户发了一张图片：${path}${instruction}\n\n请查看并回复。`;
+		}
+		// 处理多张图片（post 消息中的图片）
+		if (parsed.imageKeys && parsed.imageKeys.length > 0) {
+			const imagePaths: string[] = [];
+			for (let i = 0; i < parsed.imageKeys.length; i++) {
+				const path = await downloadMedia(messageId, parsed.imageKeys[i], "image", ".png");
+				imagePaths.push(path);
+			}
+			const imageTexts = imagePaths.map((p, i) => `图片${i + 1}：${p}`).join("\n");
+			const instruction = "\n\n**注意**：这些图片来自飞书消息系统的临时存储，请直接用 Read 工具读取分析，不要复制到当前工作区。";
+			text = text
+				? `${text}\n\n${imageTexts}${instruction}`
+				: `用户发了 ${imagePaths.length} 张图片：\n${imageTexts}${instruction}\n\n请查看并回复。`;
 		}
 		if (parsed.fileKey && messageType === "audio") {
 			cardId = await replyCard(messageId, "🎙️ 正在识别语音...", { title: "语音识别中", color: "wathet" });

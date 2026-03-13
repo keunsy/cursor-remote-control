@@ -1013,7 +1013,8 @@ async function handleMessage(msg: any) {
 					throw new Error('图片下载码缺失');
 				}
 				const imagePath = await downloadFile(data.content.downloadCode, '.jpg');
-				text = `用户发了一张图片，已保存到 ${imagePath}，请查看并回复。`;
+				const instruction = "\n\n**注意**：这张图片来自钉钉消息系统的临时存储，请直接用 Read 工具读取分析，不要复制到当前工作区。";
+				text = `用户发了一张图片：${imagePath}${instruction}\n\n请查看并回复。`;
 			} catch (error) {
 				await sendMarkdown(sessionWebhook, `❌ 图片下载失败: ${error instanceof Error ? error.message : '未知错误'}`, '失败', 'red');
 				return;
