@@ -2280,7 +2280,8 @@ async function handleInner(
 					schedDesc = `cron: ${j.schedule.expr}`;
 				}
 				const lastRun = j.state?.lastRunAtMs ? new Date(j.state.lastRunAtMs).toLocaleString("zh-CN") : "从未执行";
-				return `${status} **${i + 1}. ${j.name}**\n   调度: ${schedDesc}\n   上次: ${lastRun}\n   ID（复制用）：\n\`\`\`\n${j.id}\n\`\`\``;
+				const content = j.message ? `\n   内容: ${j.message}` : "";
+				return `${status} **${i + 1}. ${j.name}**\n   调度: ${schedDesc}${content}\n   上次: ${lastRun}\n   ID（复制用）：\n\`\`\`\n${j.id}\n\`\`\``;
 			});
 			lines.push("", `📊 共 ${jobs.length} 个待执行任务`);
 			await replyCard(messageId, lines.join("\n"), { title: "📋 定时任务", color: "blue" });

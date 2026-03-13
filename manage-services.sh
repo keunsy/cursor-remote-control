@@ -7,25 +7,37 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FEISHU_DIR="${SCRIPT_DIR}/feishu"
 DINGTALK_DIR="${SCRIPT_DIR}/dingtalk"
 
+# PID 文件路径
+FEISHU_PID="/tmp/feishu-cursor.pid"
+DINGTALK_PID="/tmp/dingtalk-cursor.pid"
+
 case "$1" in
   start)
     case "$2" in
       feishu)
         echo "🚀 启动飞书服务..."
         cd "$FEISHU_DIR" && nohup bun run start-with-keepawake.ts > /tmp/feishu-cursor.log 2>&1 &
-        echo "  ✅ 飞书服务已启动 (PID: $!)"
+        FEISHU_MAIN_PID=$!
+        echo "$FEISHU_MAIN_PID" > "$FEISHU_PID"
+        echo "  ✅ 飞书服务已启动 (PID: $FEISHU_MAIN_PID, 已记录到 $FEISHU_PID)"
         ;;
       dingtalk)
         echo "🚀 启动钉钉服务..."
         cd "$DINGTALK_DIR" && nohup bun run start-with-keepawake.ts > /tmp/dingtalk-cursor.log 2>&1 &
-        echo "  ✅ 钉钉服务已启动 (PID: $!)"
+        DINGTALK_MAIN_PID=$!
+        echo "$DINGTALK_MAIN_PID" > "$DINGTALK_PID"
+        echo "  ✅ 钉钉服务已启动 (PID: $DINGTALK_MAIN_PID, 已记录到 $DINGTALK_PID)"
         ;;
       *)
         echo "🚀 启动所有服务..."
         cd "$FEISHU_DIR" && nohup bun run start-with-keepawake.ts > /tmp/feishu-cursor.log 2>&1 &
-        echo "  ✅ 飞书服务已启动 (PID: $!)"
+        FEISHU_MAIN_PID=$!
+        echo "$FEISHU_MAIN_PID" > "$FEISHU_PID"
+        echo "  ✅ 飞书服务已启动 (PID: $FEISHU_MAIN_PID)"
         cd "$DINGTALK_DIR" && nohup bun run start-with-keepawake.ts > /tmp/dingtalk-cursor.log 2>&1 &
-        echo "  ✅ 钉钉服务已启动 (PID: $!)"
+        DINGTALK_MAIN_PID=$!
+        echo "$DINGTALK_MAIN_PID" > "$DINGTALK_PID"
+        echo "  ✅ 钉钉服务已启动 (PID: $DINGTALK_MAIN_PID)"
         ;;
     esac
     ;;
@@ -34,37 +46,85 @@ case "$1" in
     case "$2" in
       feishu)
         echo "🛑 停止飞书服务..."
-        # 通过工作目录匹配飞书服务进程
-        ps aux | grep "bun.*start-with-keepawake" | grep "$FEISHU_DIR" | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null
+        
+        # 方案1：优先使用 PID 文件（精确杀进程）
+        if [ -f "$FEISHU_PID" ]; then
+          MAIN_PID=$(cat "$FEISHU_PID")
+          echo "  📌 从 PID 文件读取主进程: $MAIN_PID"
+          
+          # 杀主进程及其子进程树
+          pkill -9 -P "$MAIN_PID" 2>/dev/null
+          kill -9 "$MAIN_PID" 2>/dev/null
+          rm -f "$FEISHU_PID"
+        fi
+        
+        # 方案2：兜底清理（处理历史残留或 PID 文件丢失的情况）
+        pkill -9 -f "bun.*cursor-remote-control.*feishu" 2>/dev/null
         pkill -9 -f "caffeinate.*feishu" 2>/dev/null
+        
         sleep 1
         echo "  ✅ 飞书服务已停止"
         ;;
       dingtalk)
         echo "🛑 停止钉钉服务..."
-        # 通过工作目录匹配钉钉服务进程
-        ps aux | grep "bun.*start-with-keepawake" | grep "$DINGTALK_DIR" | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null
+        
+        # 方案1：优先使用 PID 文件
+        if [ -f "$DINGTALK_PID" ]; then
+          MAIN_PID=$(cat "$DINGTALK_PID")
+          echo "  📌 从 PID 文件读取主进程: $MAIN_PID"
+          
+          pkill -9 -P "$MAIN_PID" 2>/dev/null
+          kill -9 "$MAIN_PID" 2>/dev/null
+          rm -f "$DINGTALK_PID"
+        fi
+        
+        # 方案2：兜底清理
+        pkill -9 -f "bun.*cursor-remote-control.*dingtalk" 2>/dev/null
         pkill -9 -f "caffeinate.*dingtalk" 2>/dev/null
+        
         sleep 1
         echo "  ✅ 钉钉服务已停止"
         ;;
       *)
         echo "🛑 停止所有服务..."
         
-        # 清理所有相关进程（start-with-keepawake.ts 和 start.ts）
+        # 方案1：PID 文件精确清理
+        KILLED=0
+        if [ -f "$FEISHU_PID" ]; then
+          MAIN_PID=$(cat "$FEISHU_PID")
+          echo "  📌 飞书主进程: $MAIN_PID"
+          pkill -9 -P "$MAIN_PID" 2>/dev/null
+          kill -9 "$MAIN_PID" 2>/dev/null
+          rm -f "$FEISHU_PID"
+          KILLED=1
+        fi
+        
+        if [ -f "$DINGTALK_PID" ]; then
+          MAIN_PID=$(cat "$DINGTALK_PID")
+          echo "  📌 钉钉主进程: $MAIN_PID"
+          pkill -9 -P "$MAIN_PID" 2>/dev/null
+          kill -9 "$MAIN_PID" 2>/dev/null
+          rm -f "$DINGTALK_PID"
+          KILLED=1
+        fi
+        
+        # 方案2：兜底清理（清理历史残留或 PID 文件丢失的进程）
+        if [ "$KILLED" -eq 0 ]; then
+          echo "  ⚠️  PID 文件不存在，使用兜底清理模式..."
+        fi
+        
         pkill -9 -f "bun.*cursor-remote-control.*feishu" 2>/dev/null
         pkill -9 -f "bun.*cursor-remote-control.*dingtalk" 2>/dev/null
         pkill -9 -f "caffeinate.*feishu" 2>/dev/null
         pkill -9 -f "caffeinate.*dingtalk" 2>/dev/null
         
-        # 等待进程完全退出
         sleep 1
         
-        # 验证是否还有残留进程
-        REMAINING=$(ps aux | grep -E "bun.*(feishu|dingtalk)" | grep "cursor-remote-control" | grep -v grep | wc -l)
+        # 方案3：最终扫描，确保没有漏网之鱼
+        REMAINING=$(ps aux | grep -E "bun.*cursor-remote-control" | grep -E "feishu|dingtalk" | grep -v grep | wc -l)
         if [ "$REMAINING" -gt 0 ]; then
-          echo "  ⚠️  发现残留进程，再次清理..."
-          ps aux | grep -E "bun.*(feishu|dingtalk)" | grep "cursor-remote-control" | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null
+          echo "  ⚠️  发现残留进程 ($REMAINING 个)，再次清理..."
+          ps aux | grep -E "bun.*cursor-remote-control" | grep -E "feishu|dingtalk" | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null
           sleep 1
         fi
         
