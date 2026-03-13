@@ -1866,6 +1866,7 @@ async function handleInner(
 			"**基础指令**",
 			`- ${c("/帮助", "/help")} — 显示本帮助`,
 			`- ${c("/状态", "/status")} — 查看服务状态`,
+			`- ${c("/项目", "/project")} — 列出所有项目及路径`,
 			`- ${c("/新对话", "/new")} — 重置当前会话`,
 			`- ${c("/终止", "/stop")} — 终止正在执行的任务`,
 			"",
@@ -1886,7 +1887,7 @@ async function handleInner(
 		`- ${c("/整理记忆", "/reindex")} — 重建记忆索引`,
 		"",
 		"**文件操作**",
-		`- ${c("/apk", "/股票apk")} — 一键发送股票项目 APK`,
+		`- ${c("/apk", "/sendapk")} — 快速发送 Android APK（需配置 Android 项目）`,
 		`- \`/发送文件 路径\` — 发送任意本地文件`,
 		`- 示例: \`/发送文件 ~/document.pdf\``,
 		"",
@@ -2022,22 +2023,22 @@ async function handleInner(
 		return;
 	}
 
-	// /apk、/股票apk → 快速发送股票项目最新 APK
-	if (/^\/(apk|股票apk|股票|sendapk)\s*$/i.test(text.trim())) {
-		console.log(`[指令] 发送股票 APK`);
+	// /apk、/sendapk → 快速发送 Android APK（从 stock-android 项目）
+	if (/^\/(apk|sendapk)\s*$/i.test(text.trim())) {
+		console.log(`[指令] 发送 APK`);
 		
-		// 从 projects.json 读取股票项目路径
-		const stockProject = projectsConfig.projects["stock-android"];
-		if (!stockProject) {
-			await replyCard(messageId, `❌ **配置错误**\n\n在 projects.json 中未找到 \`stock-android\` 项目配置。\n\n请在 projects.json 中添加股票项目配置。`, { title: "配置缺失", color: "red" });
+		// 从 projects.json 读取 Android 项目路径
+		const androidProject = projectsConfig.projects["stock-android"];
+		if (!androidProject) {
+			await replyCard(messageId, `❌ **Android 项目未配置**\n\n此功能需要先配置 Android 项目路径。\n\n请联系管理员配置。`, { title: "配置缺失", color: "red" });
 			return;
 		}
 		
-		const apkPath = resolve(stockProject.path, "app/build/outputs/apk/debug/app-debug.apk");
+		const apkPath = resolve(androidProject.path, "app/build/outputs/apk/debug/app-debug.apk");
 		
 		// 检查文件是否存在
 		if (!existsSync(apkPath)) {
-			await replyCard(messageId, `❌ **APK 文件未找到**\n\n路径: \`${apkPath}\`\n\n请先编译安卓项目。`, { title: "文件未找到", color: "red" });
+			await replyCard(messageId, `❌ **APK 文件未找到**\n\n路径: \`${apkPath}\`\n\n请先编译 Android 项目。`, { title: "文件未找到", color: "red" });
 			return;
 		}
 		
@@ -2054,10 +2055,11 @@ async function handleInner(
 		
 		// 读取文件并发送
 		try {
-			await replyCard(messageId, `📤 **正在发送股票 APK...**\n\n文件: app-debug.apk\n大小: ${(fileSize / 1024 / 1024).toFixed(2)}MB\n编译时间: ${modTime}`, { title: "股票 APK", color: "blue" });
+			await replyCard(messageId, `📤 **正在发送 APK...**\n\n文件: app-debug.apk\n大小: ${(fileSize / 1024 / 1024).toFixed(2)}MB\n编译时间: ${modTime}`, { title: "Android APK", color: "blue" });
 			
 			const buffer = readFileSync(apkPath);
-			const fileName = "a-stock-pullback-strategy.apk"; // 使用更友好的文件名
+			const projectName = androidProject.description || "Android App";
+			const fileName = `${projectName.replace(/\s+/g, '-').toLowerCase()}.apk`;
 			
 			const cfg = {
 				channels: {
@@ -2075,8 +2077,8 @@ async function handleInner(
 				fileName,
 			});
 			
-			console.log(`[指令] 股票 APK 发送成功: ${fileName} (${(fileSize / 1024 / 1024).toFixed(2)}MB)`);
-			await replyCard(messageId, `✅ **APK 发送成功！**\n\n📱 A股回踩策略 Android 版\n文件名: ${fileName}\n大小: ${(fileSize / 1024 / 1024).toFixed(2)}MB\n编译时间: ${modTime}\n\n**请在上方查收并安装。**`, { title: "发送成功", color: "green" });
+			console.log(`[指令] APK 发送成功: ${fileName} (${(fileSize / 1024 / 1024).toFixed(2)}MB)`);
+			await replyCard(messageId, `✅ **APK 发送成功！**\n\n📱 ${projectName}\n文件名: ${fileName}\n大小: ${(fileSize / 1024 / 1024).toFixed(2)}MB\n编译时间: ${modTime}\n\n**请在上方查收并安装。**`, { title: "发送成功", color: "green" });
 		} catch (err) {
 			console.error(`[指令] APK 发送失败:`, err);
 			await replyCard(messageId, `❌ **发送失败**\n\n错误: ${err instanceof Error ? err.message : String(err)}`, { title: "发送失败", color: "red" });
@@ -2405,6 +2407,27 @@ async function handleInner(
 		return;
 	}
 
+	// /项目、/project → 列出所有项目
+	if (/^\/(项目|project|xm|proj)\s*$/i.test(text.trim())) {
+		const defaultWorkspace = projectsConfig.projects[projectsConfig.default_project]?.path || ROOT;
+		const ws = sessionsStore.get(defaultWorkspace);
+		const current = ws?.currentProject || projectsConfig.default_project;
+		
+		const lines = [
+			`**当前项目：${current}** ✨`,
+			"",
+			"**所有项目（长按复制项目名）：**",
+			...Object.entries(projectsConfig.projects).map(([name, info]) => {
+				const mark = name === current ? " ← 当前" : "";
+				return `**${info.description}${mark}**\n项目名（复制）：\n\`\`\`\n${name}\n\`\`\`\n路径：\`${info.path}\``;
+			}),
+			"",
+			`**切换方式：** 说「切换到 ${Object.keys(projectsConfig.projects)[1] || 'xxx'}」或「${Object.keys(projectsConfig.projects)[1] || 'xxx'}项目帮我xxx」`,
+		];
+		await replyCard(messageId, lines.join("\n"), { title: "📂 项目列表", color: "blue" });
+		return;
+	}
+	
 	// /new、/新对话、/新会话 → 归档当前会话，开启新对话
 	// 获取当前项目（用于对话式路由）
 	const defaultWorkspace = projectsConfig.projects[projectsConfig.default_project]?.path || ROOT;

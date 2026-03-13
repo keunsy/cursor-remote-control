@@ -1071,6 +1071,25 @@ async function handleMessage(msg: any) {
 		const session = getSession(conversationId, senderId, defaultWorkspace);
 		const currentProject = session.currentProject;
 		
+		// /项目、/project → 列出所有项目
+		if (/^\/(项目|project|xm|proj)\s*$/i.test(text.trim())) {
+			const current = session.currentProject || projectsConfig.default_project;
+			
+			const lines = [
+				`**当前项目：${current}** ✨`,
+				"",
+				"**所有项目（长按复制项目名）：**",
+				...Object.entries(projectsConfig.projects).map(([name, info]) => {
+					const mark = name === current ? " ← 当前" : "";
+					return `**${info.description}${mark}**\n项目名（复制）：\n\`\`\`\n${name}\n\`\`\`\n路径：\`${info.path}\``;
+				}),
+				"",
+				`**切换方式：** 说「切换到 ${Object.keys(projectsConfig.projects)[1] || 'xxx'}」或「${Object.keys(projectsConfig.projects)[1] || 'xxx'}项目帮我xxx」`,
+			];
+			await sendMarkdown(sessionWebhook, lines.join("\n"), '📂 项目列表', 'blue');
+			return;
+		}
+		
 		// 对话式路由识别（只调用一次）
 		const routeIntent = detectRouteIntent(text);
 		
@@ -1153,6 +1172,7 @@ async function handleMessage(msg: any) {
 				'**基础指令**',
 				`- ${c('/帮助', '/help')} — 显示本帮助`,
 				`- ${c('/状态', '/status')} — 查看服务状态`,
+				`- ${c('/项目', '/project')} — 列出所有项目及路径`,
 				`- ${c('/新对话', '/new')} — 重置当前会话`,
 				`- ${c('/终止', '/stop')} — 终止正在执行的任务`,
 				'',

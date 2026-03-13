@@ -34,14 +34,16 @@ case "$1" in
     case "$2" in
       feishu)
         echo "🛑 停止飞书服务..."
-        pkill -9 -f "bun.*feishu" 2>/dev/null
+        # 通过工作目录匹配飞书服务进程
+        ps aux | grep "bun.*start-with-keepawake" | grep "$FEISHU_DIR" | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null
         pkill -9 -f "caffeinate.*feishu" 2>/dev/null
         sleep 1
         echo "  ✅ 飞书服务已停止"
         ;;
       dingtalk)
         echo "🛑 停止钉钉服务..."
-        pkill -9 -f "bun.*dingtalk" 2>/dev/null
+        # 通过工作目录匹配钉钉服务进程
+        ps aux | grep "bun.*start-with-keepawake" | grep "$DINGTALK_DIR" | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null
         pkill -9 -f "caffeinate.*dingtalk" 2>/dev/null
         sleep 1
         echo "  ✅ 钉钉服务已停止"
@@ -49,22 +51,20 @@ case "$1" in
       *)
         echo "🛑 停止所有服务..."
         
-        # 清理所有飞书相关进程（更彻底的匹配）
-        pkill -9 -f "bun.*feishu" 2>/dev/null
+        # 清理所有相关进程（start-with-keepawake.ts 和 start.ts）
+        pkill -9 -f "bun.*cursor-remote-control.*feishu" 2>/dev/null
+        pkill -9 -f "bun.*cursor-remote-control.*dingtalk" 2>/dev/null
         pkill -9 -f "caffeinate.*feishu" 2>/dev/null
-        
-        # 清理所有钉钉相关进程
-        pkill -9 -f "bun.*dingtalk" 2>/dev/null
         pkill -9 -f "caffeinate.*dingtalk" 2>/dev/null
         
         # 等待进程完全退出
         sleep 1
         
         # 验证是否还有残留进程
-        REMAINING=$(ps aux | grep -E "bun.*(feishu|dingtalk)" | grep -v grep | wc -l)
+        REMAINING=$(ps aux | grep -E "bun.*(feishu|dingtalk)" | grep "cursor-remote-control" | grep -v grep | wc -l)
         if [ "$REMAINING" -gt 0 ]; then
           echo "  ⚠️  发现残留进程，再次清理..."
-          ps aux | grep -E "bun.*(feishu|dingtalk)" | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null
+          ps aux | grep -E "bun.*(feishu|dingtalk)" | grep "cursor-remote-control" | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null
           sleep 1
         fi
         
@@ -77,21 +77,21 @@ case "$1" in
     case "$2" in
       feishu)
         echo "🔄 重启飞书服务..."
-        "$0" stop feishu
+        bash "$0" stop feishu
         sleep 2
-        "$0" start feishu
+        bash "$0" start feishu
         ;;
       dingtalk)
         echo "🔄 重启钉钉服务..."
-        "$0" stop dingtalk
+        bash "$0" stop dingtalk
         sleep 2
-        "$0" start dingtalk
+        bash "$0" start dingtalk
         ;;
       *)
         echo "🔄 重启所有服务..."
-        "$0" stop
+        bash "$0" stop
         sleep 2
-        "$0" start
+        bash "$0" start
         ;;
     esac
     ;;
@@ -99,10 +99,11 @@ case "$1" in
   status)
     echo "📊 服务状态:"
     echo ""
-    PROCESSES=$(ps aux | grep "bun.*start-with-keepawake" | grep -v grep)
-    COUNT=$(echo "$PROCESSES" | grep -c "bun")
+    # 只统计 bun 进程，不包括 caffeinate
+    PROCESSES=$(ps aux | grep "bun.*cursor-remote-control" | grep -E "feishu|dingtalk" | grep -v grep | grep -v caffeinate)
+    COUNT=$(echo "$PROCESSES" | grep -c "bun" || echo "0")
     
-    if [ "$COUNT" -eq 2 ]; then
+    if [ "$COUNT" -ge 2 ]; then
       echo "  🟢 飞书和钉钉服务都在运行"
       echo ""
       echo "$PROCESSES" | awk '{print "  PID: " $2 " | 运行时间: " $10 " | CPU: " $3 "% | 内存: " $4 "%"}'
