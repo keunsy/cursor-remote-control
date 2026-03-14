@@ -1978,3 +1978,36 @@ console.log(`[调度] Scheduler 已启动，文件: ${cronStorePath}`);
 // ── 启动心跳系统 ──────────────────────────────────
 heartbeat.start();
 console.log(`[心跳] 已启动，默认关闭（发送 /心跳 开启）`);
+
+// ── 启动自检（.cursor/BOOT.md）───────────────────────
+setTimeout(async () => {
+	const bootPath = resolve(memoryWorkspace, ".cursor/BOOT.md");
+	try {
+		if (!existsSync(bootPath)) return;
+		const content = readFileSync(bootPath, "utf-8").trim();
+		if (!content) return;
+
+		console.log("[启动] 检测到 .cursor/BOOT.md，执行启动自检...");
+
+		const bootPrompt = [
+			"你正在执行启动自检。严格按 .cursor/BOOT.md 指示操作。",
+			"如果无事可做，回复 'HEARTBEAT_OK'。",
+		].join("\n");
+
+		const { result } = await runAgent(memoryWorkspace, bootPrompt);
+		const trimmed = result.trim();
+
+		// 如果有需要推送的内容且有活跃 webhook
+		if (trimmed && !/^(无输出|HEARTBEAT_OK)$/i.test(trimmed)) {
+			const webhook = getWebhook();
+			if (webhook) {
+				await sendMarkdown(webhook, trimmed, '🚀 启动自检', 'wathet');
+				console.log("[启动] 自检结果已推送到钉钉");
+			}
+		}
+
+		console.log("[启动] .cursor/BOOT.md 自检完成");
+	} catch (e) {
+		console.warn(`[启动] .cursor/BOOT.md 执行失败: ${e}`);
+	}
+}, 8000);  // 8秒后执行，确保服务完全启动
