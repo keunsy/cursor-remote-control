@@ -55,11 +55,18 @@ function formatElapsed(seconds: number): string {
 	if (seconds < 60) return `${seconds}秒`;
 	const mins = Math.floor(seconds / 60);
 	const secs = seconds % 60;
+	if (mins >= 60) {
+		const hrs = Math.floor(mins / 60);
+		const remainMins = mins % 60;
+		if (remainMins === 0 && secs === 0) return `${hrs}时`;
+		if (secs === 0) return `${hrs}时${remainMins}分`;
+		return `${hrs}时${remainMins}分${secs}秒`;
+	}
 	return secs > 0 ? `${mins}分${secs}秒` : `${mins}分钟`;
 }
 
 function isQuotaError(error: Error): boolean {
-	const msg = error.message.toLowerCase();
+	const msg = (error instanceof Error ? error.message : String(error ?? '')).toLowerCase();
 	return /insufficient.*(balance|credit|quota)|余额不足|quota.*exceeded/i.test(msg);
 }
 
