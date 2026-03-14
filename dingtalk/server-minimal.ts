@@ -1991,15 +1991,43 @@ async function handleMessage(msg: any) {
 		}
 		
 	} catch (error) {
-		console.error('[处理失败]', error);
-		try {
-			await sendMarkdown(
-				sessionWebhook,
-				`❌ **执行失败**\n\n${error instanceof Error ? error.message : String(error)}`,
-				'执行失败',
-				'red'
-			);
-		} catch {}
+		const msg = error instanceof Error ? error.message : String(error);
+		console.error(`[失败] ${msg.slice(0, 200)}`);
+
+		if (!sessionWebhook) {
+			console.error('[失败] 无 webhook，无法发送错误引导');
+			return;
+		}
+
+		// API Key 失效引导
+		if (/api.?key|authentication|unauthorized|invalid.*key/i.test(msg)) {
+			const guide =
+				`❌ **API Key 失效**\n\n` +
+				`请更换 Key：\n\n` +
+				`1. 打开 [Cursor Dashboard](https://cursor.com/dashboard)\n` +
+				`2. 生成新 Key\n` +
+				`3. 发送 \`/密钥 新Key\`\n\n` +
+				`错误详情：\n\`\`\`\n${msg.slice(0, 200)}\n\`\`\``;
+
+			await sendMarkdown(sessionWebhook, guide, '❌ Key 失效', 'red');
+			return;
+		}
+
+		// 超时错误引导
+		if (/timeout|超时|timed out/i.test(msg)) {
+			const guide =
+				`❌ **执行超时**\n\n` +
+				`任务执行时间过长，已自动终止。\n\n` +
+				`建议：\n` +
+				`- 将任务拆分为更小的步骤\n` +
+				`- 使用 \`/stop\` 手动终止长任务`;
+
+			await sendMarkdown(sessionWebhook, guide, '❌ 超时', 'red');
+			return;
+		}
+
+		// 通用错误
+		await sendMarkdown(sessionWebhook, `❌ 执行失败\n\n\`\`\`\n${msg.slice(0, 500)}\n\`\`\`\n\n发送 \`/帮助\` 查看可用命令。`, '❌ 失败', 'red');
 	}
 }
 
