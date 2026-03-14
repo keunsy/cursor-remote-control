@@ -720,9 +720,10 @@ function strip(s: string): string {
 
 // ── 对话式路由识别 ───────────────────────────────
 interface RouteIntent {
-	type: 'switch' | 'temp' | 'none';  // switch=持久切换, temp=临时路由, none=无路由
+	type: 'switch' | 'temp' | 'suggest' | 'none';  // switch=持久切换, temp=临时路由, suggest=建议切换, none=无路由
 	project?: string;  // 项目名
 	path?: string;  // 任意路径（用于临时切换）
+	confidence?: 'high' | 'medium' | 'low';  // 识别信心度
 	cleanedText: string;  // 移除路由信息后的文本
 }
 
@@ -739,7 +740,9 @@ function detectRouteIntent(text: string): RouteIntent {
 	const raw = (text || '').trim().replace(/\s+/g, ' ');  // 归一化空格（含全角）
 	const { projects } = projectsConfig;
 	const projectNames = Object.keys(projects);
-	const projectPattern = projectNames.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+	// 按长度降序排列，避免前缀冲突（如 remote-control 被 remote 误匹配）
+	const sortedNames = projectNames.sort((a, b) => b.length - a.length);
+	const projectPattern = sortedNames.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
 	
 	// 0. 路径快捷语法：#/path 或 @/path
 	const pathSymbolMatch = raw.match(/^[#@]((?:~?\/|~).+?)\s+(.+)$/);
@@ -813,6 +816,43 @@ function detectRouteIntent(text: string): RouteIntent {
 		}
 	}
 	
+	// 4. 宽松识别（建议切换）："activity 报错了" / "查看 api" / "user 服务的代码"
+	// 只在开关开启时启用（默认开启，设置为 'false' 关闭）
+	const smartDetection = process.env.SMART_PROJECT_DETECTION !== 'false';
+	if (smartDetection) {
+		const suggestPatterns = [
+			// "activity 报错了" / "api 挂了" / "api服务是否正常"
+			new RegExp(`^(${projectPattern})(?:\\s+服务|服务)?\\s*(?:报错|出错|挂了|崩了|有问题|异常|故障|是否正常|正常吗|正常么|怎么样|如何)`, 'i'),
+			
+			// "查看 activity" / "看看 api"
+			new RegExp(`^(?:查看|看看|检查|分析|打开)\\s+(${projectPattern})(?:\\s+服务|服务)?(?:$|\\s)`, 'i'),
+			
+			// "activity 接口定义" / "api 的配置" / "user 服务的日志"
+			new RegExp(`^(${projectPattern})(?:\\s+服务|服务)?\\s*(?:接口|API|代码|配置|日志|监控|数据库|缓存|的)`, 'i'),
+			
+			// "去 activity 看看"
+			new RegExp(`^(?:去|到)\\s+(${projectPattern})(?:\\s+服务|服务)?\\s+(?:看看|查查|找找|改改)`, 'i'),
+			
+			// "activity 项目的" / "api 那边"
+			new RegExp(`^(${projectPattern})(?:\\s+服务|服务)?\\s*(?:项目)?(?:的|那边|这边|里面)`, 'i'),
+		];
+		
+		for (const pattern of suggestPatterns) {
+			const match = raw.match(pattern);
+			if (match) {
+				const project = match[1].toLowerCase();
+				if (projects[project]) {
+					return { 
+						type: 'suggest',
+						project, 
+						confidence: 'medium',
+						cleanedText: text 
+					};
+				}
+			}
+		}
+	}
+	
 	return { type: 'none', cleanedText: text };
 }
 
@@ -851,8 +891,8 @@ function route(
 		};
 	}
 	
-	// 2b. 项目名路由
-	if (routeIntent.type !== 'none' && routeIntent.project) {
+	// 2b. 项目名路由（排除 suggest 类型，suggest 需要用户确认）
+	if (routeIntent.type !== 'none' && routeIntent.type !== 'suggest' && routeIntent.project) {
 		return {
 			workspace: projects[routeIntent.project].path,
 			prompt: routeIntent.cleanedText || text,
@@ -1012,6 +1052,16 @@ interface WorkspaceSessions {
 	active: string | null;
 	history: SessionEntry[];
 	currentProject?: string;  // 当前项目（对话式路由持久切换）
+	pendingProjectSwitches?: Record<string, {  // 待确认的项目切换（按 chatId 隔离）
+		suggestedProject: string;
+		currentProject: string;
+		originalMessage: string;
+		originalMessageType: string;
+		originalContent: string;
+		messageId: string;
+		chatId: string;
+		createdAt: number;  // 创建时间，用于超时清理
+	}>;
 }
 
 const sessionsStore: Map<string, WorkspaceSessions> = new Map();
@@ -1064,6 +1114,7 @@ function setActiveSession(workspace: string, sessionId: string, summary?: string
 	if (!ws) {
 		ws = { active: null, history: [] };
 		sessionsStore.set(workspace, ws);
+		saveSessions();  // Bug #51 修复: 持久化新创建的session
 	}
 
 	const existing = ws.history.find((h) => h.id === sessionId);
@@ -1547,20 +1598,32 @@ function execAgent(
 			}
 		}
 
-		child.stdout!.on("data", (chunk: Buffer) => {
-			lineBuf += chunk.toString();
-			const lines = lineBuf.split("\n");
-			lineBuf = lines.pop()!;
-			for (const line of lines) processLine(line);
-		});
+	child.stdout!.on("data", (chunk: Buffer) => {
+		lineBuf += chunk.toString();
+		const lines = lineBuf.split("\n");
+		lineBuf = lines.pop()!;
+		for (const line of lines) processLine(line);
+	});
 
-		child.stderr!.on("data", (chunk: Buffer) => {
-			stderr += chunk.toString();
-		});
+	child.stderr!.on("data", (chunk: Buffer) => {
+		stderr += chunk.toString();
+	});
 
-		child.on("close", (code) => {
-			if (done) return;
-			cleanup();
+	// Bug #55 修复: 处理子进程启动失败
+	child.on("error", (err) => {
+		if (done) return;
+		cleanup();
+		console.error(`[Agent] 子进程启动失败:`, err);
+		reject(new Error(`Agent CLI 启动失败: ${err.message}`));
+	});
+
+	child.on("close", (code) => {
+		if (done) return;
+		cleanup();
+		
+		// Bug #56 修复: 延迟 resolve，确保所有已调度的 timer 回调执行完毕
+		// timer 每 1s 触发，PROGRESS_INTERVAL=2s，cleanup后等待 150ms 足够
+		setTimeout(() => {
 			// 处理 lineBuf 中残留的最后一行
 			if (lineBuf.trim()) processLine(lineBuf);
 
@@ -1588,7 +1651,8 @@ function execAgent(
 				return;
 			}
 			res({ result: finalOutput, sessionId });
-		});
+		}, 150);
+	});
 
 		child.on("error", (err) => {
 			if (!done) { cleanup(); reject(err); }
@@ -1774,14 +1838,15 @@ async function handle(params: {
 	chatType: string;
 	messageType: string;
 	content: string;
+	forceProject?: string;  // 强制使用指定项目（用于卡片按钮回调）
 }) {
-	const { messageId, chatId, chatType, messageType, content } = params;
+	const { messageId, chatId, chatType, messageType, content, forceProject } = params;
 	let { text } = params;
 	// 记录最近活跃会话用于定时任务/心跳主动推送
 	lastActiveChatId = chatId;
 	console.log(`[${new Date().toISOString()}] [${messageType}] ${text.slice(0, 80)}`);
 
-	return handleInner(text, messageId, chatId, chatType, messageType, content);
+	return handleInner(text, messageId, chatId, chatType, messageType, content, forceProject);
 }
 
 async function handleInner(
@@ -1791,9 +1856,119 @@ async function handleInner(
 	chatType: string,
 	messageType: string,
 	content: string,
+	forceProject?: string,
 ): Promise<void> {
 	let cardId: string | undefined;
 	const isGroup = chatType === "group";
+	const defaultWorkspace = projectsConfig.projects[projectsConfig.default_project]?.path || ROOT;
+	
+	// 最外层错误兜底：确保任何异常都会回复用户
+	try {
+	
+	// 检查是否有待确认的项目切换（按 chatId 隔离）
+	let ws = sessionsStore.get(defaultWorkspace);
+	if (!ws) {
+		ws = { active: null, history: [] };
+		sessionsStore.set(defaultWorkspace, ws);
+		saveSessions();  // Bug #51 修复: 持久化新创建的session
+	}
+	
+	// 数据迁移：旧版本使用单数 pendingProjectSwitch，新版本使用复数 pendingProjectSwitches
+	if (!ws.pendingProjectSwitches) {
+		ws.pendingProjectSwitches = {};
+		// 如果存在旧的单数字段，迁移到新结构
+		const oldPending = (ws as any).pendingProjectSwitch;
+		if (oldPending && oldPending.chatId) {
+			console.log(`[智能路由] 检测到旧版本 pending 数据，自动迁移到新结构`);
+			ws.pendingProjectSwitches[oldPending.chatId] = oldPending;
+			delete (ws as any).pendingProjectSwitch;
+			sessionsStore.set(defaultWorkspace, ws);
+			saveSessions();
+		}
+	}
+	
+	// 清理所有过期的 pending（5分钟超时）
+	const PENDING_TIMEOUT = 5 * 60 * 1000;
+	const now = Date.now();
+	for (const [cid, p] of Object.entries(ws.pendingProjectSwitches)) {
+		if (now - p.createdAt > PENDING_TIMEOUT) {
+			console.log(`[智能路由] chatId=${cid.slice(0, 10)}... 的 pending 已过期，自动清除`);
+			delete ws.pendingProjectSwitches[cid];
+		}
+	}
+	
+	const pending = ws.pendingProjectSwitches[chatId];
+	
+	if (pending && !forceProject && now - pending.createdAt <= PENDING_TIMEOUT) {
+		const trimmedText = text.trim().toLowerCase();
+		const isYes = /^(是|y|yes|确认|切换|好|ok)$/i.test(trimmedText);
+		const isNo = /^(否|不|n|no|取消|不用)$/i.test(trimmedText);
+		const isCommand = text.trim().startsWith('/');
+		
+		if (isYes) {
+			// 用户确认切换
+			const suggestedInfo = projectsConfig.projects[pending.suggestedProject];
+			
+			// Bug #46 修复: 检查项目配置和路径是否存在
+			if (!suggestedInfo || !existsSync(suggestedInfo.path)) {
+				const errMsg = !suggestedInfo 
+					? `项目「${pending.suggestedProject}」已从配置中移除，无法切换。`
+					: `项目路径不存在：\`${suggestedInfo.path}\`\n\n请检查 \`projects.json\` 配置。`;
+				await replyCard(messageId, `❌ **切换失败**\n\n${errMsg}`, { title: "配置错误", color: "red" });
+				
+				// 清除无效的pending
+				delete ws.pendingProjectSwitches![chatId];
+				sessionsStore.set(defaultWorkspace, ws);
+				saveSessions();
+				return;
+			}
+			
+			const msg = `✅ **已临时切换到 ${pending.suggestedProject} 项目**\n\n📁 ${suggestedInfo.description || ''}\n\n正在执行原始任务：「${pending.originalMessage}」`;
+			await replyCard(messageId, msg, { title: "项目已切换", color: "green" });
+
+			// 清除待确认状态
+			delete ws.pendingProjectSwitches![chatId];
+			sessionsStore.set(defaultWorkspace, ws);
+			saveSessions();
+
+			// 执行原始任务，强制使用建议的项目
+			// 使用当前消息ID，这样Agent回复会跟在"是"这条消息后面
+			console.log(`[智能路由] 用户确认切换到: ${pending.suggestedProject}`);
+			await handleInner(pending.originalMessage, messageId, chatId, chatType, pending.originalMessageType, pending.originalContent, pending.suggestedProject);
+			return;
+			
+		} else if (isNo) {
+			// 用户拒绝切换
+			const currentInfo = projectsConfig.projects[pending.currentProject];
+			const msg = `✅ **继续使用当前项目 ${pending.currentProject}**\n\n📁 ${currentInfo?.description || ''}\n\n正在执行原始任务：「${pending.originalMessage}」`;
+			await replyCard(messageId, msg, { title: "使用当前项目", color: "green" });
+			
+			// 清除待确认状态
+			delete ws.pendingProjectSwitches![chatId];
+			sessionsStore.set(defaultWorkspace, ws);
+			saveSessions();
+			
+			// 执行原始任务，强制使用当前项目（防止再次触发智能检测）
+			// 使用当前消息ID，这样Agent回复会跟在"否"这条消息后面
+			console.log(`[智能路由] 用户拒绝切换，强制使用当前项目: ${pending.currentProject}`);
+			await handleInner(pending.originalMessage, messageId, chatId, chatType, pending.originalMessageType, pending.originalContent, pending.currentProject);
+			return;
+			
+		} else if (isCommand) {
+			// 用户发送了命令（如 /项目、/status），保留待确认状态，继续处理命令
+			console.log(`[智能路由] 用户发送命令，保留待确认状态`);
+			// 不清除 pending，继续往下执行
+			
+		} else {
+			// 用户回复了普通内容（非命令），清除待确认状态，继续处理当前消息
+			console.log(`[智能路由] 用户回复其他内容，清除待确认状态`);
+			delete ws.pendingProjectSwitches![chatId];
+			sessionsStore.set(defaultWorkspace, ws);
+			saveSessions();
+			// 继续处理当前消息（不 return，继续往下执行）
+		}
+	}
+	
 	// 处理媒体附件
 	const parsed = parseContent(messageType, content);
 	try {
@@ -2030,17 +2205,20 @@ async function handleInner(
 
 	// /stop、/终止、/停止 → 终止当前会话运行的 agent
 	if (/^\/(stop|终止|停止)\s*$/i.test(text.trim())) {
-		// /stop 命令使用默认项目路由
-		const { projects, default_project } = projectsConfig;
-		const ws = projects[default_project]?.path || ROOT;
-		const lk = getLockKey(ws);
+		// 使用当前会话的workspace（而非默认项目），确保能正确终止当前项目的Agent
+		const wsForStop = sessionsStore.get(defaultWorkspace) || { active: null, history: [] };
+		const currentProjectName = wsForStop.currentProject || projectsConfig.default_project;
+		const projectInfo = projectsConfig.projects[currentProjectName];
+		const wsPath = projectInfo?.path || ROOT;
+		
+		const lk = getLockKey(wsPath);
 		const agent = activeAgents.get(lk);
 		if (agent) {
 			agent.kill();
-			console.log(`[指令] 终止 agent pid=${agent.pid} session=${lk}`);
-			await replyCard(messageId, "已终止当前任务。\n\n发送新消息将继续在当前会话中对话。", { title: "已终止", color: "orange" });
+			console.log(`[指令] 终止 agent pid=${agent.pid} project=${currentProjectName} session=${lk}`);
+			await replyCard(messageId, `已终止当前任务（项目: ${currentProjectName}）。\n\n发送新消息将继续在当前会话中对话。`, { title: "已终止", color: "orange" });
 		} else {
-			await replyCard(messageId, "当前没有正在运行的任务。", { title: "无任务", color: "grey" });
+			await replyCard(messageId, `当前没有正在运行的任务（项目: ${currentProjectName}）。`, { title: "无任务", color: "grey" });
 		}
 		return;
 	}
@@ -2414,11 +2592,11 @@ async function handleInner(
 			return;
 		}
 
-		const intervalMatch = subCmd.match(/^(间隔|interval)\s+(\d+)/i);
+		const intervalMatch = subCmd.match(/^(间隔|interval)\s+(.+)/i);
 		if (intervalMatch) {
 			const mins = Number.parseInt(intervalMatch[2], 10);
-			if (mins < 1 || mins > 1440) {
-				await replyCard(messageId, "间隔范围: 1-1440 分钟", { title: "无效", color: "orange" });
+			if (Number.isNaN(mins) || mins < 1 || mins > 1440) {
+				await replyCard(messageId, "间隔范围: 1-1440 分钟（请输入数字）", { title: "无效", color: "orange" });
 				return;
 			}
 			heartbeat.updateConfig({ everyMs: mins * 60_000 });
@@ -2432,9 +2610,8 @@ async function handleInner(
 
 	// /项目、/project → 列出所有项目
 	if (/^\/(项目|project|xm|proj)\s*$/i.test(text.trim())) {
-		const defaultWorkspace = projectsConfig.projects[projectsConfig.default_project]?.path || ROOT;
-		const ws = sessionsStore.get(defaultWorkspace);
-		const current = ws?.currentProject || projectsConfig.default_project;
+		const wsForList = sessionsStore.get(defaultWorkspace);
+		const current = wsForList?.currentProject || projectsConfig.default_project;
 		
 		const lines = [
 			`**当前项目：${current}** ✨`,
@@ -2453,7 +2630,6 @@ async function handleInner(
 	
 	// /new、/新对话、/新会话 → 归档当前会话，开启新对话
 	// 获取当前项目（用于对话式路由）
-	const defaultWorkspace = projectsConfig.projects[projectsConfig.default_project]?.path || ROOT;
 	const currentProject = sessionsStore.get(defaultWorkspace)?.currentProject;
 	
 	// 对话式路由识别（只调用一次）
@@ -2469,16 +2645,91 @@ async function handleInner(
 		return;
 	}
 	
+	// 智能项目切换检测：识别到项目名 && 与当前项目不一致 → 发送确认消息
+	// 如果有 forceProject 参数，说明是从确认流程触发的，跳过智能检测
+	// 如果 currentProject 不存在，使用 default_project
+	const effectiveCurrentProject = currentProject || projectsConfig.default_project;
+	
+	if (!forceProject && routeIntent.type === 'suggest' && routeIntent.project && routeIntent.project !== effectiveCurrentProject) {
+		const suggestedInfo = projectsConfig.projects[routeIntent.project];
+		const currentInfo = projectsConfig.projects[effectiveCurrentProject];
+		
+		if (suggestedInfo && currentInfo) {
+			// 检查是否有未处理的 pending
+			const wsForSwitch = sessionsStore.get(defaultWorkspace) || { active: null, history: [] };
+			if (!wsForSwitch.pendingProjectSwitches) {
+				wsForSwitch.pendingProjectSwitches = {};
+			}
+			
+			const existingPending = wsForSwitch.pendingProjectSwitches[chatId];
+			
+			// 如果有未处理的 pending，给出提示
+			let pendingWarning = '';
+			if (existingPending) {
+				pendingWarning = `\n\n⚠️ 检测到你还有未回复的项目切换请求（${existingPending.suggestedProject}），此请求将覆盖之前的请求。`;
+			}
+			
+			// 保存待确认的切换请求（按 chatId 隔离）
+			wsForSwitch.pendingProjectSwitches[chatId] = {
+				suggestedProject: routeIntent.project,
+				currentProject: effectiveCurrentProject,
+				originalMessage: text,
+				originalMessageType: messageType,
+				originalContent: content,
+				messageId: messageId,
+				chatId: chatId,
+				createdAt: Date.now()
+			};
+			sessionsStore.set(defaultWorkspace, wsForSwitch);
+			saveSessions();
+			
+			// 发送确认消息
+			const msg = [
+				`🤔 **检测到可能需要切换项目**`,
+				``,
+				`检测到你提到了 **${routeIntent.project}** 项目`,
+				`当前工作在 **${effectiveCurrentProject}** 项目`,
+				``,
+				`**${suggestedInfo.description}**`,
+				`路径：\`${suggestedInfo.path}\``,
+				``,
+				`是否临时切换到 **${routeIntent.project}** 执行此任务？`,
+				``,
+				`• 回复 **"是"** 或 **"y"** 确认切换`,
+				`• 回复 **"否"** 或 **"n"** 使用当前项目`,
+				`• 或直接用 **#${routeIntent.project}** 前缀指定项目`,
+				pendingWarning,
+			].join('\n');
+			
+			await replyCard(messageId, msg, { title: "🔄 项目切换确认", color: "blue" });
+			console.log(`[智能路由] 检测到项目冲突，当前: ${effectiveCurrentProject}, 建议: ${routeIntent.project}`);
+			return;
+		}
+	}
+
 	// 持久切换到项目：直接切换项目并确认
 	if (routeIntent.type === 'switch' && routeIntent.project) {
 		const projectInfo = projectsConfig.projects[routeIntent.project];
 		if (projectInfo) {
-			// 更新当前项目
-			const ws = sessionsStore.get(defaultWorkspace) || { active: null, history: [] };
-			ws.currentProject = routeIntent.project;
-			sessionsStore.set(defaultWorkspace, ws);
-			saveSessions();
+			// Bug #47 修复: 检查项目路径是否存在
+			if (!existsSync(projectInfo.path)) {
+				await replyCard(messageId, `❌ **切换失败**\n\n项目路径不存在：\`${projectInfo.path}\`\n\n请检查 \`projects.json\` 配置。`, { title: "路径错误", color: "red" });
+				return;
+			}
 			
+			// 更新当前项目
+			const wsForPersist = sessionsStore.get(defaultWorkspace) || { active: null, history: [] };
+			wsForPersist.currentProject = routeIntent.project;
+			
+			// 清除当前用户的pending（因为currentProject已变化，pending中的信息已过期）
+			if (wsForPersist.pendingProjectSwitches && wsForPersist.pendingProjectSwitches[chatId]) {
+				console.log(`[智能路由] 持久切换项目，清除当前用户的pending`);
+				delete wsForPersist.pendingProjectSwitches[chatId];
+			}
+			
+			sessionsStore.set(defaultWorkspace, wsForPersist);
+			saveSessions();
+
 			const msg = `**已切换到项目：${routeIntent.project}**\n\n📁 ${projectInfo.description}\n\n路径（长按复制）：\n\`\`\`\n${projectInfo.path}\n\`\`\`\n\n后续消息将在此项目中执行，直到你切换到其他项目。`;
 			if (cardId) await updateCard(cardId, msg, { title: "✅ 项目已切换", color: "green" });
 			else await replyCard(messageId, msg, { title: "✅ 项目已切换", color: "green" });
@@ -2518,15 +2769,40 @@ async function handleInner(
 	}
 	
 	// 路由解析（传入 intent 避免重复检测）
-	const { workspace, prompt, label, intent } = route(text, currentProject, routeIntent);
+	// 如果有强制项目（卡片按钮点击），则直接使用
+	let workspace: string, prompt: string, label: string, intent: RouteIntent;
 	
-	// 临时路由提示
-	if (intent.type === 'temp') {
-		console.log(`[路由] 临时路由到项目: ${label}`);
+	if (forceProject && projectsConfig.projects[forceProject]) {
+		workspace = projectsConfig.projects[forceProject].path;
+		prompt = text;
+		label = forceProject;
+		intent = { type: 'temp', project: forceProject, cleanedText: text };
+		console.log(`[路由] 强制路由到项目: ${forceProject}`);
+	} else {
+		const routeResult = route(text, currentProject, routeIntent);
+		workspace = routeResult.workspace;
+		prompt = routeResult.prompt;
+		label = routeResult.label;
+		intent = routeResult.intent;
+		
+		// 临时路由提示
+		if (intent.type === 'temp') {
+			console.log(`[路由] 临时路由到项目: ${label}`);
+		}
 	}
 	
 	if (/^\/(new|新对话|新会话)\s*$/i.test(prompt.trim())) {
 		archiveAndResetSession(workspace);
+		
+		// 清除当前用户的pending（新对话，旧的pending已无意义）
+		const wsForNew = sessionsStore.get(workspace);
+		if (wsForNew?.pendingProjectSwitches && wsForNew.pendingProjectSwitches[chatId]) {
+			console.log(`[智能路由] 新对话，清除当前用户的pending`);
+			delete wsForNew.pendingProjectSwitches[chatId];
+			sessionsStore.set(workspace, wsForNew);
+			saveSessions();
+		}
+		
 		const historyCount = getSessionHistory(workspace).length;
 		const hint = historyCount > 0 ? `\n\n历史会话已保留（共 ${historyCount} 个），发送 \`/会话\` 可查看和切换。` : "";
 		const msg = `**[${label}]** 新会话已开始，下一条消息将创建全新对话。${hint}`;
@@ -2753,6 +3029,27 @@ async function handleInner(
 			await replyCard(messageId, body, { title, color: "red" });
 		}
 	}
+	
+	} catch (outerErr) {
+		// 最外层兜底：捕获智能检测、命令处理等阶段的异常
+		const errMsg = outerErr instanceof Error ? outerErr.message : String(outerErr);
+		console.error(`[handleInner异常] ${errMsg}`);
+		if (outerErr instanceof Error && outerErr.stack) {
+			console.error(`[Stack] ${outerErr.stack}`);
+		}
+		
+		// 确保用户能收到错误通知
+		try {
+			const body = `❌ **处理失败**\n\n系统遇到意外错误，请稍后重试。\n\n错误信息：\n\`\`\`\n${errMsg.slice(0, 500)}\n\`\`\``;
+			if (cardId) {
+				await updateCard(cardId, body, { title: "系统错误", color: "red" });
+			} else {
+				await replyCard(messageId, body, { title: "系统错误", color: "red" });
+			}
+		} catch (replyErr) {
+			console.error(`[兜底回复失败]`, replyErr);
+		}
+	}
 }
 
 // ── 飞书长连接 ───────────────────────────────────
@@ -2769,11 +3066,17 @@ dispatcher.register({
 				console.error("[事件] msg 为空");
 				return;
 			}
-			const messageType = msg.message_type as string;
-			const messageId = msg.message_id as string;
-			const chatId = msg.chat_id as string;
-			const chatType = (msg.chat_type as string) || "p2p";
-			const content = msg.content as string;
+		const messageType = msg.message_type as string;
+		const messageId = msg.message_id as string;
+		const chatId = msg.chat_id as string;
+		const chatType = (msg.chat_type as string) || "p2p";
+		const content = msg.content as string;
+		
+		// 参数有效性检查
+		if (!messageId || !chatId) {
+			console.error(`[事件] 缺少必要参数 messageId=${messageId} chatId=${chatId}`);
+			return;
+		}
 
 		console.log(`[消息] 收到消息 messageId=${messageId.slice(0, 20)}... type=${messageType}`);
 		const allowed = await shouldProcessMessage(messageId);
@@ -2782,16 +3085,27 @@ dispatcher.register({
 			return;
 		}
 		console.log(`[去重] ✅ 新消息，允许处理 messageId=${messageId.slice(0, 20)}...`);
-			if (!TYPES.has(messageType)) {
-				await replyCard(messageId, `暂不支持: ${messageType}`);
-				return;
-			}
+		if (!TYPES.has(messageType)) {
+			await replyCard(messageId, `暂不支持: ${messageType}`);
+			return;
+		}
 
-			const { text: parsedText, imageKey, fileKey } = parseContent(messageType, content);
-			console.log(`[解析] type=${messageType} chat=${chatType} text="${parsedText.slice(0, 60)}" img=${imageKey ?? ""} file=${fileKey ?? ""}`);
-			handle({ text: parsedText.trim(), messageId, chatId, chatType, messageType, content }).catch(console.error);
+		const { text: parsedText, imageKey, fileKey } = parseContent(messageType, content);
+		console.log(`[解析] type=${messageType} chat=${chatType} text="${parsedText.slice(0, 60)}" img=${imageKey ?? ""} file=${fileKey ?? ""}`);
+		handle({ text: parsedText.trim(), messageId, chatId, chatType, messageType, content }).catch((err) => {
+			// 兜底错误处理：即使handleInner的try-catch失败，也要回复用户
+			console.error('[handle失败]', err);
+			replyCard(messageId, `❌ 系统错误\n\n${err instanceof Error ? err.message : String(err)}`, 
+				{ title: "处理失败", color: "red" }).catch(e => console.error('[最终兜底失败]', e));
+		});
 		} catch (e) {
+			// dispatcher.register 级别的异常（parseContent、shouldProcessMessage等）
 			console.error("[事件异常]", e);
+			// 尝试通知用户（如果有有效的messageId）
+			if (messageId) {
+				replyCard(messageId, `❌ 系统异常\n\n消息处理过程中发生错误，请稍后重试。`, 
+					{ title: "系统异常", color: "red" }).catch(err => console.error('[事件异常回复失败]', err));
+			}
 		}
 	},
 });

@@ -56,6 +56,25 @@ projects.json
 .cursor/sessions/
 **/.cursor/sessions/
 
+# Bug修复报告（临时文档，不提交）
+.cursor/*-REPORT.md
+.cursor/BUG-FIX-*.md
+
 # 定时任务存储（含 webhook 等敏感信息，运行时写入）
 cron-jobs-dingtalk.json
 cron-jobs-feishu.json
+
+# 临时研究文档（AI 生成的探索性文档）
+feilian-*.md
+*-research.md
+*-test-report.md
+
+# 根目录 AGENTS.md（包含本机路径，使用 .cursor/AGENTS.md 代替）
+/AGENTS.md
+
+# .cursor/README.md（包含硬编码路径，用 AGENTS.md 和 CRON-TASK-RULES.md 代替）
+/.cursor/README.md
+
+# 模板和用户文档（包含本机路径或过时信息）
+/feishu/templates/
+/docs/
