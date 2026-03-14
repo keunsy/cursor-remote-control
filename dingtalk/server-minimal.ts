@@ -138,47 +138,48 @@ const WORKSPACE_RULES = [
 function ensureWorkspace(wsPath: string): boolean {
 	const normalizedWs = resolve(wsPath);
 	const normalizedRoot = resolve(ROOT);
-	// 仅在本项目目录下初始化
 	const isOwnProject = normalizedWs === normalizedRoot;
 
 	if (!isOwnProject) {
 		return false;
 	}
 
-	// 创建目录结构
-	mkdirSync(resolve(wsPath, ".cursor/memory"), { recursive: true });
-	mkdirSync(resolve(wsPath, ".cursor/sessions"), { recursive: true });
-	mkdirSync(resolve(wsPath, ".cursor/rules"), { recursive: true });
+	try {
+		mkdirSync(resolve(wsPath, ".cursor/memory"), { recursive: true });
+		mkdirSync(resolve(wsPath, ".cursor/sessions"), { recursive: true });
+		mkdirSync(resolve(wsPath, ".cursor/rules"), { recursive: true });
 
-	const isNewWorkspace = !existsSync(resolve(wsPath, ".cursor/SOUL.md"));
-	let copied = 0;
+		const isNewWorkspace = !existsSync(resolve(wsPath, ".cursor/SOUL.md"));
+		let copied = 0;
 
-	// AGENTS.md 放根目录
-	const rootFiles = ["AGENTS.md"];
-	// 首次初始化额外复制 BOOTSTRAP.md
-	const allFiles = isNewWorkspace
-		? [...rootFiles, ...WORKSPACE_FILES, ".cursor/BOOTSTRAP.md", ...WORKSPACE_RULES]
-		: [...rootFiles, ...WORKSPACE_FILES, ...WORKSPACE_RULES];
+		const rootFiles = ["AGENTS.md"];
+		const allFiles = isNewWorkspace
+			? [...rootFiles, ...WORKSPACE_FILES, ".cursor/BOOTSTRAP.md", ...WORKSPACE_RULES]
+			: [...rootFiles, ...WORKSPACE_FILES, ...WORKSPACE_RULES];
 
-	for (const f of allFiles) {
-		const target = resolve(wsPath, f);
-		if (!existsSync(target)) {
-			const src = resolve(TEMPLATE_DIR, f);
-			if (existsSync(src)) {
-				writeFileSync(target, readFileSync(src, "utf-8"));
-				console.log(`[工作区] 从模板复制: ${f}`);
-				copied++;
+		for (const f of allFiles) {
+			const target = resolve(wsPath, f);
+			if (!existsSync(target)) {
+				const src = resolve(TEMPLATE_DIR, f);
+				if (existsSync(src)) {
+					writeFileSync(target, readFileSync(src, "utf-8"));
+					console.log(`[工作区] 从模板复制: ${f}`);
+					copied++;
+				}
 			}
 		}
-	}
 
-	if (copied > 0) {
-		console.log(`[工作区] ${wsPath} 初始化完成 (${copied} 个文件)`);
-		if (isNewWorkspace) {
-			console.log("[工作区] 首次启动：.cursor/BOOTSTRAP.md 已就绪，首次对话将触发出生仪式");
+		if (copied > 0) {
+			console.log(`[工作区] ${wsPath} 初始化完成 (${copied} 个文件)`);
+			if (isNewWorkspace) {
+				console.log("[工作区] 首次启动：.cursor/BOOTSTRAP.md 已就绪，首次对话将触发出生仪式");
+			}
 		}
+		return isNewWorkspace;
+	} catch (err) {
+		console.error(`[工作区] 初始化失败: ${err instanceof Error ? err.message : err}`);
+		return false;
 	}
-	return isNewWorkspace;
 }
 
 // ── 记忆管理器 ───────────────────────────────────
