@@ -242,9 +242,10 @@ const heartbeat = new HeartbeatRunner({
 	},
 	onExecute: async (prompt: string) => {
 		memory?.appendSessionLog(memoryWorkspace, "user", "[心跳检查] " + prompt.slice(0, 200), config.CURSOR_MODEL);
-		const { result } = await runAgent(memoryWorkspace, prompt);
-		memory?.appendSessionLog(memoryWorkspace, "assistant", result.slice(0, 3000), config.CURSOR_MODEL);
-		return result;
+		const { result, quotaWarning } = await runAgent(memoryWorkspace, prompt);
+		const finalResult = quotaWarning ? `${quotaWarning}\n\n---\n\n${result}` : result;
+		memory?.appendSessionLog(memoryWorkspace, "assistant", finalResult.slice(0, 3000), config.CURSOR_MODEL);
+		return finalResult;
 	},
 	onDelivery: async (content: string) => {
 		const webhook = getWebhook();
@@ -1955,7 +1956,7 @@ async function handleMessage(msg: any) {
 		}
 		let cleanOutput = resultStr.trim();
 		if (quotaWarning) {
-			cleanOutput = quotaWarning + '\n\n' + cleanOutput;
+			cleanOutput = quotaWarning + '\n\n---\n\n' + cleanOutput;
 		}
 			
 			// 记录 assistant 回复到会话日志
@@ -2167,14 +2168,15 @@ setTimeout(async () => {
 			"如果无事可做，回复 'HEARTBEAT_OK'。",
 		].join("\n");
 
-		const { result } = await runAgent(memoryWorkspace, bootPrompt);
+		const { result, quotaWarning } = await runAgent(memoryWorkspace, bootPrompt);
 		const trimmed = result.trim();
+		const finalResult = quotaWarning ? `${quotaWarning}\n\n---\n\n${trimmed}` : trimmed;
 
 		// 如果有需要推送的内容且有活跃 webhook
-		if (trimmed && !/^(无输出|HEARTBEAT_OK)$/i.test(trimmed)) {
+		if (finalResult && !/^(无输出|HEARTBEAT_OK)$/i.test(trimmed)) {
 			const webhook = getWebhook();
 			if (webhook) {
-				await sendMarkdown(webhook, trimmed, '🚀 启动自检', 'wathet');
+				await sendMarkdown(webhook, finalResult, '🚀 启动自检', 'wathet');
 				console.log("[启动] 自检结果已推送到钉钉");
 			}
 		}
