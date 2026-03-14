@@ -47,11 +47,12 @@ export async function uploadFileDingtalk(options: DingtalkFileUploadOptions): Pr
 		maxContentLength: maxSize,
 	});
 
-	if (response.data.errcode !== 0) {
-		throw new Error(`钉钉上传失败: ${response.data.errmsg || response.data.errcode}`);
+	const data = response.data;
+	if (!data || data.errcode !== 0) {
+		throw new Error(`钉钉上传失败: ${data?.errmsg || data?.errcode || '未知错误'}`);
 	}
 
-	const mediaId = response.data?.media_id;
+	const mediaId = data?.media_id;
 	if (!mediaId) {
 		throw new Error(`钉钉上传失败: 未返回 media_id`);
 	}
