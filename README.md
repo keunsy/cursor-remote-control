@@ -19,7 +19,7 @@
 ```
 手机飞书 ──WebSocket──→ feishu/server.ts ──┐
                                           ├──→ Cursor CLI ──→ 本地 Cursor IDE
-手机钉钉 ──Stream─────→ dingtalk/server.ts ─┘         │
+手机钉钉 ──Stream─────→ dingtalk/server-minimal.ts ─┘         │
                                                       │
         ┌─────────────────────────────────────────────┘
         │
