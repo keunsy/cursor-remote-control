@@ -1767,6 +1767,30 @@ async function handleMessage(msg: any) {
 		console.log(`[DEBUG-3] 已记录用户消息到会话日志`);
 	}
 	
+	// ── 出生仪式检查 ─────────────────────────────────
+	const bootstrapPath = resolve(workspace, ".cursor/BOOTSTRAP.md");
+	if (existsSync(bootstrapPath)) {
+		const bootstrapContent = readFileSync(bootstrapPath, "utf-8").trim();
+		if (bootstrapContent) {
+			console.log("[出生仪式] 检测到 BOOTSTRAP.md，首次对话");
+			
+			// 将用户消息和出生仪式结合
+			const combinedPrompt = [
+				"🎂 这是你的第一次对话（出生仪式）。",
+				"",
+				"请阅读 .cursor/BOOTSTRAP.md 的指引，然后回应用户的消息。",
+				"",
+				`用户说：${message}`,
+			].join("\n");
+			
+			// 使用组合提示词
+			message = combinedPrompt;
+			
+			// 标记为出生仪式（后续删除文件）
+			(data as any)._isBootstrap = true;
+		}
+	}
+	
 	console.log(`[DEBUG-4] 准备调用 runAgent, message="${message.slice(0, 30)}"`);
 	try {
 		const { result, sessionId } = await runAgent(workspace, message, session.agentId, {
@@ -1774,6 +1798,16 @@ async function handleMessage(msg: any) {
 			webhook: sessionWebhook
 		});
 		console.log(`[DEBUG-5] runAgent 返回: result="${result?.slice(0, 100) || '(empty)'}" length=${result?.length || 0}`);
+
+			// 如果是出生仪式，删除 BOOTSTRAP.md
+			if ((data as any)._isBootstrap) {
+				try {
+					unlinkSync(resolve(workspace, ".cursor/BOOTSTRAP.md"));
+					console.log("[出生仪式] BOOTSTRAP.md 已删除，出生仪式完成");
+				} catch (e) {
+					console.warn(`[出生仪式] 删除 BOOTSTRAP.md 失败: ${e}`);
+				}
+			}
 
 			if (sessionId) {
 				session.agentId = sessionId;
