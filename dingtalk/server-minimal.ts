@@ -678,7 +678,6 @@ function buildToolSummary(tools: string[]): string {
 // ── Cursor Agent 调用（基于飞书的稳定实现）────────
 interface RunAgentResult {
 	result: string;
-	sessionId?: string;
 	quotaWarning?: string;
 }
 
@@ -687,7 +686,7 @@ async function runAgent(
 	message: string,
 	agentId?: string,
 	context?: { platform?: string; webhook?: string }
-): Promise<RunAgentResult> {
+): Promise<RunAgentResult & { sessionId?: string }> {
 	const primaryModel = config.CURSOR_MODEL || 'opus-4.6-thinking';
 
 	async function runWithModel(model: string): Promise<{ result: string; sessionId?: string }> {
