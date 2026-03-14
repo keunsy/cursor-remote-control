@@ -1827,14 +1827,11 @@ async function handleMessage(msg: any) {
 	busySessions.add(lockKey);
 	console.log(`[执行] workspace=${workspace} message="${message.slice(0, 60)}"`);
 	
-	console.log(`[DEBUG-1] 准备发送思考中提示`);
 	await sendMarkdown(sessionWebhook, '⏳ Cursor AI 正在思考...', '💭 思考中', 'wathet');
-	console.log(`[DEBUG-2] 思考中提示已发送`);
 	
 	// 记忆由 Cursor 自主通过 memory-tool.ts 调用，server 记录会话日志
 	if (memory) {
 		memory.appendSessionLog(workspace, "user", message, config.CURSOR_MODEL);
-		console.log(`[DEBUG-3] 已记录用户消息到会话日志`);
 	}
 	
 	// ── 出生仪式检查 ─────────────────────────────────
@@ -1862,13 +1859,11 @@ async function handleMessage(msg: any) {
 		}
 	}
 	
-	console.log(`[DEBUG-4] 准备调用 runAgent, message="${message.slice(0, 30)}"`);
 	try {
 		const { result, sessionId } = await runAgent(workspace, message, session.agentId, {
 			platform: 'dingtalk',
 			webhook: sessionWebhook
 		});
-		console.log(`[DEBUG-5] runAgent 返回: result="${result?.slice(0, 100) || '(empty)'}" length=${result?.length || 0}`);
 
 			// 如果是出生仪式，删除 BOOTSTRAP.md
 			if (isBootstrap) {
@@ -1892,7 +1887,6 @@ async function handleMessage(msg: any) {
 			resultStr = obj.text || obj.content || '';
 		}
 		const cleanOutput = resultStr.trim();
-		console.log(`[DEBUG-6] cleanOutput.length=${cleanOutput.length}, isEmpty=${!cleanOutput}`);
 			
 			// 记录 assistant 回复到会话日志
 			if (memory) {
