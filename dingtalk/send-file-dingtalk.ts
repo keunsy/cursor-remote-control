@@ -51,19 +51,23 @@ export async function uploadFileDingtalk(options: DingtalkFileUploadOptions): Pr
 		throw new Error(`钉钉上传失败: ${response.data.errmsg || response.data.errcode}`);
 	}
 
-	return {
-		mediaId: response.data.media_id,
-	};
+	const mediaId = response.data?.media_id;
+	if (!mediaId) {
+		throw new Error(`钉钉上传失败: 未返回 media_id`);
+	}
+	return { mediaId };
 }
 
 /**
  * 通过 webhook 发送文件消息
  */
 export async function sendFileDingtalk(webhook: string, mediaId: string, _fileName: string): Promise<void> {
-	await axios.post(webhook, {
+	const response = await axios.post(webhook, {
 		msgtype: 'file',
-		file: {
-			media_id: mediaId,
-		},
+		file: { media_id: mediaId },
 	});
+	const data = response.data;
+	if (data?.errcode && data.errcode !== 0) {
+		throw new Error(`钉钉发送失败: ${data.errmsg ?? data.errcode}`);
+	}
 }
