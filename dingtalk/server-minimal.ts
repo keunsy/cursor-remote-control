@@ -685,9 +685,25 @@ async function runAgent(
 	workspace: string,
 	message: string,
 	agentId?: string,
-	context?: { platform?: string; webhook?: string; onSessionId?: (sessionId: string) => void }
+	context?: {
+		platform?: string;
+		webhook?: string;
+		/** 成功完成时回调，用于更新 session.agentId 以便后续 --resume */
+		onSessionId?: (sessionId: string) => void;
+	}
 ): Promise<RunAgentResult> {
 	const primaryModel = config.CURSOR_MODEL || 'opus-4.6-thinking';
+
+	// 安全调用 session ID 回调，失败时不中断主流程
+	const notifySession = (out: { sessionId?: string }) => {
+		if (out.sessionId && context?.onSessionId) {
+			try {
+				context.onSessionId(out.sessionId);
+			} catch (err) {
+				console.error('[onSessionId 回调失败]', err);
+			}
+		}
+	};
 
 	async function runWithModel(model: string): Promise<{ result: string; sessionId?: string }> {
 		return new Promise((res, reject) => {
@@ -805,17 +821,23 @@ async function runAgent(
 
 	try {
 		const out = await runWithModel(primaryModel);
-		if (out.sessionId && context?.onSessionId) context.onSessionId(out.sessionId);
+		notifySession(out);
 		return { result: out.result };
 	} catch (error) {
 		if (isQuotaError(error as Error)) {
 			console.log(`[降级] ${primaryModel} 余额不足，切换到 auto`);
-			const out = await runWithModel('auto');
-			if (out.sessionId && context?.onSessionId) context.onSessionId(out.sessionId);
-			return {
-				result: out.result,
-				quotaWarning: `⚠️ **模型降级**\n\n${primaryModel} 余额不足，已用 auto 完成。`,
-			};
+			try {
+				const out = await runWithModel('auto');
+				notifySession(out);
+				return {
+					result: out.result,
+					quotaWarning: `⚠️ **模型降级**\n\n${primaryModel} 余额不足，已用 auto 完成。`,
+				};
+			} catch (retryError) {
+				throw new Error(
+					`原模型余额不足且降级失败: ${retryError instanceof Error ? retryError.message : String(retryError)}`
+				);
+			}
 		}
 		throw error;
 	}
