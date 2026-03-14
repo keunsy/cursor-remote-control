@@ -50,6 +50,19 @@ process.on('unhandledRejection', (reason) => {
 	console.error('[Promise 异常]', reason);
 });
 
+// ── 工具函数 ──────────────────────────────────────
+function formatElapsed(seconds: number): string {
+	if (seconds < 60) return `${seconds}秒`;
+	const mins = Math.floor(seconds / 60);
+	const secs = seconds % 60;
+	return secs > 0 ? `${mins}分${secs}秒` : `${mins}分钟`;
+}
+
+function isQuotaError(error: Error): boolean {
+	const msg = error.message.toLowerCase();
+	return /insufficient.*(balance|credit|quota)|余额不足|quota.*exceeded/i.test(msg);
+}
+
 // ── 配置 ─────────────────────────────────────────
 interface EnvConfig {
 	CURSOR_API_KEY: string;
