@@ -1470,7 +1470,7 @@ async function handleMessage(msg: any) {
 				`- ${c('/状态', '/status')} — 查看服务状态`,
 				`- ${c('/项目', '/project')} — 列出所有项目及路径`,
 				`- ${c('/新对话', '/new')} — 重置当前会话`,
-				`- ${c('/终止', '/stop')} — 终止正在执行的任务`,
+				`- ${c('/终止 [项目名]', '/stop')} — 终止正在执行的任务（可指定项目）`,
 				'',
 				'**热点 / 新闻**',
 				`- ${c('/新闻', '/news')} — **立即推送**今日热点（直接发 \`/新闻\`）；定时例：\`/新闻 每天9点 推送10条\``,
@@ -1851,15 +1851,71 @@ async function handleMessage(msg: any) {
 		}
 		
 		// /stop、/终止、/停止 → 终止当前会话运行的 agent
-		if (/^\/(stop|终止|停止)\s*$/i.test(message.trim())) {
-			const lk = getLockKey(workspace);
-			const agent = activeAgents.get(lk);
-			if (agent) {
-				agent.kill();
-				console.log(`[指令] 终止 agent pid=${agent.pid} session=${lk}`);
-				await sendMarkdown(sessionWebhook, '已终止当前任务。\n\n发送新消息将继续在当前会话中对话。', '⚠️ 已终止');
-			} else {
+		if (/^\/(stop|终止|停止)(?:\s+(.+))?$/i.test(message.trim())) {
+			const match = message.trim().match(/^\/(stop|终止|停止)(?:\s+(.+))?$/i);
+			const projectHint = match?.[2]?.trim();
+			
+			// 辅助函数：根据 lockKey 反向查找项目名
+			const getProjectNameByLockKey = (lockKey: string): string | null => {
+				const wsPath = lockKey.startsWith('session:') 
+					? null
+					: lockKey.replace(/^ws:/, '');
+				
+				if (wsPath) {
+					for (const [name, info] of Object.entries(projectsConfig.projects)) {
+						if (info.path === wsPath) return name;
+					}
+				}
+				return null;
+			};
+			
+			// 如果指定了项目名，优先使用
+			if (projectHint && projectsConfig.projects[projectHint]) {
+				const wsPath = projectsConfig.projects[projectHint].path;
+				const lk = getLockKey(wsPath);
+				const agent = activeAgents.get(lk);
+				if (agent) {
+					agent.kill();
+					console.log(`[指令] 终止 agent pid=${agent.pid} project=${projectHint} session=${lk}`);
+					await sendMarkdown(sessionWebhook, `✅ 已终止项目 **${projectHint}** 的任务。\n\n发送新消息将继续在当前会话中对话。`, '✅ 已终止');
+				} else {
+					await sendMarkdown(sessionWebhook, `ℹ️ 项目 **${projectHint}** 没有正在运行的任务。`, 'ℹ️ 无任务', 'grey');
+				}
+				return;
+			}
+			
+			// 否则，智能查找所有运行中的 agent
+			const runningAgents = Array.from(activeAgents.entries());
+			
+			if (runningAgents.length === 0) {
 				await sendMarkdown(sessionWebhook, '当前没有正在运行的任务。', 'ℹ️ 无任务', 'grey');
+			} else if (runningAgents.length === 1) {
+				// 只有一个任务，直接停止
+				const [lockKey, agent] = runningAgents[0];
+				const projectName = getProjectNameByLockKey(lockKey);
+				agent.kill();
+				console.log(`[指令] 终止 agent pid=${agent.pid} session=${lockKey}`);
+				
+				const msg = projectName 
+					? `✅ 已终止项目 **${projectName}** 的任务。\n\n发送新消息将继续在当前会话中对话。`
+					: `✅ 已终止任务（PID: ${agent.pid}）。\n\n发送新消息将继续在当前会话中对话。`;
+				await sendMarkdown(sessionWebhook, msg, '✅ 已终止');
+			} else {
+				// 多个任务，提示用户选择
+				const list = runningAgents
+					.map(([lk, agent]) => {
+						const projectName = getProjectNameByLockKey(lk);
+						return projectName 
+							? `- 项目: **${projectName}** (PID: ${agent.pid})`
+							: `- 任务 PID: ${agent.pid}`;
+					})
+					.join('\n');
+				
+				await sendMarkdown(
+					sessionWebhook,
+					`⚠️ 当前有 **${runningAgents.length}** 个任务正在运行：\n\n${list}\n\n请使用 \`/stop 项目名\` 指定要停止的任务。`,
+					'⚠️ 多个任务'
+				);
 			}
 			return;
 		}

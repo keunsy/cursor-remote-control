@@ -2127,7 +2127,7 @@ async function handleInner(
 			`- ${c("/状态", "/status")} — 查看服务状态`,
 			`- ${c("/项目", "/project")} — 列出所有项目及路径`,
 			`- ${c("/新对话", "/new")} — 重置当前会话`,
-			`- ${c("/终止", "/stop")} — 终止正在执行的任务`,
+			`- ${c("/终止 [项目名]", "/stop")} — 终止正在执行的任务（可指定项目）`,
 			"",
 			"**热点 / 新闻**",
 			`- ${c("/新闻", "/news")} — **立即推送**今日热点（直接发 \`/新闻\`）；定时例：\`/新闻 每天9点 推送10条\``,
@@ -2417,21 +2417,71 @@ async function handleInner(
 	}
 
 	// /stop、/终止、/停止 → 终止当前会话运行的 agent
-	if (/^\/(stop|终止|停止)\s*$/i.test(text.trim())) {
-		// 使用当前会话的workspace（而非默认项目），确保能正确终止当前项目的Agent
-		const wsForStop = sessionsStore.get(defaultWorkspace) || { active: null, history: [] };
-		const currentProjectName = wsForStop.currentProject || projectsConfig.default_project;
-		const projectInfo = projectsConfig.projects[currentProjectName];
-		const wsPath = projectInfo?.path || ROOT;
+	if (/^\/(stop|终止|停止)(?:\s+(.+))?$/i.test(text.trim())) {
+		const match = text.trim().match(/^\/(stop|终止|停止)(?:\s+(.+))?$/i);
+		const projectHint = match?.[2]?.trim();
 		
-		const lk = getLockKey(wsPath);
-		const agent = activeAgents.get(lk);
-		if (agent) {
+		// 辅助函数：根据 lockKey 反向查找项目名
+		const getProjectNameByLockKey = (lockKey: string): string | null => {
+			const wsPath = lockKey.startsWith('session:') 
+				? null
+				: lockKey.replace(/^ws:/, '');
+			
+			if (wsPath) {
+				for (const [name, info] of Object.entries(projectsConfig.projects)) {
+					if (info.path === wsPath) return name;
+				}
+			}
+			return null;
+		};
+		
+		// 如果指定了项目名，优先使用
+		if (projectHint && projectsConfig.projects[projectHint]) {
+			const wsPath = projectsConfig.projects[projectHint].path;
+			const lk = getLockKey(wsPath);
+			const agent = activeAgents.get(lk);
+			if (agent) {
+				agent.kill();
+				console.log(`[指令] 终止 agent pid=${agent.pid} project=${projectHint} session=${lk}`);
+				await replyCard(messageId, `已终止项目 **${projectHint}** 的任务。\n\n发送新消息将继续在当前会话中对话。`, { title: "✅ 已终止", color: "orange" });
+			} else {
+				await replyCard(messageId, `项目 **${projectHint}** 没有正在运行的任务。`, { title: "ℹ️ 无任务", color: "grey" });
+			}
+			return;
+		}
+		
+		// 否则，智能查找所有运行中的 agent
+		const runningAgents = Array.from(activeAgents.entries());
+		
+		if (runningAgents.length === 0) {
+			await replyCard(messageId, '当前没有正在运行的任务。', { title: "ℹ️ 无任务", color: "grey" });
+		} else if (runningAgents.length === 1) {
+			// 只有一个任务，直接停止
+			const [lockKey, agent] = runningAgents[0];
+			const projectName = getProjectNameByLockKey(lockKey);
 			agent.kill();
-			console.log(`[指令] 终止 agent pid=${agent.pid} project=${currentProjectName} session=${lk}`);
-			await replyCard(messageId, `已终止当前任务（项目: ${currentProjectName}）。\n\n发送新消息将继续在当前会话中对话。`, { title: "已终止", color: "orange" });
+			console.log(`[指令] 终止 agent pid=${agent.pid} session=${lockKey}`);
+			
+			const msg = projectName 
+				? `已终止项目 **${projectName}** 的任务。\n\n发送新消息将继续在当前会话中对话。`
+				: `已终止任务（PID: ${agent.pid}）。\n\n发送新消息将继续在当前会话中对话。`;
+			await replyCard(messageId, msg, { title: "✅ 已终止", color: "orange" });
 		} else {
-			await replyCard(messageId, `当前没有正在运行的任务（项目: ${currentProjectName}）。`, { title: "无任务", color: "grey" });
+			// 多个任务，提示用户选择
+			const list = runningAgents
+				.map(([lk, agent]) => {
+					const projectName = getProjectNameByLockKey(lk);
+					return projectName 
+						? `- 项目: **${projectName}** (PID: ${agent.pid})`
+						: `- 任务 PID: ${agent.pid} (${lk})`;
+				})
+				.join('\n');
+			
+			await replyCard(
+				messageId,
+				`当前有 **${runningAgents.length}** 个任务正在运行：\n\n${list}\n\n请使用 \`/stop 项目名\` 指定要停止的任务。`,
+				{ title: "⚠️ 多个任务", color: "yellow" }
+			);
 		}
 		return;
 	}

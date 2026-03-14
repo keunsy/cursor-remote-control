@@ -152,7 +152,7 @@ All commands support Chinese aliases:
 | `/new` | `/新对话` `/新会话` | Reset workspace session |
 | `/model name` | `/模型 name` `/切换模型 name` | Switch model |
 | `/apikey key` | `/密钥 key` `/换key key` | Update API key (DM only) |
-| `/stop` | `/终止` `/停止` | Kill running agent task |
+| `/stop [project]` | `/终止` `/停止` | Kill running task (optional project) |
 | `/memory` | `/记忆` | Memory system status |
 | `/memory query` | `/记忆 关键词` | Semantic search memories |
 | `/log text` | `/记录 内容` | Write to today's daily log |
@@ -492,7 +492,7 @@ bash service.sh logs
 | `/new` | `/新对话` `/新会话` | 重置当前工作区会话 |
 | `/model 名称` | `/模型 名称` `/切换模型 名称` | 切换模型 |
 | `/apikey key` | `/密钥 key` `/换key key` | 更换 API Key（仅限私聊） |
-| `/stop` | `/终止` `/停止` | 终止当前运行的任务 |
+| `/stop [项目名]` | `/终止` `/停止` | 终止运行的任务（可指定项目名） |
 | `/memory` | `/记忆` | 查看记忆系统状态 |
 | `/memory 关键词` | `/记忆 关键词` | 语义搜索记忆 |
 | `/log 内容` | `/记录 内容` | 写入今日日记 |
