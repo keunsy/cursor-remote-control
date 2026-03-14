@@ -17,9 +17,9 @@ import { Readable } from "node:stream";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
-import { MemoryManager } from "./memory.js";
-import { Scheduler, type CronJob } from "./scheduler.js";
-import { HeartbeatRunner } from "./heartbeat.js";
+import { MemoryManager } from "../shared/memory.js";
+import { Scheduler, type CronJob } from "../shared/scheduler.js";
+import { HeartbeatRunner } from "../shared/heartbeat.js";
 import { tryRecordMessagePersistent } from "./feishu/dedup.js";
 import { sendMediaFeishu } from "./feishu/media.js";
 

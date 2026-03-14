@@ -12,7 +12,7 @@
 
 import { resolve } from "node:path";
 import { readFileSync, existsSync } from "node:fs";
-import { MemoryManager } from "./memory.js";
+import { MemoryManager } from "../shared/memory.js";
 
 const RELAY_DIR = import.meta.dirname;
 const ENV_PATH = resolve(RELAY_DIR, ".env");

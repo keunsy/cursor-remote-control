@@ -78,18 +78,23 @@
 
 ```
 cursor-remote-control/
+├── shared/                      # 共享模块（dingtalk 与 feishu 共用）
+│   ├── memory.ts                # 记忆管理器 v2（SQLite + 向量 + FTS5）
+│   ├── scheduler.ts             # 定时任务调度
+│   ├── heartbeat.ts             # 心跳系统
+│   └── sync-apple-notes.ts      # Apple Notes 同步
+│
 ├── feishu/                      # 飞书服务（独立）
 │   ├── server.ts                # 飞书主服务
 │   ├── bridge.ts                # OpenAI API 桥接
-│   ├── memory.ts                # 记忆管理器 v2
-│   ├── scheduler.ts             # 定时任务调度
-│   ├── heartbeat.ts             # 心跳系统
+│   ├── memory-tool.ts           # 记忆 CLI（供 Agent 调用）
 │   ├── service.sh               # 飞书服务管理脚本
 │   └── README.md                # 飞书详细文档
 │
 ├── dingtalk/                    # 钉钉服务（独立）
 │   ├── server-minimal.ts        # 钉钉主服务
 │   ├── dingtalk-client.ts       # 钉钉 Stream 客户端
+│   ├── memory-tool.ts           # 记忆 CLI（供 Agent 调用）
 │   ├── service.sh               # 钉钉服务管理脚本
 │   └── README.md                # 钉钉详细文档
 │
@@ -424,11 +429,12 @@ A: 可以！两个服务独立运行，互不干扰，共享 `projects.json` 配
 | 语音 | 火山引擎 → whisper-cpp | 火山引擎 → whisper-cpp |
 | 部署 | macOS launchd | macOS launchd |
 
-**共享模块**：
+**共享模块**（`shared/` 目录）：
 - 项目路由配置 (`projects.json`)
-- 定时任务系统 (`scheduler.ts`)
-- 记忆管理器 (`memory.ts`)
-- 心跳系统 (`heartbeat.ts`)
+- 记忆管理器 (`shared/memory.ts`)
+- 定时任务系统 (`shared/scheduler.ts`)
+- 心跳系统 (`shared/heartbeat.ts`)
+- Apple Notes 同步 (`shared/sync-apple-notes.ts`)
 
 ---
 

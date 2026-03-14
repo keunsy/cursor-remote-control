@@ -16,9 +16,9 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, watchFi
 import { resolve } from 'node:path';
 import axios from 'axios';
 import { execFileSync } from 'node:child_process';
-import { Scheduler, type CronJob } from './scheduler.js';
-import { MemoryManager } from './memory.js';
-import { HeartbeatRunner } from './heartbeat.js';
+import { Scheduler, type CronJob } from '../shared/scheduler.js';
+import { MemoryManager } from '../shared/memory.js';
+import { HeartbeatRunner } from '../shared/heartbeat.js';
 
 const HOME = process.env.HOME!;
 const ROOT = resolve(import.meta.dirname, '..');
