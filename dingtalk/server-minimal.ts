@@ -2009,7 +2009,11 @@ async function handleMessage(msg: any) {
 				`3. 发送 \`/密钥 新Key\`\n\n` +
 				`错误详情：\n\`\`\`\n${msg.slice(0, 200)}\n\`\`\``;
 
-			await sendMarkdown(sessionWebhook, guide, '❌ Key 失效', 'red');
+			try {
+				await sendMarkdown(sessionWebhook, guide, '❌ Key 失效', 'red');
+			} catch (sendErr) {
+				console.error('[sendMarkdown 失败]', sendErr);
+			}
 			return;
 		}
 
@@ -2017,17 +2021,25 @@ async function handleMessage(msg: any) {
 		if (/timeout|超时|timed out/i.test(msg)) {
 			const guide =
 				`❌ **执行超时**\n\n` +
-				`任务执行时间过长，已自动终止。\n\n` +
+				`任务执行超时，请检查任务复杂度或网络状况。\n\n` +
 				`建议：\n` +
 				`- 将任务拆分为更小的步骤\n` +
 				`- 使用 \`/stop\` 手动终止长任务`;
 
-			await sendMarkdown(sessionWebhook, guide, '❌ 超时', 'red');
+			try {
+				await sendMarkdown(sessionWebhook, guide, '❌ 超时', 'red');
+			} catch (sendErr) {
+				console.error('[sendMarkdown 失败]', sendErr);
+			}
 			return;
 		}
 
 		// 通用错误
-		await sendMarkdown(sessionWebhook, `❌ 执行失败\n\n\`\`\`\n${msg.slice(0, 500)}\n\`\`\`\n\n发送 \`/帮助\` 查看可用命令。`, '❌ 失败', 'red');
+		try {
+			await sendMarkdown(sessionWebhook, `❌ 执行失败\n\n\`\`\`\n${msg.slice(0, 500)}\n\`\`\`\n\n发送 \`/帮助\` 查看可用命令。`, '❌ 失败', 'red');
+		} catch (sendErr) {
+			console.error('[sendMarkdown 失败]', sendErr);
+		}
 	}
 }
 
