@@ -1,0 +1,9 @@
+---
+description: 心跳协议
+globs: ["**/*"]
+alwaysApply: false
+---
+
+# 心跳协议
+
+参考 `.cursor/HEARTBEAT.md`。心跳触发时按清单执行，无事则回复 `HEARTBEAT_OK`。

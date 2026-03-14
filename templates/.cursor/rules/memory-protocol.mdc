@@ -1,0 +1,9 @@
+---
+description: 记忆协议
+globs: ["**/*"]
+alwaysApply: false
+---
+
+# 记忆协议
+
+参考 `.cursor/MEMORY.md`。重要上下文写入 `.cursor/memory/`，会话数据在 `.cursor/sessions/`。

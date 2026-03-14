@@ -116,12 +116,80 @@ const projectsConfig: ProjectsConfig = existsSync(PROJECTS_PATH)
 	? JSON.parse(readFileSync(PROJECTS_PATH, 'utf-8'))
 	: { projects: { default: { path: ROOT, description: 'Default' } }, default_project: 'default' };
 
+// ── 工作区模板自动初始化 ─────────────────────────
+const TEMPLATE_DIR = resolve(ROOT, 'templates');
+const WORKSPACE_FILES = [
+	".cursor/SOUL.md", ".cursor/IDENTITY.md", ".cursor/USER.md",
+	".cursor/MEMORY.md", ".cursor/HEARTBEAT.md", ".cursor/TASKS.md",
+	".cursor/BOOT.md", ".cursor/TOOLS.md",
+];
+const WORKSPACE_RULES = [
+	".cursor/rules/soul.mdc",
+	".cursor/rules/agent-identity.mdc",
+	".cursor/rules/user-context.mdc",
+	".cursor/rules/workspace-rules.mdc",
+	".cursor/rules/tools.mdc",
+	".cursor/rules/memory-protocol.mdc",
+	".cursor/rules/scheduler-protocol.mdc",
+	".cursor/rules/heartbeat-protocol.mdc",
+	".cursor/rules/cursor-capabilities.mdc",
+];
+
+function ensureWorkspace(wsPath: string): boolean {
+	const normalizedWs = resolve(wsPath);
+	const normalizedRoot = resolve(ROOT);
+	// 仅在本项目目录下初始化
+	const isOwnProject = normalizedWs === normalizedRoot;
+
+	if (!isOwnProject) {
+		return false;
+	}
+
+	// 创建目录结构
+	mkdirSync(resolve(wsPath, ".cursor/memory"), { recursive: true });
+	mkdirSync(resolve(wsPath, ".cursor/sessions"), { recursive: true });
+	mkdirSync(resolve(wsPath, ".cursor/rules"), { recursive: true });
+
+	const isNewWorkspace = !existsSync(resolve(wsPath, ".cursor/SOUL.md"));
+	let copied = 0;
+
+	// AGENTS.md 放根目录
+	const rootFiles = ["AGENTS.md"];
+	// 首次初始化额外复制 BOOTSTRAP.md
+	const allFiles = isNewWorkspace
+		? [...rootFiles, ...WORKSPACE_FILES, ".cursor/BOOTSTRAP.md", ...WORKSPACE_RULES]
+		: [...rootFiles, ...WORKSPACE_FILES, ...WORKSPACE_RULES];
+
+	for (const f of allFiles) {
+		const target = resolve(wsPath, f);
+		if (!existsSync(target)) {
+			const src = resolve(TEMPLATE_DIR, f);
+			if (existsSync(src)) {
+				writeFileSync(target, readFileSync(src, "utf-8"));
+				console.log(`[工作区] 从模板复制: ${f}`);
+				copied++;
+			}
+		}
+	}
+
+	if (copied > 0) {
+		console.log(`[工作区] ${wsPath} 初始化完成 (${copied} 个文件)`);
+		if (isNewWorkspace) {
+			console.log("[工作区] 首次启动：.cursor/BOOTSTRAP.md 已就绪，首次对话将触发出生仪式");
+		}
+	}
+	return isNewWorkspace;
+}
+
 // ── 记忆管理器 ───────────────────────────────────
 const defaultWorkspace = projectsConfig.projects[projectsConfig.default_project]?.path || ROOT;
 
 // 记忆工作区：支持独立配置，避免污染工作项目
 const memoryWorkspaceKey = (projectsConfig as any).memory_workspace || projectsConfig.default_project;
 const memoryWorkspace = projectsConfig.projects[memoryWorkspaceKey]?.path || defaultWorkspace;
+
+// 初始化记忆工作区（在记忆管理器前调用）
+ensureWorkspace(memoryWorkspace);
 
 let memory: MemoryManager | undefined;
 try {
