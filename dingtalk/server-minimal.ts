@@ -1940,7 +1940,7 @@ async function handleMessage(msg: any) {
 		});
 
 		const elapsed = formatElapsed(Math.round((Date.now() - taskStart) / 1000));
-		const title = quotaWarning ? `完成 · ${elapsed}（已降级）` : `完成 · ${elapsed}`;
+		const title = quotaWarning ? `⚠️ 完成 · ${elapsed}（已降级）` : `✅ 完成 · ${elapsed}`;
 		console.log(`[完成] model=${quotaWarning ? 'auto' : config.CURSOR_MODEL} elapsed=${elapsed} (${result.length} chars)`);
 
 			// 如果是出生仪式，删除 BOOTSTRAP.md
