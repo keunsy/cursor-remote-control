@@ -1,6 +1,6 @@
 /**
  * 启动入口 - launchd 通过此脚本启动服务
- * 确保依赖完整后再加载 server.ts
+ * 确保依赖完整后再加载 server-minimal.ts
  */
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";

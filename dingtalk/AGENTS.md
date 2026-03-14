@@ -28,7 +28,6 @@ dingtalk-cursor-claw/
 ├── server-minimal.ts      # 主服务入口（MVP）：钉钉 Stream → Cursor Agent CLI
 ├── dingtalk-client.ts     # 钉钉 Stream 客户端封装
 ├── dingtalk-helper.ts     # 钉钉工具函数
-├── server.ts              # 完整服务（未启用，预留扩展）
 ├── start.ts               # 启动脚本
 ├── start-with-keepawake.ts # 带防休眠的启动脚本
 ├── service.sh             # 服务管理脚本

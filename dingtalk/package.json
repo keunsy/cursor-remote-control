@@ -4,7 +4,7 @@
   "description": "Turn Feishu/Lark into a remote control for Cursor AI — your personal AI strategic partner via IM",
   "type": "module",
   "scripts": {
-    "start": "bun run server.ts",
+    "dev": "bun run start-with-keepawake.ts",
     "bridge": "bun run bridge.ts"
   },
   "engines": {
