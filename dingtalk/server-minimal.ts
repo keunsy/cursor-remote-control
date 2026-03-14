@@ -1484,6 +1484,64 @@ async function handleMessage(msg: any) {
 			}
 			return;
 		}
+
+		// /发送文件、/sendfile、/send → 上传本地文件到钉钉
+		if (/^\/(发送文件|sendfile|send)\s+/i.test(message.trim())) {
+			const filePathMatch = message.match(/^\/(发送文件|sendfile|send)\s+(.+)$/i);
+			if (!filePathMatch) {
+				await sendMarkdown(sessionWebhook, '用法：`/发送文件 <文件路径>`\n\n示例：\n- `/发送文件 ~/Desktop/app.apk`\n- `/send ~/Documents/report.pdf`', 'ℹ️ 用法');
+				return;
+			}
+
+			let filePath = filePathMatch[2].trim();
+
+			// 展开 ~
+			if (filePath.startsWith('~')) {
+				filePath = filePath.replace('~', HOME);
+			}
+
+			// 检查文件
+			if (!existsSync(filePath)) {
+				await sendMarkdown(sessionWebhook, `❌ 文件不存在：\`${filePath}\``, '文件不存在');
+				return;
+			}
+
+			const stats = statSync(filePath);
+			const fileSize = stats.size;
+			const maxSize = 30 * 1024 * 1024;
+
+			if (fileSize > maxSize) {
+				await sendMarkdown(sessionWebhook, `❌ 文件过大：${(fileSize / 1024 / 1024).toFixed(2)}MB > 30MB`, '文件过大');
+				return;
+			}
+
+			// 上传中提示
+			const fileName = filePath.split('/').pop() || 'file';
+			await sendMarkdown(sessionWebhook, `📤 正在上传文件：\`${fileName}\`\n\n大小：${(fileSize / 1024 / 1024).toFixed(2)}MB`, '上传中');
+
+			try {
+				// 确保 token 有效
+				await ensureToken();
+
+				// 上传文件
+				const { uploadFileDingtalk, sendFileDingtalk } = await import('./send-file-dingtalk.js');
+				const { mediaId } = await uploadFileDingtalk({
+					filePath,
+					accessToken,
+					type: 'file',
+				});
+
+				// 发送文件
+				await sendFileDingtalk(sessionWebhook, mediaId, fileName);
+
+				await sendMarkdown(sessionWebhook, `✅ 文件发送成功：\`${fileName}\``, '发送成功');
+				console.log(`[文件] 已发送: ${fileName}`);
+			} catch (error) {
+				await sendMarkdown(sessionWebhook, `❌ 发送失败：${error instanceof Error ? error.message : String(error)}`, '发送失败');
+				console.error('[文件] 发送失败:', error);
+			}
+			return;
+		}
 		
 		// /任务、/cron → 定时任务管理
 		const taskMatch = message.match(/^\/(任务|cron|定时|task|schedule|定时任务)[\s:：]*(.*)/i);
