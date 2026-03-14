@@ -685,8 +685,8 @@ async function runAgent(
 	workspace: string,
 	message: string,
 	agentId?: string,
-	context?: { platform?: string; webhook?: string }
-): Promise<RunAgentResult & { sessionId?: string }> {
+	context?: { platform?: string; webhook?: string; onSessionId?: (sessionId: string) => void }
+): Promise<RunAgentResult> {
 	const primaryModel = config.CURSOR_MODEL || 'opus-4.6-thinking';
 
 	async function runWithModel(model: string): Promise<{ result: string; sessionId?: string }> {
@@ -804,13 +804,16 @@ async function runAgent(
 	}
 
 	try {
-		return await runWithModel(primaryModel);
+		const out = await runWithModel(primaryModel);
+		if (out.sessionId && context?.onSessionId) context.onSessionId(out.sessionId);
+		return { result: out.result };
 	} catch (error) {
 		if (isQuotaError(error as Error)) {
 			console.log(`[降级] ${primaryModel} 余额不足，切换到 auto`);
 			const out = await runWithModel('auto');
+			if (out.sessionId && context?.onSessionId) context.onSessionId(out.sessionId);
 			return {
-				...out,
+				result: out.result,
 				quotaWarning: `⚠️ **模型降级**\n\n${primaryModel} 余额不足，已用 auto 完成。`,
 			};
 		}
@@ -1903,9 +1906,13 @@ async function handleMessage(msg: any) {
 	}
 	
 	try {
-		const { result, sessionId, quotaWarning } = await runAgent(workspace, message, session.agentId, {
+		const { result, quotaWarning } = await runAgent(workspace, message, session.agentId, {
 			platform: 'dingtalk',
-			webhook: sessionWebhook
+			webhook: sessionWebhook,
+			onSessionId: (sid) => {
+				session.agentId = sid;
+				setActiveSession(workspace, sid, message.slice(0, 40));
+			},
 		});
 
 			// 如果是出生仪式，删除 BOOTSTRAP.md
@@ -1916,11 +1923,6 @@ async function handleMessage(msg: any) {
 				} catch (e) {
 					console.warn(`[出生仪式] 删除 BOOTSTRAP.md 失败: ${e}`);
 				}
-			}
-
-			if (sessionId) {
-				session.agentId = sessionId;
-				setActiveSession(workspace, sessionId, message.slice(0, 40));
 			}
 
 		let resultStr = '';
