@@ -1363,6 +1363,11 @@ async function handleMessage(msg: any) {
 				'- 启动自检：服务启动时自动执行 `.cursor/BOOT.md`',
 				'- 出生仪式：首次对话触发 `.cursor/BOOTSTRAP.md`（自动删除）',
 				'- 工作区初始化：自动复制模板文件到 `.cursor/`',
+				'',
+				'**体验优化：**',
+				'- ⏱️ 自动显示执行耗时',
+				'- 🔄 余额不足自动降级（无需干预）',
+				'- 💡 错误时显示修复建议',
 			].join('\n');
 			await sendMarkdown(sessionWebhook, helpText, '📖 使用帮助', 'blue');
 			return;
