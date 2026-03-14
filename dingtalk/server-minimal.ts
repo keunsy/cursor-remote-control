@@ -148,11 +148,12 @@ const heartbeat = new HeartbeatRunner({
 	config: {
 		enabled: false,  // 默认关闭，用户通过 /心跳 开启
 		everyMs: 30 * 60_000,  // 30 分钟
+		workspaceDir: memoryWorkspace, // 修复：使用 memoryWorkspace 避免污染工作项目
 	},
 	onExecute: async (prompt: string) => {
-		memory?.appendSessionLog(defaultWorkspace, "user", "[心跳检查] " + prompt.slice(0, 200), config.CURSOR_MODEL);
-		const { result } = await runAgent(defaultWorkspace, prompt);
-		memory?.appendSessionLog(defaultWorkspace, "assistant", result.slice(0, 3000), config.CURSOR_MODEL);
+		memory?.appendSessionLog(memoryWorkspace, "user", "[心跳检查] " + prompt.slice(0, 200), config.CURSOR_MODEL);
+		const { result } = await runAgent(memoryWorkspace, prompt);
+		memory?.appendSessionLog(memoryWorkspace, "assistant", result.slice(0, 3000), config.CURSOR_MODEL);
 		return result;
 	},
 	onDelivery: async (content: string) => {

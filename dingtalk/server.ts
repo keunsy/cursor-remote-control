@@ -143,6 +143,12 @@ function ensureWorkspace(wsPath: string): boolean {
 	// 仅在本项目（cursor-remote-control）目录下复制 AGENTS.md / .cursor 模板，不污染其他项目
 	const isOwnProject = normalizedWs === normalizedRoot;
 
+	if (!isOwnProject) {
+		// 非本项目：不创建任何目录，完全不污染
+		return false;
+	}
+
+	// 本项目：创建必要的目录结构
 	mkdirSync(resolve(wsPath, ".cursor/memory"), { recursive: true });
 	mkdirSync(resolve(wsPath, ".cursor/sessions"), { recursive: true });
 	mkdirSync(resolve(wsPath, ".cursor/rules"), { recursive: true });
@@ -151,7 +157,7 @@ function ensureWorkspace(wsPath: string): boolean {
 	const isNewWorkspace = !existsSync(resolve(wsPath, ".cursor/SOUL.md"));
 	let copied = 0;
 
-	if (isOwnProject) {
+	if (true) {  // 已经确认是 isOwnProject
 		// AGENTS.md 放在根目录（Cursor 自动加载约定）- 仅在本项目生成
 		const rootFiles = ["AGENTS.md"];
 		// 首次初始化时额外复制 BOOTSTRAP.md（仅新工作区）
@@ -202,12 +208,11 @@ function ensureWorkspace(wsPath: string): boolean {
 
 // ── 记忆管理器 ───────────────────────────────────
 const defaultWorkspace = projectsConfig.projects[projectsConfig.default_project]?.path || ROOT;
-ensureWorkspace(defaultWorkspace);
 
 // 记忆工作区：支持独立配置，避免污染工作项目
 const memoryWorkspaceKey = (projectsConfig as any).memory_workspace || projectsConfig.default_project;
 const memoryWorkspace = projectsConfig.projects[memoryWorkspaceKey]?.path || defaultWorkspace;
-ensureWorkspace(memoryWorkspace);
+ensureWorkspace(memoryWorkspace);  // 仅初始化记忆工作区，不污染其他项目
 
 let memory: MemoryManager | undefined;
 try {
@@ -230,7 +235,8 @@ try {
 let lastActiveChatId: string | undefined;
 
 // ── 定时任务调度器 ────────────────────────────────
-const cronStorePath = resolve(defaultWorkspace, "cron-jobs.json");
+// 钉钉独立的 cron-jobs.json（保存在固定的全局目录）
+const cronStorePath = resolve(ROOT, "cron-jobs-dingtalk.json");
 
 const scheduler = new Scheduler({
 	storePath: cronStorePath,
@@ -266,12 +272,12 @@ const heartbeat = new HeartbeatRunner({
 	config: {
 		enabled: true,
 		everyMs: 30 * 60 * 1000,
-		workspaceDir: defaultWorkspace,
+		workspaceDir: memoryWorkspace, // 修复：使用 memoryWorkspace 避免污染工作项目
 	},
 	onExecute: async (prompt: string) => {
-		memory?.appendSessionLog(defaultWorkspace, "user", "[心跳检查] " + prompt.slice(0, 200), config.CURSOR_MODEL);
-		const { result } = await runAgent(defaultWorkspace, prompt);
-		memory?.appendSessionLog(defaultWorkspace, "assistant", result.slice(0, 3000), config.CURSOR_MODEL);
+		memory?.appendSessionLog(memoryWorkspace, "user", "[心跳检查] " + prompt.slice(0, 200), config.CURSOR_MODEL);
+		const { result } = await runAgent(memoryWorkspace, prompt);
+		memory?.appendSessionLog(memoryWorkspace, "assistant", result.slice(0, 3000), config.CURSOR_MODEL);
 		return result;
 	},
 	onDelivery: async (content: string) => {
@@ -1175,20 +1181,18 @@ function execAgent(
 			return assistantBuf.slice(-300);
 		}
 
-		// 进度更新定时器（每秒）
+		// 进度更新定时器（每秒）：始终推送 elapsed，无 snippet 时也显示秒数
 		const timer = setInterval(() => {
 			if (done) return;
 			const now = Date.now();
 			if (opts?.onProgress && now - lastProgressTime >= PROGRESS_INTERVAL) {
 				lastProgressTime = now;
 				const snippet = getSnippet();
-				if (snippet) {
-					opts.onProgress({
-						elapsed: Math.round((now - startTime) / 1000),
-						phase,
-						snippet,
-					});
-				}
+				opts.onProgress({
+					elapsed: Math.round((now - startTime) / 1000),
+					phase,
+					snippet: snippet || "...",
+				});
 			}
 		}, 1000);
 
@@ -1995,11 +1999,11 @@ async function handleInner(
 		memory.appendSessionLog(workspace, "user", prompt, model);
 	}
 
-	// runAgent 获取 session lock 后回调 onStart，更新卡片为"处理中"
+	// runAgent 获取 session lock 后回调 onStart，更新卡片为"处理中 · 0秒"（立马显示秒数）
 	const onStart = cardId
 		? () => {
 				updateCard(cardId!, `⏳ 正在执行...\n\n> ${prompt.slice(0, 120)}`, {
-					title: "处理中",
+					title: "思考中 · 0秒",
 					color: "wathet",
 				}).catch(() => {});
 			}
@@ -2194,7 +2198,7 @@ console.log("飞书长连接已启动，等待消息...");
 
 // ── 启动自检（.cursor/BOOT.md）───────────────────────
 setTimeout(async () => {
-	const bootPath = resolve(defaultWorkspace, ".cursor/BOOT.md");
+	const bootPath = resolve(memoryWorkspace, ".cursor/BOOT.md");  // 修复：使用 memoryWorkspace（服务自己的启动自检）
 	try {
 		if (!existsSync(bootPath)) return;
 		const content = readFileSync(bootPath, "utf-8").trim();
@@ -2204,7 +2208,7 @@ setTimeout(async () => {
 			"你正在执行启动自检。严格按 .cursor/BOOT.md 指示操作。",
 			"如果无事可做，不需要回复任何内容。",
 		].join("\n");
-		const { result } = await runAgent(defaultWorkspace, bootPrompt);
+		const { result } = await runAgent(memoryWorkspace, bootPrompt);  // 修复：使用 memoryWorkspace
 		const trimmed = result.trim();
 		if (trimmed && !/^(无输出|HEARTBEAT_OK)$/i.test(trimmed) && lastActiveChatId) {
 			await sendCard(lastActiveChatId, trimmed, { title: "🚀 启动自检", color: "wathet" });

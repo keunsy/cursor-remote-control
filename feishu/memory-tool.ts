@@ -33,7 +33,9 @@ function getWorkspacePath(): string {
 	if (!existsSync(PROJECTS_PATH)) return ROOT;
 	try {
 		const cfg = JSON.parse(readFileSync(PROJECTS_PATH, "utf-8"));
-		return cfg.projects?.[cfg.default_project]?.path || ROOT;
+		// 优先使用 memory_workspace 配置，避免污染工作项目
+		const memoryWorkspaceKey = (cfg as any).memory_workspace || cfg.default_project;
+		return cfg.projects?.[memoryWorkspaceKey]?.path || ROOT;
 	} catch {
 		return ROOT;
 	}
