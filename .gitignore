@@ -78,3 +78,4 @@ feilian-*.md
 # 模板和用户文档（包含本机路径或过时信息）
 /feishu/templates/
 /docs/
+!docs/plans/
