@@ -1948,15 +1948,9 @@ async function handleMessage(msg: any) {
 				}
 			}
 
-		let resultStr = '';
-		if (typeof result === 'string') resultStr = result;
-		else if (result && typeof result === 'object') {
-			const obj = result as any;
-			resultStr = obj.text || obj.content || '';
-		}
-		let cleanOutput = resultStr.trim();
+		let cleanOutput = result.trim();
 		if (quotaWarning) {
-			cleanOutput = quotaWarning + '\n\n---\n\n' + cleanOutput;
+			cleanOutput = `${quotaWarning}\n\n---\n\n${cleanOutput}`;
 		}
 			
 			// 记录 assistant 回复到会话日志
