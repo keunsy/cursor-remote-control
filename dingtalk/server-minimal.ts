@@ -676,123 +676,147 @@ function buildToolSummary(tools: string[]): string {
 }
 
 // ── Cursor Agent 调用（基于飞书的稳定实现）────────
+interface RunAgentResult {
+	result: string;
+	sessionId?: string;
+	quotaWarning?: string;
+}
+
 async function runAgent(
 	workspace: string,
 	message: string,
 	agentId?: string,
 	context?: { platform?: string; webhook?: string }
-): Promise<{ result: string; sessionId?: string }> {
-	return new Promise((res, reject) => {
-		const args = [
-			'-p', '--force', '--trust', '--approve-mcps',
-			'--workspace', workspace,
-			'--model', config.CURSOR_MODEL,
-			'--output-format', 'stream-json',
-			'--stream-partial-output',
-		];
-		if (agentId) args.push('--resume', agentId);
-		args.push('--', message);
+): Promise<RunAgentResult> {
+	const primaryModel = config.CURSOR_MODEL || 'opus-4.6-thinking';
 
-		const env = config.CURSOR_API_KEY
-			? { ...process.env, CURSOR_API_KEY: config.CURSOR_API_KEY }
-			: process.env;
-		if (context?.platform) env.CURSOR_PLATFORM = context.platform;
-		if (context?.webhook) env.CURSOR_WEBHOOK = context.webhook;
-		env.CURSOR_CRON_FILE = resolve(ROOT, 'cron-jobs-dingtalk.json');
+	async function runWithModel(model: string): Promise<{ result: string; sessionId?: string }> {
+		return new Promise((res, reject) => {
+			const args = [
+				'-p', '--force', '--trust', '--approve-mcps',
+				'--workspace', workspace,
+				'--model', model,
+				'--output-format', 'stream-json',
+				'--stream-partial-output',
+			];
+			if (agentId) args.push('--resume', agentId);
+			args.push('--', message);
 
-		const proc = spawn('agent', args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+			const env = config.CURSOR_API_KEY
+				? { ...process.env, CURSOR_API_KEY: config.CURSOR_API_KEY }
+				: process.env;
+			if (context?.platform) env.CURSOR_PLATFORM = context.platform;
+			if (context?.webhook) env.CURSOR_WEBHOOK = context.webhook;
+			env.CURSOR_CRON_FILE = resolve(ROOT, 'cron-jobs-dingtalk.json');
 
-		const lockKey = getLockKey(workspace);
-		if (proc.pid) {
-			childPids.push(proc.pid);
-			activeAgents.set(lockKey, { pid: proc.pid, kill: () => proc.kill('SIGTERM') });
-		}
+			const proc = spawn('agent', args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
 
-		let stderr = '';
-		let resultText = '';
-		let sessionId: string | undefined = agentId;
-		let assistantBuf = '';
-		let lastSegment = '';
-		let toolSummary: string[] = [];
-		let lineBuf = '';
-		let done = false;
-
-		function cleanup() {
-			done = true;
-			activeAgents.delete(lockKey);
+			const lockKey = getLockKey(workspace);
 			if (proc.pid) {
-				const idx = childPids.indexOf(proc.pid);
-				if (idx >= 0) childPids.splice(idx, 1);
-			}
-		}
-
-		proc.stdout.on('data', (chunk) => {
-			lineBuf += chunk.toString();
-			const lines = lineBuf.split('\n');
-			lineBuf = lines.pop() || '';
-			for (const line of lines) {
-				if (!line.trim()) continue;
-				try {
-					const ev = JSON.parse(line);
-					if (ev.session_id && !sessionId) sessionId = ev.session_id;
-					
-					if (ev.type === 'result' && ev.result != null) {
-						resultText = ev.result;
-					}
-					if (ev.type === 'assistant' && ev.message?.content) {
-						for (const c of ev.message.content) {
-							if (c.type === 'text' && c.text) {
-								assistantBuf += c.text;
-								lastSegment += c.text;
-							}
-						}
-					}
-					if (ev.type === 'tool_call' && ev.tool_call) {
-						if (ev.subtype === 'started') {
-							const desc = describeToolCall(ev.tool_call);
-							toolSummary.push(desc);
-						}
-					}
-				} catch (_) {}
-			}
-		});
-
-		proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
-
-		proc.on('close', (code) => {
-			if (done) return;
-			cleanup();
-			if (lineBuf.trim()) {
-				try {
-					const ev = JSON.parse(lineBuf);
-					if (ev.session_id && !sessionId) sessionId = ev.session_id;
-					if (ev.type === 'result' && ev.result != null) resultText = ev.result;
-				} catch (_) {}
+				childPids.push(proc.pid);
+				activeAgents.set(lockKey, { pid: proc.pid, kill: () => proc.kill('SIGTERM') });
 			}
 
-			const rawResultText = typeof resultText === 'string' ? resultText.trim() : '';
-			const finalSegment = lastSegment.trim();
-			const rawOutput = rawResultText || finalSegment || assistantBuf.trim() || stderr.trim() || '(无输出)';
-			
-			// 构建工具调用摘要（添加到回复开头）
-			let finalOutput = rawOutput;
-			if (toolSummary.length > 0) {
-				const summary = buildToolSummary(toolSummary);
-				if (summary) {
-					finalOutput = summary + '\n\n---\n\n' + rawOutput;
+			let stderr = '';
+			let resultText = '';
+			let sessionId: string | undefined = agentId;
+			let assistantBuf = '';
+			let lastSegment = '';
+			let toolSummary: string[] = [];
+			let lineBuf = '';
+			let done = false;
+
+			function cleanup() {
+				done = true;
+				activeAgents.delete(lockKey);
+				if (proc.pid) {
+					const idx = childPids.indexOf(proc.pid);
+					if (idx >= 0) childPids.splice(idx, 1);
 				}
 			}
-			
-			console.log(`[runAgent完成] rawResultText.length=${rawResultText.length} finalSegment.length=${finalSegment.length} assistantBuf.length=${assistantBuf.trim().length} tools=${toolSummary.length}`);
-			
-			if (code === 0) res({ result: finalOutput, sessionId });
-			else reject(new Error(`Agent exited with code ${code}`));
-		});
 
-		proc.on('error', (err) => {
-			if (!done) { cleanup(); reject(err); }
+			proc.stdout.on('data', (chunk) => {
+				lineBuf += chunk.toString();
+				const lines = lineBuf.split('\n');
+				lineBuf = lines.pop() || '';
+				for (const line of lines) {
+					if (!line.trim()) continue;
+					try {
+						const ev = JSON.parse(line);
+						if (ev.session_id && !sessionId) sessionId = ev.session_id;
+
+						if (ev.type === 'result' && ev.result != null) {
+							resultText = ev.result;
+						}
+						if (ev.type === 'assistant' && ev.message?.content) {
+							for (const c of ev.message.content) {
+								if (c.type === 'text' && c.text) {
+									assistantBuf += c.text;
+									lastSegment += c.text;
+								}
+							}
+						}
+						if (ev.type === 'tool_call' && ev.tool_call) {
+							if (ev.subtype === 'started') {
+								const desc = describeToolCall(ev.tool_call);
+								toolSummary.push(desc);
+							}
+						}
+					} catch (_) {}
+				}
+			});
+
+			proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+
+			proc.on('close', (code) => {
+				if (done) return;
+				cleanup();
+				if (lineBuf.trim()) {
+					try {
+						const ev = JSON.parse(lineBuf);
+						if (ev.session_id && !sessionId) sessionId = ev.session_id;
+						if (ev.type === 'result' && ev.result != null) resultText = ev.result;
+					} catch (_) {}
+				}
+
+				const rawResultText = typeof resultText === 'string' ? resultText.trim() : '';
+				const finalSegment = lastSegment.trim();
+				const rawOutput = rawResultText || finalSegment || assistantBuf.trim() || stderr.trim() || '(无输出)';
+
+				// 构建工具调用摘要（添加到回复开头）
+				let finalOutput = rawOutput;
+				if (toolSummary.length > 0) {
+					const summary = buildToolSummary(toolSummary);
+					if (summary) {
+						finalOutput = summary + '\n\n---\n\n' + rawOutput;
+					}
+				}
+
+				console.log(`[runAgent完成] rawResultText.length=${rawResultText.length} finalSegment.length=${finalSegment.length} assistantBuf.length=${assistantBuf.trim().length} tools=${toolSummary.length}`);
+
+				if (code === 0) res({ result: finalOutput, sessionId });
+				else reject(new Error(`Agent exited with code ${code}\n${stderr}`));
+			});
+
+			proc.on('error', (err) => {
+				if (!done) { cleanup(); reject(err); }
+			});
 		});
-	});
+	}
+
+	try {
+		return await runWithModel(primaryModel);
+	} catch (error) {
+		if (isQuotaError(error as Error)) {
+			console.log(`[降级] ${primaryModel} 余额不足，切换到 auto`);
+			const out = await runWithModel('auto');
+			return {
+				...out,
+				quotaWarning: `⚠️ **模型降级**\n\n${primaryModel} 余额不足，已用 auto 完成。`,
+			};
+		}
+		throw error;
+	}
 }
 
 // ── 对话式路由识别 ───────────────────────────────
@@ -1880,7 +1904,7 @@ async function handleMessage(msg: any) {
 	}
 	
 	try {
-		const { result, sessionId } = await runAgent(workspace, message, session.agentId, {
+		const { result, sessionId, quotaWarning } = await runAgent(workspace, message, session.agentId, {
 			platform: 'dingtalk',
 			webhook: sessionWebhook
 		});
@@ -1906,7 +1930,10 @@ async function handleMessage(msg: any) {
 			const obj = result as any;
 			resultStr = obj.text || obj.content || '';
 		}
-		const cleanOutput = resultStr.trim();
+		let cleanOutput = resultStr.trim();
+		if (quotaWarning) {
+			cleanOutput = quotaWarning + '\n\n' + cleanOutput;
+		}
 			
 			// 记录 assistant 回复到会话日志
 			if (memory) {
