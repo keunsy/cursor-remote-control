@@ -26,6 +26,7 @@ const ENV_PATH = resolve(import.meta.dirname, '.env');
 const PROJECTS_PATH = resolve(ROOT, 'projects.json');
 const INBOX_DIR = resolve(ROOT, 'inbox');
 const WHISPER_MODEL = resolve(HOME, 'models/ggml-tiny.bin');
+const BOOT_DELAY_MS = 8000;  // 启动自检延迟，确保服务完全启动
 
 mkdirSync(INBOX_DIR, { recursive: true });
 
@@ -1990,7 +1991,10 @@ setTimeout(async () => {
 		console.log("[启动] 检测到 .cursor/BOOT.md，执行启动自检...");
 
 		const bootPrompt = [
-			"你正在执行启动自检。严格按 .cursor/BOOT.md 指示操作。",
+			"你正在执行启动自检。严格按以下清单执行：",
+			"",
+			content,
+			"",
 			"如果无事可做，回复 'HEARTBEAT_OK'。",
 		].join("\n");
 
@@ -2010,4 +2014,4 @@ setTimeout(async () => {
 	} catch (e) {
 		console.warn(`[启动] .cursor/BOOT.md 执行失败: ${e}`);
 	}
-}, 8000);  // 8秒后执行，确保服务完全启动
+}, BOOT_DELAY_MS);
