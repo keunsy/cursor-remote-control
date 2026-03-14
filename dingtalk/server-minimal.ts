@@ -1768,8 +1768,11 @@ async function handleMessage(msg: any) {
 	}
 	
 	// ── 出生仪式检查 ─────────────────────────────────
+	let isBootstrap = false;
 	const bootstrapPath = resolve(workspace, ".cursor/BOOTSTRAP.md");
 	if (existsSync(bootstrapPath)) {
+		// 读取 BOOTSTRAP.md 内容，当前仅用于非空判断
+		// 未来可考虑将内容注入 prompt（类似 BOOT.md 实现）
 		const bootstrapContent = readFileSync(bootstrapPath, "utf-8").trim();
 		if (bootstrapContent) {
 			console.log("[出生仪式] 检测到 BOOTSTRAP.md，首次对话");
@@ -1785,9 +1788,7 @@ async function handleMessage(msg: any) {
 			
 			// 使用组合提示词
 			message = combinedPrompt;
-			
-			// 标记为出生仪式（后续删除文件）
-			(data as any)._isBootstrap = true;
+			isBootstrap = true;
 		}
 	}
 	
@@ -1800,7 +1801,7 @@ async function handleMessage(msg: any) {
 		console.log(`[DEBUG-5] runAgent 返回: result="${result?.slice(0, 100) || '(empty)'}" length=${result?.length || 0}`);
 
 			// 如果是出生仪式，删除 BOOTSTRAP.md
-			if ((data as any)._isBootstrap) {
+			if (isBootstrap) {
 				try {
 					unlinkSync(resolve(workspace, ".cursor/BOOTSTRAP.md"));
 					console.log("[出生仪式] BOOTSTRAP.md 已删除，出生仪式完成");
