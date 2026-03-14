@@ -1929,6 +1929,7 @@ async function handleMessage(msg: any) {
 	}
 	
 	try {
+		const taskStart = Date.now();
 		const { result, quotaWarning } = await runAgent(workspace, message, session.agentId, {
 			platform: 'dingtalk',
 			webhook: sessionWebhook,
@@ -1937,6 +1938,10 @@ async function handleMessage(msg: any) {
 				setActiveSession(workspace, sid, message.slice(0, 40));
 			},
 		});
+
+		const elapsed = formatElapsed(Math.round((Date.now() - taskStart) / 1000));
+		const title = quotaWarning ? `完成 · ${elapsed}（已降级）` : `完成 · ${elapsed}`;
+		console.log(`[完成] model=${quotaWarning ? 'auto' : config.CURSOR_MODEL} elapsed=${elapsed} (${result.length} chars)`);
 
 			// 如果是出生仪式，删除 BOOTSTRAP.md
 			if (isBootstrap) {
@@ -1968,15 +1973,18 @@ async function handleMessage(msg: any) {
 			if (cleanOutput) {
 				// 分片发送（钉钉 Markdown 有长度限制）
 				const chunks = splitMarkdown(cleanOutput, 4000);
+				const completionColor = quotaWarning ? 'orange' : 'green';
 				for (let i = 0; i < chunks.length; i++) {
-					const title = chunks.length > 1 ? `Cursor AI (${i + 1}/${chunks.length})` : 'Cursor AI';
-					await sendMarkdown(sessionWebhook, chunks[i], title, 'green');
+					const chunkTitle = chunks.length > 1
+						? (i === chunks.length - 1 ? title : `Cursor AI (${i + 1}/${chunks.length})`)
+						: title;
+					await sendMarkdown(sessionWebhook, chunks[i], chunkTitle, completionColor);
 					if (i < chunks.length - 1) {
 						await new Promise(resolve => setTimeout(resolve, 500));
 					}
 				}
 			} else {
-				await sendMarkdown(sessionWebhook, '✅ 任务已完成（无输出）', '完成', 'green');
+				await sendMarkdown(sessionWebhook, '✅ 任务已完成（无输出）', title, quotaWarning ? 'orange' : 'green');
 			}
 		} finally {
 			busySessions.delete(lockKey);
