@@ -60,6 +60,10 @@ interface EnvConfig {
 }
 
 function loadEnv(): EnvConfig {
+	if (!existsSync(ENV_PATH)) {
+		console.error(`[致命] .env 文件不存在: ${ENV_PATH}`);
+		process.exit(1);
+	}
 	const raw = readFileSync(ENV_PATH, 'utf-8');
 	const env: Record<string, string> = {};
 	for (const line of raw.split('\n')) {
@@ -1858,6 +1862,16 @@ ${Object.entries(projectsConfig.projects).map(([k, v]) => `│    /${k} → ${v.
 │    - 实时进度（平台限制：钉钉不支持消息更新）
 └──────────────────────────────────────────────────┘
 `);
+
+// ── 启动前校验：未配置钉钉凭据则直接退出 ─────────────
+if (!config.DINGTALK_APP_KEY?.trim() || !config.DINGTALK_APP_SECRET?.trim()) {
+	console.error('[致命] 钉钉机器人未配置，无法建立连接。');
+	console.error('  请在 dingtalk/.env 中设置:');
+	console.error('    DINGTALK_APP_KEY=你的AppKey');
+	console.error('    DINGTALK_APP_SECRET=你的AppSecret');
+	console.error('  参考: cp .env.example .env 后编辑，或查看 README');
+	process.exit(1);
+}
 
 // ── 钉钉 Stream 客户端 ───────────────────────────
 const client = new DWClient({
