@@ -1,5 +1,11 @@
 # Cursor Remote Control
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg)](https://www.typescriptlang.org/)
+[![Bun](https://img.shields.io/badge/Bun-1.x-333333.svg)](https://bun.sh)
+
+> 基于 [feishu-cursor-claw](https://github.com/nongjun/feishu-cursor-claw) 改进的双渠道版本。
+
 通过飞书和钉钉远程控制 Cursor AI Agent 的中继服务。
 
 在手机上发消息，你的 Mac 就自动写代码、审文档、执行任务。将 Cursor 变成你的**私人 AI 战略合伙人**，随时随地通过 IM 调用。
@@ -426,6 +432,25 @@ A: 可以！两个服务独立运行，互不干扰，共享 `projects.json` 配
 
 ---
 
-## 许可证
+## 致谢
 
-MIT
+本项目基于 [feishu-cursor-claw](https://github.com/nongjun/feishu-cursor-claw) 开发，在原项目基础上进行了大量改进和扩展。
+
+### 主要变更
+
+- ✨ **新增钉钉渠道支持**（原项目仅支持飞书）
+- 🏗️ **独立双服务架构**（飞书和钉钉可同时运行，互不干扰）
+- 🔧 **统一服务管理**（`manage-services.sh` 统一管理多个服务）
+- 📦 **配置文件分离**（每个服务独立 `.env` 和 `cron-jobs.json`）
+- 🎯 **增强的项目路由**（共享 `projects.json`，支持持久切换）
+- 🔐 **安全增强**（平台隔离，独立环境变量）
+
+感谢 [@nongjun](https://github.com/nongjun) 的开源贡献。
+
+---
+
+## 开源协议
+
+本项目采用 MIT License 开源。详见 [LICENSE](LICENSE) 文件。
+
+基于 [feishu-cursor-claw](https://github.com/nongjun/feishu-cursor-claw)（同为 MIT License）开发。
