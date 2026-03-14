@@ -1286,6 +1286,14 @@ async function handleMessage(msg: any) {
 				'remote:帮我看看这个bug',
 				'```',
 				`· 可用项目：${Object.keys(projectsConfig.projects).map(k => `\`${k}\``).join('、')}（默认：\`${projectsConfig.default_project}\`）`,
+				'',
+				'**工具：**',
+				`- ${c('/发送文件', '/sendfile')} <路径> — 发送本地文件（别名 /send）`,
+				'',
+				'**系统：**',
+				'- 启动自检：服务启动时自动执行 `.cursor/BOOT.md`',
+				'- 出生仪式：首次对话触发 `.cursor/BOOTSTRAP.md`（自动删除）',
+				'- 工作区初始化：自动复制模板文件到 `.cursor/`',
 			].join('\n');
 			await sendMarkdown(sessionWebhook, helpText, '📖 使用帮助', 'blue');
 			return;
@@ -1315,6 +1323,10 @@ async function handleMessage(msg: any) {
 				`**调度：** ${(() => { const s = scheduler.getStats(); return s.total > 0 ? `${s.enabled}/${s.total} 任务${s.nextRunIn ? `（下次: ${s.nextRunIn}）` : ''}` : '无任务'; })()}`,
 				`**心跳：** ${heartbeat.getStatus().enabled ? `每 ${Math.round(heartbeat.getStatus().everyMs / 60000)} 分钟` : '未启用'}`,
 				`**活跃任务：** ${busySessions.size} 个运行中`,
+				`**工作区：** ${memoryWorkspace}`,
+				`**模板：** ${existsSync(resolve(TEMPLATE_DIR, 'AGENTS.md')) ? '✅ 已就绪' : '❌ 缺失'}`,
+				`**BOOT：** ${existsSync(resolve(memoryWorkspace, '.cursor/BOOT.md')) ? '✅' : '❌'}`,
+				`**BOOTSTRAP：** ${existsSync(resolve(memoryWorkspace, '.cursor/BOOTSTRAP.md')) ? '🎂 待触发' : '已完成'}`,
 				'',
 				'**项目路由：**',
 				projects,
