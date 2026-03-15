@@ -265,6 +265,7 @@ bash manage-services.sh logs dingtalk    # 查看钉钉日志
 | `/log 内容` | `/记录 内容` | 写入今日日记 |
 | `/任务` | `/cron` `/定时` | 查看/管理定时任务 |
 | `/心跳` | `/heartbeat` | 查看/管理心跳系统 |
+| `/飞连` | `/vpn` `/feilian` | 远程控制飞连 VPN（开/关/状态） |
 | `/发送文件 <路径>` | `/sendfile` `/send` | **飞书专用** - 发送本地文件（最大 30MB） |
 
 ### 项目路由（多工作区）
@@ -295,6 +296,45 @@ cp projects.json.example projects.json
 - `切换到 mycode` → 持久切换到代码项目
 
 **注意**：`projects.json` 已加入 `.gitignore`，不会提交到仓库（本机配置）。
+
+### 飞连 VPN 远程控制
+
+通过飞书/钉钉消息远程开关飞连 VPN（支持锁屏状态）。
+
+**快速使用**：
+- `/飞连` — 切换 VPN 状态
+- `/飞连 开` — 确保 VPN 连接
+- `/飞连 关` — 断开 VPN
+- `/飞连 状态` — 查询连接状态
+
+**前置配置**：
+
+1. **确认飞连快捷键为 ⌘+O**（在飞连设置中）
+
+2. **配置辅助功能权限**
+
+   macOS 系统设置 → 隐私与安全性 → 辅助功能 → 点击 + 添加：
+
+   ```bash
+   /Users/你的用户名/.bun/bin/bun
+   ```
+
+   找不到 bun 路径时运行：
+   ```bash
+   which bun
+   ```
+
+3. **重启服务生效**
+
+   ```bash
+   cd feishu && bash service.sh restart
+   cd dingtalk && bash service.sh restart
+   ```
+
+**限制**：
+- ⚠️ 锁屏状态下可能需要解锁后才能生效（取决于权限配置）
+- ⚠️ 仅支持快捷键控制，不支持指定线路
+- ⚠️ 需要飞连客户端正在运行
 
 ### 文件发送功能（飞书专用）
 
