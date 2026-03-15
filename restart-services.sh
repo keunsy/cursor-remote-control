@@ -46,11 +46,23 @@ fi
 sleep 2
 
 # ========================================
-# 2. 验证清理结果
+# 2. 验证清理结果（重试机制）
 # ========================================
+for i in {1..3}; do
+    REMAINING=$(pgrep -f "cursor-remote-control/(feishu|dingtalk)" 2>/dev/null | wc -l || echo "0")
+    if [[ "$REMAINING" -eq 0 ]]; then
+        break
+    fi
+    echo "  ⚠️  第$i次检查：还有 $REMAINING 个残留进程，再次清理..."
+    for pid in $(pgrep -f "cursor-remote-control/(feishu|dingtalk)" 2>/dev/null); do
+        kill -9 "$pid" 2>/dev/null || true
+    done
+    sleep 1
+done
+
 REMAINING=$(pgrep -f "cursor-remote-control/(feishu|dingtalk)" 2>/dev/null | wc -l || echo "0")
 if [[ "$REMAINING" -ne 0 ]]; then
-    echo "  ⚠️  警告：还有 $REMAINING 个残留进程"
+    echo "  ❌ 错误：清理失败，还有 $REMAINING 个残留进程"
     pgrep -fl "cursor-remote-control/(feishu|dingtalk)" || true
     exit 1
 fi
