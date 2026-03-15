@@ -141,8 +141,8 @@ const projectsConfig: ProjectsConfig = existsSync(PROJECTS_PATH)
 // ── 工作区模板自动初始化 ─────────────────────────
 const TEMPLATE_DIR = resolve(ROOT, 'templates');
 const WORKSPACE_FILES = [
-	".cursor/SOUL.md", ".cursor/IDENTITY.md", ".cursor/USER.md",
-	".cursor/MEMORY.md", ".cursor/HEARTBEAT.md", ".cursor/TASKS.md",
+	".cursor/SOUL.md", ".cursor/USER.md",
+	".cursor/MEMORY.md", ".cursor/HEARTBEAT.md",
 	".cursor/BOOT.md", ".cursor/TOOLS.md",
 ];
 const WORKSPACE_RULES = [

@@ -244,13 +244,11 @@ templates/                        Shipped with the repo (factory defaults)
 ├── AGENTS.md                     Workspace instructions (Cursor auto-loads)
 └── .cursor/
     ├── SOUL.md                   AI personality and principles
-    ├── IDENTITY.md               Name, emoji, temperament
     ├── USER.md                   Owner profile and preferences
     ├── BOOTSTRAP.md              First-run ceremony (deleted after completion)
     ├── BOOT.md                   Startup self-check (runs on every server start)
     ├── MEMORY.md                 Long-term memory skeleton
     ├── HEARTBEAT.md              Heartbeat checklist template
-    ├── TASKS.md                  Scheduled tasks documentation
     ├── TOOLS.md                  Capability list and tool notes
     └── rules/                    Cursor rules (auto-loaded every session)
         ├── soul.mdc              Personality, principles, style
@@ -261,12 +259,10 @@ templates/                        Shipped with the repo (factory defaults)
 ├── AGENTS.md                     Workspace instructions (Cursor auto-loads from root)
 ├── .cursor/
 │   ├── SOUL.md                   Customized personality
-│   ├── IDENTITY.md               AI's chosen identity
 │   ├── USER.md                   Owner's real info
 │   ├── MEMORY.md                 Real memories (AI-maintained)
 │   ├── HEARTBEAT.md              Heartbeat checklist (AI auto-managed)
 │   ├── BOOT.md                   Startup checklist
-│   ├── TASKS.md                  Task documentation
 │   ├── TOOLS.md                  Capability notes
 │   ├── memory/                   Daily logs (YYYY-MM-DD.md)
 │   │   └── heartbeat-state.json  Heartbeat check history

@@ -52,6 +52,9 @@ plist/
 # 项目路由配置（本机路径，每人不同）
 projects.json
 
+# Cursor 根目录工作区配置（运行时从 templates/ 自动生成，不提交）
+/.cursor/
+
 # Cursor 会话日志（本地对话记录）
 .cursor/sessions/
 **/.cursor/sessions/

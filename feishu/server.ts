@@ -124,8 +124,8 @@ watchFile(PROJECTS_PATH, { interval: 5000 }, () => {
 // ── 工作区模板自动初始化 ─────────────────────────
 const TEMPLATE_DIR = resolve(import.meta.dirname, "templates");
 const WORKSPACE_FILES = [
-	".cursor/SOUL.md", ".cursor/IDENTITY.md", ".cursor/USER.md",
-	".cursor/MEMORY.md", ".cursor/HEARTBEAT.md", ".cursor/TASKS.md",
+	".cursor/SOUL.md", ".cursor/USER.md",
+	".cursor/MEMORY.md", ".cursor/HEARTBEAT.md",
 	".cursor/BOOT.md", ".cursor/TOOLS.md",
 	".cursor/CRON-TASK-RULES.md",
 ];
@@ -2161,6 +2161,7 @@ async function handleInner(
 
 	// 处理飞连 VPN 控制指令
 	if (text.match(/^\/(飞连|vpn|feilian)\s*/i)) {
+		console.log(`[飞连] 匹配到指令: ${text}`);
 		const controller = new FeilianController();
 		let result: OperationResult;
 
