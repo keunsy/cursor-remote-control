@@ -1,7 +1,9 @@
 -- 模拟 Command+O 快捷键切换飞连 VPN
--- 只针对飞连（CorpLink）应用发送，避免影响其他应用（如 Cursor）
+-- 必须先激活应用到前台，快捷键才会发送到正确的应用
+tell application "CorpLink" to activate
+delay 0.5
 tell application "System Events"
-    tell application process "CorpLink"
+    tell process "CorpLink"
         keystroke "o" using {command down}
     end tell
 end tell
