@@ -19,6 +19,7 @@ import { execFileSync } from 'node:child_process';
 import { Scheduler, type CronJob } from '../shared/scheduler.js';
 import { MemoryManager } from '../shared/memory.js';
 import { HeartbeatRunner } from '../shared/heartbeat.js';
+import { FeilianController, type OperationResult } from '../shared/feilian-control.js';
 
 const HOME = process.env.HOME!;
 const ROOT = resolve(import.meta.dirname, '..');
@@ -1409,6 +1410,35 @@ async function handleMessage(msg: any) {
 				sessions,
 			].join('\n');
 			await sendMarkdown(sessionWebhook, statusText, '📊 服务状态', 'blue');
+			return;
+		}
+		
+		// 处理飞连 VPN 控制指令
+		if (message.match(/^\/(飞连|vpn|feilian)\s*/i)) {
+			const controller = new FeilianController();
+			let result: OperationResult;
+
+			const command = message.replace(/^\/(飞连|vpn|feilian)\s*/i, "").trim();
+
+			if (command.match(/^(状态|status)$/i)) {
+				const status = await controller.checkStatus();
+				result = {
+					success: true,
+					message: controller.formatStatus(status),
+					status
+				};
+			} else if (command.match(/^(开|on|connect)$/i)) {
+				result = await controller.ensureConnected();
+			} else if (command.match(/^(关|off|disconnect)$/i)) {
+				result = await controller.ensureDisconnected();
+			} else {
+				result = await controller.toggle();
+			}
+
+			await sendMarkdown(sessionWebhook, result.message, '🔐 飞连 VPN', result.success ? 'green' : 'orange');
+			if (result.error) {
+				await sendMarkdown(sessionWebhook, result.error, '说明', 'grey');
+			}
 			return;
 		}
 		
