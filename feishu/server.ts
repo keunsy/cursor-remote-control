@@ -2184,11 +2184,15 @@ async function handleInner(
 				result = await controller.toggle();
 			}
 
-			console.log(`[飞连] 执行结果: success=${result.success} message=${result.message.slice(0, 50)}`);
-			await replyCard(messageId, result.message, { title: "飞连 VPN", color: result.success ? "green" : "orange" });
-			if (result.error) {
-				await replyCard(messageId, result.error, { title: "说明", color: "grey" });
-			}
+		console.log(`[飞连] 执行结果: success=${result.success} message=${result.message.slice(0, 50)}`);
+		console.log(`[飞连] 准备发送卡片...`);
+		// 合并主消息和错误说明为一张卡片
+		let fullMessage = result.message;
+		if (result.error) {
+			fullMessage += `\n\n💡 **说明**\n${result.error}`;
+		}
+		const cardId = await replyCard(messageId, fullMessage, { title: "飞连 VPN", color: result.success ? "green" : "orange" });
+		console.log(`[飞连] 卡片已发送, cardId=${cardId}`);
 		} catch (error) {
 			console.error(`[飞连] 执行失败:`, error);
 			await replyCard(messageId, `❌ 执行失败\n\n${error instanceof Error ? error.message : String(error)}`, { title: "飞连 VPN", color: "red" });

@@ -31,24 +31,23 @@ export class FeilianController {
     try {
       const result = await $`ifconfig`.text();
 
-      // 匹配 utun 接口和 IP 地址
-      const utunMatch = result.match(/utun(\d+):([\s\S]*?)(?=\n\w|\n$)/);
-      if (!utunMatch) {
-        return { connected: false };
-      }
+      // 遍历所有 utun 接口，找第一个有 IPv4 地址的
+      const allMatches = result.matchAll(/utun(\d+):([\s\S]*?)(?=\nutun|\n\w+:|\n$)/g);
+      
+      for (const match of allMatches) {
+        const interfaceName = `utun${match[1]}`;
+        const interfaceContent = match[2];
 
-      const interfaceName = `utun${utunMatch[1]}`;
-      const interfaceContent = utunMatch[2];
+        // 提取 IPv4 地址
+        const ipMatch = interfaceContent.match(/inet\s+(\d+\.\d+\.\d+\.\d+)/);
 
-      // 提取 IP 地址
-      const ipMatch = interfaceContent.match(/inet\s+(\d+\.\d+\.\d+\.\d+)/);
-
-      if (ipMatch) {
-        return {
-          connected: true,
-          interface: interfaceName,
-          ipAddress: ipMatch[1]
-        };
+        if (ipMatch) {
+          return {
+            connected: true,
+            interface: interfaceName,
+            ipAddress: ipMatch[1]
+          };
+        }
       }
 
       return { connected: false };
