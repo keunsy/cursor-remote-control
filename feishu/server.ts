@@ -2162,29 +2162,36 @@ async function handleInner(
 	// 处理飞连 VPN 控制指令
 	if (text.match(/^\/(飞连|vpn|feilian)\s*/i)) {
 		console.log(`[飞连] 匹配到指令: ${text}`);
-		const controller = new FeilianController();
-		let result: OperationResult;
+		try {
+			const controller = new FeilianController();
+			let result: OperationResult;
 
-		const command = text.replace(/^\/(飞连|vpn|feilian)\s*/i, "").trim();
+			const command = text.replace(/^\/(飞连|vpn|feilian)\s*/i, "").trim();
+			console.log(`[飞连] 子命令: ${command || '(切换)'}`);
 
-		if (command.match(/^(状态|status)$/i)) {
-			const status = await controller.checkStatus();
-			result = {
-				success: true,
-				message: controller.formatStatus(status),
-				status
-			};
-		} else if (command.match(/^(开|on|connect)$/i)) {
-			result = await controller.ensureConnected();
-		} else if (command.match(/^(关|off|disconnect)$/i)) {
-			result = await controller.ensureDisconnected();
-		} else {
-			result = await controller.toggle();
-		}
+			if (command.match(/^(状态|status)$/i)) {
+				const status = await controller.checkStatus();
+				result = {
+					success: true,
+					message: controller.formatStatus(status),
+					status
+				};
+			} else if (command.match(/^(开|on|connect)$/i)) {
+				result = await controller.ensureConnected();
+			} else if (command.match(/^(关|off|disconnect)$/i)) {
+				result = await controller.ensureDisconnected();
+			} else {
+				result = await controller.toggle();
+			}
 
-		await replyCard(messageId, result.message, { title: "飞连 VPN", color: result.success ? "green" : "orange" });
-		if (result.error) {
-			await replyCard(messageId, result.error, { title: "说明", color: "grey" });
+			console.log(`[飞连] 执行结果: success=${result.success} message=${result.message.slice(0, 50)}`);
+			await replyCard(messageId, result.message, { title: "飞连 VPN", color: result.success ? "green" : "orange" });
+			if (result.error) {
+				await replyCard(messageId, result.error, { title: "说明", color: "grey" });
+			}
+		} catch (error) {
+			console.error(`[飞连] 执行失败:`, error);
+			await replyCard(messageId, `❌ 执行失败\n\n${error instanceof Error ? error.message : String(error)}`, { title: "飞连 VPN", color: "red" });
 		}
 		return;
 	}
