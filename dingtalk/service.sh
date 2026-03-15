@@ -87,18 +87,34 @@ cmd_start() {
 
 cmd_stop() {
     echo "🛑 停止服务..."
+    
     # 先通过 launchd 停止
     launchctl kill SIGTERM "gui/$(id -u)/$LABEL" 2>/dev/null && echo "  ✅ launchd 服务已停止" || echo "  ⚠️  launchd 服务未在运行"
     
     # 等待进程退出
     sleep 1
     
-    # 清理可能残留的进程
-    if pkill -9 -f "bun.*dingtalk.*start" 2>/dev/null; then
-        echo "  ✅ 已清理残留的 bun 进程"
-    fi
-    if pkill -9 -f "caffeinate.*dingtalk" 2>/dev/null; then
-        echo "  ✅ 已清理残留的 caffeinate 进程"
+    # 收集所有相关 PID（基于完整路径匹配）
+    declare -a PIDS=()
+    
+    # 1. 路径匹配
+    while IFS= read -r pid; do
+        [[ -n "$pid" ]] && PIDS+=("$pid")
+    done < <(pgrep -f "cursor-remote-control/dingtalk" 2>/dev/null || true)
+    
+    # 2. lsof 查找工作目录匹配的进程
+    while IFS= read -r pid; do
+        [[ -n "$pid" ]] && PIDS+=("$pid")
+    done < <(lsof +D "$BOT_DIR" 2>/dev/null | awk 'NR>1 {print $2}' | sort -u || true)
+    
+    # 去重并清理
+    PIDS=($(printf "%s\n" "${PIDS[@]}" | sort -u))
+    
+    if [[ ${#PIDS[@]} -gt 0 ]]; then
+        echo "  🔪 清理 ${#PIDS[@]} 个残留进程: ${PIDS[*]}"
+        for pid in "${PIDS[@]}"; do
+            kill -9 "$pid" 2>/dev/null || true
+        done
     fi
     
     echo "  ✅ 服务已完全停止"

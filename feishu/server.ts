@@ -350,20 +350,31 @@ async function replyCard(
 	header?: { title?: string; color?: string },
 ): Promise<string | undefined> {
 	try {
+		console.log(`[replyCard] 调用 messageId=${messageId.slice(0, 20)}... title=${header?.title}`);
+		const cardContent = buildCard(markdown, header);
+		console.log(`[replyCard] 卡片内容长度: ${cardContent.length} 字节`);
+		
 		const res = await larkClient.im.message.reply({
 			path: { message_id: messageId },
-			data: { content: buildCard(markdown, header), msg_type: "interactive" },
+			data: { content: cardContent, msg_type: "interactive" },
 		});
+		
+		console.log(`[replyCard] API 返回: code=${res.code} msg=${res.msg}`);
+		console.log(`[replyCard] 返回 messageId: ${res.data?.message_id}`);
 		return res.data?.message_id;
 	} catch (err) {
 		console.error("[回复卡片失败]", err);
+		console.log("[replyCard] 降级为纯文本消息");
 		try {
 			const res = await larkClient.im.message.reply({
 				path: { message_id: messageId },
 				data: { content: JSON.stringify({ text: markdown }), msg_type: "text" },
 			});
+			console.log(`[replyCard] 纯文本发送成功: ${res.data?.message_id}`);
 			return res.data?.message_id;
-		} catch {}
+		} catch (err2) {
+			console.error("[纯文本回复也失败]", err2);
+		}
 	}
 }
 
