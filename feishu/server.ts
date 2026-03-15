@@ -20,6 +20,7 @@ import WebSocket from "ws";
 import { MemoryManager } from "../shared/memory.js";
 import { Scheduler, type CronJob } from "../shared/scheduler.js";
 import { HeartbeatRunner } from "../shared/heartbeat.js";
+import { FeilianController, type OperationResult } from "../shared/feilian-control.js";
 import { tryRecordMessagePersistent } from "./feishu/dedup.js";
 import { sendMediaFeishu } from "./feishu/media.js";
 
@@ -2149,6 +2150,35 @@ async function handleInner(
 			sessions,
 		].join("\n");
 		await replyCard(messageId, statusText, { title: "服务状态", color: "blue" });
+		return;
+	}
+
+	// 处理飞连 VPN 控制指令
+	if (text.match(/^\/(飞连|vpn|feilian)\s*/i)) {
+		const controller = new FeilianController();
+		let result: OperationResult;
+
+		const command = text.replace(/^\/(飞连|vpn|feilian)\s*/i, "").trim();
+
+		if (command.match(/^(状态|status)$/i)) {
+			const status = await controller.checkStatus();
+			result = {
+				success: true,
+				message: controller.formatStatus(status),
+				status
+			};
+		} else if (command.match(/^(开|on|connect)$/i)) {
+			result = await controller.ensureConnected();
+		} else if (command.match(/^(关|off|disconnect)$/i)) {
+			result = await controller.ensureDisconnected();
+		} else {
+			result = await controller.toggle();
+		}
+
+		await replyCard(messageId, result.message, { title: "飞连 VPN", color: result.success ? "green" : "orange" });
+		if (result.error) {
+			await replyCard(messageId, result.error, { title: "说明", color: "grey" });
+		}
 		return;
 	}
 
