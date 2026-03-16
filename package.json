@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "fast-xml-parser": "^5.5.5"
+    "fast-xml-parser": "^5.5.5",
+    "fastest-levenshtein": "^1.0.16"
   }
 }
