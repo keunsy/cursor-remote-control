@@ -36,6 +36,10 @@ export interface SourceConfig {
 export interface NewsSourcesConfig {
   version: number;
   defaultTopN: number;
+  presets?: {
+    brief?: string[];
+    full?: string[];
+  };
   sources: SourceConfig[];
   aggregation: {
     deduplicateByUrl: boolean;
@@ -50,5 +54,7 @@ export interface NewsSourcesConfig {
     includeDescription: boolean;
     descriptionMaxLength: number;
     includeUrl: boolean;
+    platformOrder?: string[]; // 平台显示顺序
+    platformMaxItems?: Record<string, number>; // 每个平台的最大条数
   };
 }

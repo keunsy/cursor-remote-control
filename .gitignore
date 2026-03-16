@@ -84,3 +84,7 @@ feilian-*.md
 !docs/plans/
 !docs/news-push-usage.md
 !docs/news-push-deployment-checklist.md
+!docs/news-platform-config.md
+
+# 私人新闻源配置（每人不同，不提交）
+config/news-sources.json

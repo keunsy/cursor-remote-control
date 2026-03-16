@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "defaultTopN": 10,
+  "_comment": "简要版配置 - 通过 preset 字段控制版本",
+  "presets": {
+    "brief": ["weibo", "zhihu", "github", "baidu"],
+    "full": ["weibo", "zhihu", "baidu", "douyin", "toutiao", "coolapk", "wallstreetcn", "36kr", "sspai", "github", "v2ex", "juejin", "ithome", "zaobao", "bilibili"]
+  },
+  "sources": [
+    {
+      "id": "newsnow",
+      "name": "NewsNow API",
+      "enabled": true,
+      "type": "newsnow",
+      "config": {
+        "baseUrl": "https://newsnow.busiyi.world",
+        "preset": "brief",
+        "timeout": 10000
+      }
+    }
+  ],
+  "aggregation": {
+    "deduplicateByUrl": true,
+    "deduplicateByTitle": true,
+    "titleSimilarityThreshold": 0.85,
+    "sortBy": "rank"
+  },
+  "formatting": {
+    "maxItemsPerPlatform": 5,
+    "includeRank": true,
+    "includeHotValue": true,
+    "includeDescription": true,
+    "descriptionMaxLength": 100,
+    "includeUrl": true
+  }
+}

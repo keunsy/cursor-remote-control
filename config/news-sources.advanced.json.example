@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "defaultTopN": 10,
+  "sources": [
+    {
+      "id": "newsnow",
+      "name": "NewsNow API",
+      "enabled": true,
+      "type": "newsnow",
+      "config": {
+        "baseUrl": "https://newsnow.busiyi.world",
+        "platforms": ["weibo", "zhihu", "baidu", "douyin", "toutiao", "coolapk", "wallstreetcn", "36kr", "sspai", "github", "v2ex", "juejin", "ithome", "zaobao", "bilibili"],
+        "timeout": 10000
+      }
+    }
+  ],
+  "aggregation": {
+    "deduplicateByUrl": true,
+    "deduplicateByTitle": true,
+    "titleSimilarityThreshold": 0.85,
+    "sortBy": "rank"
+  },
+  "formatting": {
+    "maxItemsPerPlatform": 10,
+    "includeRank": true,
+    "includeHotValue": true,
+    "includeDescription": true,
+    "descriptionMaxLength": 80,
+    "includeUrl": true,
+    
+    "_comment_platformOrder": "可选：指定平台显示顺序，不配置则按自然顺序",
+    "platformOrder": ["微博", "知乎", "GitHub", "V2EX", "掘金", "百度", "抖音", "今日头条", "B站", "IT之家", "酷安", "华尔街见闻", "36氪", "少数派", "前端早报"],
+    
+    "_comment_platformMaxItems": "可选：为特定平台设置不同的显示条数",
+    "platformMaxItems": {
+      "微博": 5,
+      "知乎": 5,
+      "GitHub": 3,
+      "V2EX": 3,
+      "掘金": 3
+    }
+  }
+}

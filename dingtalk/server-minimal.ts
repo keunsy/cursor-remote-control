@@ -1279,7 +1279,7 @@ async function handleMessage(msg: any) {
 		}
 
 		// 检测相对时间新闻推送（X分钟后推送热点、X小时后推送新闻）
-		const relativeNewsMatch = text.match(/(\d+)\s*(分钟|小时)[后以]后\s*(?:推送|发送)?\s*(?:前|top)?\s*(\d+)?\s*条?\s*(?:今日)?\s*(热点|新闻|热榜)/i);
+		const relativeNewsMatch = text.match(/(\d+)\s*(分钟|小时)(?:[后以]后|后)\s*(?:推送|发送)?\s*(?:前|top)?\s*(\d+)?\s*条?\s*(?:今日)?\s*(热点|新闻|热榜)/i);
 		if (relativeNewsMatch) {
 			const [, numStr, unit, topNStr, _] = relativeNewsMatch;
 			const num = parseInt(numStr, 10);
@@ -1308,8 +1308,8 @@ async function handleMessage(msg: any) {
 			return;
 		}
 
-		// 检测新闻推送定时请求（每天9点推送热点、明天上午10点推送新闻）
-		const newsScheduleMatch = text.match(/(每天|明天)\s*(上午|下午)?\s*([0-9一二三四五六七八九十]+)\s*[点时]?\s*(?:推送|发送)?\s*(?:今日)?\s*(热点|新闻|热榜)/i);
+		// 检测新闻推送定时请求（每天/每日 早上/上午 9点 推送热点、明天上午10点推送新闻）
+		const newsScheduleMatch = text.match(/(每天|每日|明天)\s*(早上|上午|下午)?\s*([0-9一二三四五六七八九十]+)\s*[点时]?\s*(?:给我)?\s*(?:推送|发送)?\s*(?:下|今日)?\s*(热点|新闻|热榜)/i);
 		if (newsScheduleMatch) {
 			const [, when, ap, hourStr] = newsScheduleMatch;
 			const numMap: Record<string, number> = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
@@ -1319,10 +1319,11 @@ async function handleMessage(msg: any) {
 			if (topMatch) topN = Math.min(50, Math.max(1, parseInt(topMatch[1], 10)));
 			let schedule: { kind: 'cron'; expr: string; tz?: string } | { kind: 'at'; at: string };
 			let timeDesc: string;
-			if (when === '每天') {
+			if (when === '每天' || when === '每日') {
 				const hour = toNum(hourStr);
-				schedule = { kind: 'cron', expr: `0 ${hour} * * *`, tz: 'Asia/Shanghai' };
-				timeDesc = `每天 ${hour}:00`;
+				const hour24 = ap === '下午' ? (hour % 12) + 12 : hour;
+				schedule = { kind: 'cron', expr: `0 ${hour24} * * *`, tz: 'Asia/Shanghai' };
+				timeDesc = `每天 ${hour24}:00`;
 			} else {
 				let hour = toNum(hourStr);
 				if (ap === '下午') hour = (hour % 12) + 12;

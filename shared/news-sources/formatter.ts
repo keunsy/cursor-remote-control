@@ -7,6 +7,8 @@ export interface FormattingConfig {
   includeDescription: boolean;
   descriptionMaxLength: number;
   includeUrl: boolean;
+  platformOrder?: string[]; // 平台显示顺序
+  platformMaxItems?: Record<string, number>; // 每个平台的最大条数
 }
 
 /** 飞书卡片 JSON 估算限制（字节） */
@@ -51,27 +53,30 @@ function truncate(text: string, maxLen: number): string {
 
 /** 获取排名 emoji */
 function getRankEmoji(rank?: number): string {
-  if (!rank) return '•';
-  if (rank <= 9) return `${rank}️⃣`;
-  return '🔟';
+  if (!rank) return '▪️';
+  const emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
+  return emojis[rank - 1] || '▪️';
 }
 
 /** 格式化单个新闻项（Markdown） */
 function formatItem(item: NewsItem, config: FormattingConfig): string {
   const emoji = getRankEmoji(item.rank);
+  
+  // 标题行
   let result = `${emoji} **${item.title}**`;
-
   if (config.includeHotValue && item.hotValue) {
-    result += ` 🔥 ${item.hotValue}`;
+    result += ` 🔥 \`${item.hotValue}\``;
   }
 
+  // 描述（引用样式）
   if (config.includeDescription && item.description) {
     const desc = truncate(item.description, config.descriptionMaxLength);
-    result += `\n   ${desc}`;
+    result += `\n  > *${desc}*`;
   }
 
+  // 链接
   if (config.includeUrl) {
-    result += `\n   [查看详情](${item.url})`;
+    result += `\n  🔗 [查看原文](${item.url})`;
   }
 
   return result;
@@ -83,8 +88,7 @@ function formatSection(
   items: NewsItem[],
   config: FormattingConfig
 ): string {
-  const divider = '━'.repeat(15);
-  let section = `${divider} ${platform} ${divider}\n`;
+  let section = `\n## 📌 ${platform}\n\n`;
 
   for (const item of items) {
     section += formatItem(item, config) + '\n\n';
@@ -107,17 +111,25 @@ export function formatNewsCard(
     return [emptyMsg];
   }
 
-  const header = `📰 **今日热点新闻** (共 ${items.length} 条)\n\n`;
-  const footer = `\n⏱ 更新时间：${new Date().toLocaleString('zh-CN')}\n📊 数据来源：NewsNow API + RSSHub`;
+  const header = `# 📰 今日热点新闻\n\n📊 共 ${items.length} 条热点  |  ⏱ ${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}\n`;
+  const footer = `\n---\n💡 数据来源：NewsNow API`;
 
   const grouped = groupByPlatform(items);
   const chunks: string[] = [];
   let currentChunk = header;
 
-  for (const [platformName, news] of Object.entries(grouped)) {
+  // 按 platformOrder 排序，如果没配置则使用原顺序
+  const platformOrder = config.platformOrder || Object.keys(grouped);
+  const platformsToShow = platformOrder.filter(p => grouped[p]); // 只显示有数据的平台
+
+  for (const platformName of platformsToShow) {
+    const news = grouped[platformName];
+    // 每个平台的最大条数：优先使用 platformMaxItems，否则用 maxItemsPerPlatform
+    const maxItems = config.platformMaxItems?.[platformName] ?? config.maxItemsPerPlatform;
+    
     const section = formatSection(
       platformName,
-      news.slice(0, config.maxItemsPerPlatform),
+      news.slice(0, maxItems),
       config
     );
 

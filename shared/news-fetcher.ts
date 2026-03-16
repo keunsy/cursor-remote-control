@@ -26,10 +26,10 @@ export interface FetchNewsResult {
 }
 
 /** 工厂函数：根据配置创建数据源实例 */
-function createSource(config: SourceConfig): NewsSource {
+function createSource(config: SourceConfig, globalConfig?: NewsSourcesConfig): NewsSource {
   switch (config.type) {
     case 'newsnow':
-      return new NewsnowSource(config);
+      return new NewsnowSource(config, globalConfig?.presets);
     case 'rsshub':
       return new RSSHubSource(config);
     case 'mock':
@@ -54,7 +54,7 @@ export async function fetchNews(
       if (enabledSources.length === 0) {
         throw new Error('没有启用的数据源');
       }
-      return enabledSources.map(createSource);
+      return enabledSources.map((s) => createSource(s, config));
     })();
 
   // 使用 Promise.allSettled 保证部分源失败时其他源仍正常工作
