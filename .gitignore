@@ -71,6 +71,8 @@ cron-jobs-feishu.json
 feilian-*.md
 *-research.md
 *-test-report.md
+TEST-*.md
+*-REPORT.md
 
 # 根目录 AGENTS.md（包含本机路径，使用 .cursor/AGENTS.md 代替）
 /AGENTS.md
