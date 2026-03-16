@@ -82,3 +82,4 @@ feilian-*.md
 /feishu/templates/
 /docs/
 !docs/plans/
+!docs/news-push-usage.md

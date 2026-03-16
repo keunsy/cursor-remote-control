@@ -110,6 +110,7 @@ cursor-remote-control/
 - 🚀 **双渠道支持**: 飞书和钉钉独立部署，可同时运行
 - 💾 **记忆系统**: SQLite 向量数据库 + FTS5 全文搜索
 - ⏰ **定时任务**: AI 创建的 Cron 任务，自动执行并推送通知
+- 📰 **热点新闻推送**: 定时抓取多平台热榜并推送（微博/知乎/百度等）
 - ❤️ **心跳检查**: 定期后台维护（整理记忆、检查状态）
 - 🎙️ **语音识别**: 火山引擎豆包 STT → 本地 whisper-cpp 降级
 - 🖼️ **图片处理**: 自动下载和 OCR 识别
@@ -264,6 +265,7 @@ bash manage-services.sh logs dingtalk    # 查看钉钉日志
 | `/memory 关键词` | `/记忆 关键词` | 语义搜索记忆 |
 | `/log 内容` | `/记录 内容` | 写入今日日记 |
 | `/任务` | `/cron` `/定时` | 查看/管理定时任务 |
+| `/新闻状态` | `/news` `/health` | 查看新闻数据源健康状态（飞书） |
 | `/心跳` | `/heartbeat` | 查看/管理心跳系统 |
 | `/飞连` | `/vpn` `/feilian` | 远程控制飞连 VPN（开/关/状态） |
 | `/发送文件 <路径>` | `/sendfile` `/send` | **飞书专用** - 发送本地文件（最大 30MB） |
@@ -296,6 +298,24 @@ cp projects.json.example projects.json
 - `切换到 mycode` → 持久切换到代码项目
 
 **注意**：`projects.json` 已加入 `.gitignore`，不会提交到仓库（本机配置）。
+
+### 热点新闻定时推送 🆕
+
+在飞书或钉钉对话中说：
+
+> **每天 9 点推送热点**
+
+系统会自动创建定时任务，到点推送微博、知乎、百度等平台的热榜新闻。
+
+| 说法示例 | 说明 |
+|----------|------|
+| 每天 9 点推送热点 | 每天 9:00 推送 |
+| 18:00 推送热榜 | 每天 18:00 推送 |
+| `/任务 执行 <ID>` | 立即执行一次 |
+
+**详细文档**：[docs/news-push-usage.md](docs/news-push-usage.md)
+
+---
 
 ### 飞连 VPN 远程控制
 
@@ -373,6 +393,7 @@ bun run send-file.ts /path/to/file.apk <接收人ID>
 | `projects.json` | 你的实际项目路径 | ❌ 已忽略 |
 | `cron-jobs-*.json.example` | 空的定时任务模板 | ✅ 提交到仓库 |
 | `cron-jobs-*.json` | AI 创建的定时任务 | ❌ 已忽略 |
+| `config/news-sources.json` | 新闻数据源配置 | ✅ 提交到仓库 |
 | `feishu/.env` / `dingtalk/.env` | 实际凭据 | ❌ 已忽略 |
 
 **首次安装**：从 `.example` 文件复制创建配置  
@@ -454,6 +475,7 @@ A: 可以！两个服务独立运行，互不干扰，共享 `projects.json` 配
 
 - **飞书服务**: [feishu/README.md](feishu/README.md) - 完整的飞书配置、功能说明和使用指南
 - **钉钉服务**: [dingtalk/README.md](dingtalk/README.md) - 完整的钉钉配置、功能说明和使用指南
+- **热点新闻推送**: [docs/news-push-usage.md](docs/news-push-usage.md) - 新闻推送功能使用文档
 - **个人配置**: [飞书-Cursor-快速参考](docs/飞书-Cursor-快速参考.md) - 项目快捷路由配置
 
 ---
