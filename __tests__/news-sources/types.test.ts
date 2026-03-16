@@ -5,7 +5,7 @@ import type {
   NewsSource,
   SourceConfig,
   NewsSourcesConfig,
-} from '../types';
+} from '../../shared/news-sources/../shared/news-sources/types';
 
 describe('NewsItem', () => {
   test('应包含必填字段 platform, title, url', () => {

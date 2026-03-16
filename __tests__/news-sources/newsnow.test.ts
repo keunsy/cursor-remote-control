@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { NewsnowSource } from '../newsnow';
-import type { SourceConfig } from '../types';
+import { NewsnowSource } from '../../shared/news-sources/newsnow';
+import type { SourceConfig } from '../../shared/news-sources/types';
 
 const MOCK_API_RESPONSE_DATA_ITEMS = {
   data: {

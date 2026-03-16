@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
-import { formatNewsCard, groupByPlatform } from '../formatter';
-import type { NewsItem } from '../types';
+import { formatNewsCard, groupByPlatform } from '../../shared/news-sources/formatter';
+import type { NewsItem } from '../../shared/news-sources/types';
 
 const defaultConfig = {
   maxItemsPerPlatform: 10,

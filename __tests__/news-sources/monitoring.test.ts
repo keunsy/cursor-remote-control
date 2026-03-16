@@ -5,7 +5,7 @@ import {
   getSourceHealthStatuses,
   getMetrics,
   resetMetrics,
-} from '../monitoring';
+} from '../../shared/news-sources/monitoring';
 
 describe('monitoring', () => {
   beforeEach(() => {

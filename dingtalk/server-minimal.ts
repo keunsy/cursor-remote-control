@@ -1311,11 +1311,13 @@ async function handleMessage(msg: any) {
 			return;
 		}
 		
-		// 检测「每个工作日 HH点/HH:MM/HH点MM 提醒」请求，服务器端直接创建
-		const weekdayScheduleMatch = text.match(/每个工作日\s*(\d{1,2})(?:[.:：](\d{1,2})|点(\d{1,2})|点)?\s*(?:提醒|通知)?(?:我)?\s*(.+)$/i);
+		// 检测「每个工作日 HH点/HH:MM/HH点MM/HH点 MM分 提醒」请求，服务器端直接创建
+		const weekdayScheduleMatch = text.match(/每个工作日\s*(\d{1,2})(?:[.:：](\d{1,2})|点\s*(\d{1,2})\s*分?|点)?\s*(?:提醒|通知)?(?:我)?\s*(.+)$/i);
 		if (weekdayScheduleMatch) {
-			const [, hourStr, minStr, taskMessage] = weekdayScheduleMatch;
+			const [, hourStr, minStr1, minStr2, taskMessage] = weekdayScheduleMatch;
 			const hour = Math.min(23, Math.max(0, parseInt(hourStr!, 10) || 14));
+			// 分钟可能来自 `:45` (minStr1) 或 `点45` (minStr2)
+			const minStr = minStr1 || minStr2;
 			const minute = minStr != null && minStr !== '' ? Math.min(59, Math.max(0, parseInt(minStr, 10) || 0)) : 0;
 			const task = await scheduler.add({
 				name: '工作日提醒',

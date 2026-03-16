@@ -5,8 +5,8 @@
  * 所有外部依赖（fetch、sendCard、sendMarkdown）均通过 mock 注入
  */
 import { describe, test, expect } from 'bun:test';
-import { fetchNews } from '../news-fetcher';
-import type { NewsSourcesConfig, NewsSource, NewsItem } from '../news-sources/types';
+import { fetchNews } from '../shared/news-fetcher';
+import type { NewsSourcesConfig, NewsSource, NewsItem } from '../shared/news-sources/types';
 
 // ── Mock 工厂 ─────────────────────────────────────────────────────────────
 

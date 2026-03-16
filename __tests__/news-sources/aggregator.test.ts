@@ -4,8 +4,8 @@ import {
   deduplicateByTitle,
   sortItems,
   aggregateNews,
-} from '../aggregator';
-import type { NewsItem } from '../types';
+} from '../../shared/news-sources/aggregator';
+import type { NewsItem } from '../../shared/news-sources/types';
 
 describe('aggregator', () => {
   describe('deduplicateByUrl', () => {

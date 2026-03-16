@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { RSSHubSource } from '../rsshub';
-import type { SourceConfig } from '../types';
+import { RSSHubSource } from '../../shared/news-sources/rsshub';
+import type { SourceConfig } from '../../shared/news-sources/types';
 
 /** 标准 RSS 2.0 格式 XML（RSSHub 返回格式） */
 const MOCK_RSS_XML = `<?xml version="1.0" encoding="UTF-8"?>

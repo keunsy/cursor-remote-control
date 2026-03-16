@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
-import { fetchNews } from '../news-fetcher';
-import type { NewsSourcesConfig, NewsSource, NewsItem } from '../news-sources/types';
+import { fetchNews } from '../shared/news-fetcher';
+import type { NewsSourcesConfig, NewsSource, NewsItem } from '../shared/news-sources/types';
 
 /** 双源启用的测试配置（newsnow + rsshub） */
 const dualSourceConfig: NewsSourcesConfig = {

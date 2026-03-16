@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { loadConfig, getEnabledSources } from '../config-loader';
-import type { NewsSourcesConfig } from '../types';
+import { loadConfig, getEnabledSources } from '../../shared/news-sources/config-loader';
+import type { NewsSourcesConfig } from '../../shared/news-sources/types';
 
 const DEFAULT_CONFIG_PATH = 'config/news-sources.json';
 
