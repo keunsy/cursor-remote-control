@@ -2232,17 +2232,37 @@ async function handleInner(
 		let topN = 15;
 		const topMatch = args.match(/(?:推送|前|top)\s*(\d+)\s*条/i) ?? args.match(/(\d+)\s*条/i);
 		if (topMatch) topN = Math.min(50, Math.max(1, parseInt(topMatch[1], 10)));
+		
+		// 支持多种时间表达式
 		const dailyMatch = args.match(/每天\s*([0-9一二三四五六七八九十]+)\s*[点时]/);
 		const tomorrowMatch = args.match(/明天\s*(上午|下午)?\s*([0-9一二三四五六七八九十]+)\s*[点时]/);
+		const minutesMatch = args.match(/(\d+)\s*分钟[后以]后/);
+		const hoursMatch = args.match(/(\d+)\s*[个小]时[后以]后/);
+		
 		const numMap: Record<string, number> = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
 		const toNum = (s: string) => (numMap[s] ?? parseInt(s, 10)) || 9;
 		let schedule: { kind: "cron"; expr: string; tz?: string } | { kind: "at"; at: string };
 		let timeDesc: string;
-		if (dailyMatch) {
+		
+		if (minutesMatch) {
+			// X分钟后
+			const minutes = parseInt(minutesMatch[1], 10);
+			const d = new Date(Date.now() + minutes * 60 * 1000);
+			schedule = { kind: "at", at: d.toISOString() };
+			timeDesc = `${minutes}分钟后（${d.toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Shanghai' })}）`;
+		} else if (hoursMatch) {
+			// X小时后
+			const hours = parseInt(hoursMatch[1], 10);
+			const d = new Date(Date.now() + hours * 60 * 60 * 1000);
+			schedule = { kind: "at", at: d.toISOString() };
+			timeDesc = `${hours}小时后（${d.toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Shanghai' })}）`;
+		} else if (dailyMatch) {
+			// 每天X点
 			const hour = toNum(dailyMatch[1]);
 			schedule = { kind: "cron", expr: `0 ${hour} * * *`, tz: "Asia/Shanghai" };
 			timeDesc = `每天 ${hour}:00`;
 		} else if (tomorrowMatch) {
+			// 明天X点
 			const ap = tomorrowMatch[1];
 			let hour = toNum(tomorrowMatch[2]);
 			if (ap === "下午") hour = (hour % 12) + 12;
@@ -2252,6 +2272,7 @@ async function handleInner(
 			schedule = { kind: "at", at: d.toISOString() };
 			timeDesc = `明天 ${hour}:00`;
 		} else {
+			// 默认每天9点
 			const hour = 9;
 			schedule = { kind: "cron", expr: `0 ${hour} * * *`, tz: "Asia/Shanghai" };
 			timeDesc = `每天 ${hour}:00（默认）`;
