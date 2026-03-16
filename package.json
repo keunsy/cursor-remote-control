@@ -1,0 +1,9 @@
+{
+  "name": "cursor-remote-control",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "fast-xml-parser": "^5.5.5"
+  }
+}
