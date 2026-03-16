@@ -18,6 +18,7 @@ import axios from 'axios';
 import { execFileSync } from 'node:child_process';
 import { Scheduler, type CronJob } from '../shared/scheduler.js';
 import { MemoryManager } from '../shared/memory.js';
+import { fetchNews } from '../shared/news-fetcher.js';
 import { HeartbeatRunner } from '../shared/heartbeat.js';
 import { FeilianController, type OperationResult } from '../shared/feilian-control.js';
 
@@ -1265,6 +1266,49 @@ async function handleMessage(msg: any) {
 			await sendMarkdown(sessionWebhook, `未找到项目「${routeIntent.project}」。\n\n可用项目（长按复制）：\n\`\`\`\n${names.join('\n')}\n\`\`\`\n\n请检查 \`projects.json\` 或使用上述项目名。`, '未找到项目', 'orange');
 			return;
 		}
+
+		// 检测新闻推送定时请求（每天9点推送热点、明天上午10点推送新闻）
+		const newsScheduleMatch = text.match(/(每天|明天)\s*(上午|下午)?\s*([0-9一二三四五六七八九十]+)\s*[点时]?\s*(?:推送|发送)?\s*(?:今日)?\s*(热点|新闻|热榜)/i);
+		if (newsScheduleMatch) {
+			const [, when, ap, hourStr] = newsScheduleMatch;
+			const numMap: Record<string, number> = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+			const toNum = (s: string) => (numMap[s] ?? parseInt(s, 10)) || 9;
+			let topN = 15;
+			const topMatch = text.match(/(?:推送|前)\s*(\d+)\s*条/i);
+			if (topMatch) topN = Math.min(50, Math.max(1, parseInt(topMatch[1], 10)));
+			let schedule: { kind: 'cron'; expr: string; tz?: string } | { kind: 'at'; at: string };
+			let timeDesc: string;
+			if (when === '每天') {
+				const hour = toNum(hourStr);
+				schedule = { kind: 'cron', expr: `0 ${hour} * * *`, tz: 'Asia/Shanghai' };
+				timeDesc = `每天 ${hour}:00`;
+			} else {
+				let hour = toNum(hourStr);
+				if (ap === '下午') hour = (hour % 12) + 12;
+				const d = new Date();
+				d.setDate(d.getDate() + 1);
+				d.setHours(hour, 0, 0, 0);
+				schedule = { kind: 'at', at: d.toISOString() };
+				timeDesc = `明天 ${hour}:00`;
+			}
+			const message = JSON.stringify({ type: 'fetch-news', options: { topN } });
+			await scheduler.add({
+				name: '热点新闻推送',
+				enabled: true,
+				deleteAfterRun: false,
+				schedule,
+				message,
+				platform: 'dingtalk',
+				webhook: sessionWebhook,
+			});
+			await sendMarkdown(
+				sessionWebhook,
+				`✅ 已创建定时任务\n\n⏰ 执行时间：${timeDesc}\n📰 推送内容：今日热点新闻（前 ${topN} 条）\n📱 到时会通过**钉钉**提醒你\n\n发送 \`/任务\` 可查看所有任务`,
+				'⏰ 定时任务已创建',
+				'green'
+			);
+			return;
+		}
 		
 		// 检测简单定时任务请求，服务器端直接创建（不依赖 Agent）
 		const simpleScheduleMatch = text.match(/^(\d+)(分钟|小时)后\s*(?:提醒|通知)?(?:我)?\s*(.+)$/i);
@@ -1340,8 +1384,9 @@ async function handleMessage(msg: any) {
 				'',
 				'**定时任务**',
 				`- ${c('/任务', '/cron')} — 查看所有定时任务`,
+				`- ${c('/新闻', '/news')} — 创建热点新闻定时推送（如：/新闻 每天9点 推送10条）`,
 				'- `/任务 暂停/恢复/删除/执行 ID`',
-				'- 或在对话中说「每天早上9点做XX」由 AI 自动创建',
+				'- 或在对话中说「每天早上9点做XX」或「每天9点推送热点」由 AI 自动创建',
 				'',
 			'**心跳系统**',
 			`- ${c('/心跳', '/heartbeat')} — 查看心跳状态`,
@@ -1416,6 +1461,55 @@ async function handleMessage(msg: any) {
 				sessions,
 			].join('\n');
 			await sendMarkdown(sessionWebhook, statusText, '📊 服务状态', 'blue');
+			return;
+		}
+
+		// /新闻、/news → 创建热点新闻定时推送任务
+		if (message.match(/^\/(新闻|news)\s*/i)) {
+			const args = message.replace(/^\/(新闻|news)\s*/i, '').trim();
+			let topN = 15;
+			const topMatch = args.match(/(?:推送|前|top)\s*(\d+)\s*条/i) ?? args.match(/(\d+)\s*条/i);
+			if (topMatch) topN = Math.min(50, Math.max(1, parseInt(topMatch[1], 10)));
+			const dailyMatch = args.match(/每天\s*([0-9一二三四五六七八九十]+)\s*[点时]/);
+			const tomorrowMatch = args.match(/明天\s*(上午|下午)?\s*([0-9一二三四五六七八九十]+)\s*[点时]/);
+			const numMap: Record<string, number> = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+			const toNum = (s: string) => (numMap[s] ?? parseInt(s, 10)) || 9;
+			let schedule: { kind: 'cron'; expr: string; tz?: string } | { kind: 'at'; at: string };
+			let timeDesc: string;
+			if (dailyMatch) {
+				const hour = toNum(dailyMatch[1]);
+				schedule = { kind: 'cron', expr: `0 ${hour} * * *`, tz: 'Asia/Shanghai' };
+				timeDesc = `每天 ${hour}:00`;
+			} else if (tomorrowMatch) {
+				const ap = tomorrowMatch[1];
+				let hour = toNum(tomorrowMatch[2]);
+				if (ap === '下午') hour = (hour % 12) + 12;
+				const d = new Date();
+				d.setDate(d.getDate() + 1);
+				d.setHours(hour, 0, 0, 0);
+				schedule = { kind: 'at', at: d.toISOString() };
+				timeDesc = `明天 ${hour}:00`;
+			} else {
+				const hour = 9;
+				schedule = { kind: 'cron', expr: `0 ${hour} * * *`, tz: 'Asia/Shanghai' };
+				timeDesc = `每天 ${hour}:00（默认）`;
+			}
+			const msg = JSON.stringify({ type: 'fetch-news', options: { topN } });
+			await scheduler.add({
+				name: '热点新闻推送',
+				enabled: true,
+				deleteAfterRun: false,
+				schedule,
+				message: msg,
+				platform: 'dingtalk',
+				webhook: sessionWebhook,
+			});
+			await sendMarkdown(
+				sessionWebhook,
+				`✅ 已创建定时任务\n\n⏰ 执行时间：${timeDesc}\n📰 推送内容：今日热点新闻（前 ${topN} 条）\n📱 到时会通过**钉钉**提醒你\n\n发送 \`/任务\` 可查看所有任务`,
+				'⏰ 定时任务已创建',
+				'green'
+			);
 			return;
 		}
 		
@@ -2123,7 +2217,35 @@ const scheduler = new Scheduler({
 	storePath: cronStorePath,
 	defaultWorkspace,
 	onExecute: async (job: CronJob) => {
-		// 直接返回提醒内容，不经过 Agent
+		// 新闻推送任务：动态抓取并格式化
+		const msg = job.message;
+		const isNews =
+			msg === "fetch-news" ||
+			msg === '{"type":"fetch-news"}' ||
+			(typeof msg === "string" && msg.startsWith('{"type":"fetch-news"'));
+		if (isNews) {
+			try {
+				let topN = 15;
+				if (typeof msg === "string" && msg.startsWith("{")) {
+					try {
+						const parsed = JSON.parse(msg) as { type?: string; options?: { topN?: number } };
+						topN = parsed.options?.topN ?? 15;
+					} catch {}
+				}
+				console.log(`[定时] 开始抓取热点新闻 topN=${topN}`);
+				const { messages } = await fetchNews({ topN, platform: "dingtalk" });
+				console.log(`[定时] 成功抓取 ${messages.length} 批消息`);
+				if (messages.length > 1) {
+					return { status: "ok" as const, result: JSON.stringify({ chunks: messages }) };
+				}
+				return { status: "ok" as const, result: messages[0] ?? "" };
+			} catch (err) {
+				console.error(`[定时] 新闻抓取失败:`, err);
+				const fallback = `⚠️ 热点抓取失败\n\n${err instanceof Error ? err.message : String(err)}\n\n稍后会自动重试`;
+				return { status: "error" as const, error: String(err), result: fallback };
+			}
+		}
+		// 普通提醒任务
 		console.log(`[定时] 触发任务: ${job.name}`);
 		return { status: 'ok' as const, result: job.message };
 	},
@@ -2140,19 +2262,39 @@ const scheduler = new Scheduler({
 			console.log(`[调度] 任务 ${job.name} 属于 ${job.platform}，跳过钉钉推送`);
 			return;
 		}
-		
-		// 发送提醒内容（优化格式）
-		const now = new Date();
-		const timeStr = now.toLocaleString('zh-CN', { 
-			month: '2-digit', 
-			day: '2-digit',
-			hour: '2-digit', 
-			minute: '2-digit',
-			hour12: false 
-		});
-		const content = `**${result}**\n\n⏱ 提醒时间：${timeStr}\n📌 任务名称：${job.name}`;
-		await sendMarkdown(webhook, content, '⏰ 定时提醒');
-		console.log(`[定时] 钉钉提醒已发送: ${result}`);
+
+		// 多消息分片：result 为 JSON { chunks: string[] }（新闻任务）
+		let chunks: string[] | null = null;
+		try {
+			const parsed = JSON.parse(result) as { chunks?: string[] };
+			if (parsed && Array.isArray(parsed.chunks) && parsed.chunks.length > 0) {
+				chunks = parsed.chunks;
+			}
+		} catch {}
+
+		if (chunks) {
+			for (let i = 0; i < chunks.length; i++) {
+				const title = chunks.length > 1 ? `📰 今日热点 (${i + 1}/${chunks.length})` : "📰 今日热点";
+				await sendMarkdown(webhook, chunks[i], title, 'blue');
+				if (i < chunks.length - 1) {
+					await new Promise(r => setTimeout(r, 500));
+				}
+			}
+			console.log(`[定时] 钉钉新闻已发送: ${chunks.length} 条`);
+		} else {
+			// 发送提醒内容（优化格式）
+			const now = new Date();
+			const timeStr = now.toLocaleString('zh-CN', {
+				month: '2-digit',
+				day: '2-digit',
+				hour: '2-digit',
+				minute: '2-digit',
+				hour12: false
+			});
+			const content = `**${result}**\n\n⏱ 提醒时间：${timeStr}\n📌 任务名称：${job.name}`;
+			await sendMarkdown(webhook, content, '⏰ 定时提醒');
+			console.log(`[定时] 钉钉提醒已发送: ${result}`);
+		}
 	},
 	log: (msg: string) => console.log(`[调度] ${msg}`),
 });
