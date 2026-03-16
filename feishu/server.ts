@@ -2177,10 +2177,10 @@ async function handleInner(
 			const controller = new FeilianController();
 			let result: OperationResult;
 
-			const command = text.replace(/^\/(飞连|vpn|feilian)\s*/i, "").trim();
-			console.log(`[飞连] 子命令: ${command || '(切换)'}`);
+		const command = text.replace(/^\/(飞连|vpn|feilian)\s*/i, "").trim();
+		console.log(`[飞连] 子命令: ${command || '(切换)'}`);
 
-			if (command.match(/^(状态|status)$/i)) {
+		if (command.match(/^(状态|status)$/i)) {
 				const status = await controller.checkStatus();
 				result = {
 					success: true,

@@ -104,8 +104,8 @@ export class FeilianController {
       if (beforeStatus.connected === afterStatus.connected) {
         return {
           success: false,
-          message: "⚠️ 锁屏状态下操作可能失效",
-          error: "建议：解锁屏幕后再发送 /飞连 指令",
+          message: "⚠️ VPN 状态未改变（可能因锁屏限制）",
+          error: `🔓 **解决方法**\n\n1. 解锁 Mac 屏幕\n2. 重新发送 \`/vpn ${beforeStatus.connected ? '关' : '开'}\`\n\n💡 或在解锁状态下配置「飞连自动连接」`,
           status: afterStatus
         };
       }
