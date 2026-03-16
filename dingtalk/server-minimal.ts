@@ -22,6 +22,7 @@ import { fetchNews } from '../shared/news-fetcher.js';
 import { getHealthStatus } from '../shared/news-sources/monitoring.js';
 import { HeartbeatRunner } from '../shared/heartbeat.js';
 import { FeilianController, type OperationResult } from '../shared/feilian-control.js';
+import { humanizeCronInChinese } from 'cron-chinese';
 
 const HOME = process.env.HOME!;
 const ROOT = resolve(import.meta.dirname, '..');
@@ -71,6 +72,15 @@ function formatElapsed(seconds: number): string {
 function isQuotaError(error: Error): boolean {
 	const msg = (error instanceof Error ? error.message : String(error ?? '')).toLowerCase();
 	return /insufficient.*(balance|credit|quota)|余额不足|quota.*exceeded/i.test(msg);
+}
+
+/** 解析 cron 表达式为中文描述（使用 cron-chinese 库） */
+function parseCronToHuman(expr: string): string | null {
+	try {
+		return humanizeCronInChinese(expr);
+	} catch {
+		return null;
+	}
 }
 
 // ── 配置 ─────────────────────────────────────────
@@ -1268,6 +1278,36 @@ async function handleMessage(msg: any) {
 			return;
 		}
 
+		// 检测相对时间新闻推送（X分钟后推送热点、X小时后推送新闻）
+		const relativeNewsMatch = text.match(/(\d+)\s*(分钟|小时)[后以]后\s*(?:推送|发送)?\s*(?:前|top)?\s*(\d+)?\s*条?\s*(?:今日)?\s*(热点|新闻|热榜)/i);
+		if (relativeNewsMatch) {
+			const [, numStr, unit, topNStr, _] = relativeNewsMatch;
+			const num = parseInt(numStr, 10);
+			const topN = topNStr ? Math.min(50, Math.max(1, parseInt(topNStr, 10))) : 15;
+			const minutes = unit === '小时' ? num * 60 : num;
+			const runAtMs = Date.now() + minutes * 60 * 1000;
+			const runAt = new Date(runAtMs);
+			const timeDesc = `${num}${unit}后（${runAt.toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Shanghai' })}）`;
+			
+			const msg = JSON.stringify({ type: 'fetch-news', options: { topN } });
+			await scheduler.add({
+				name: '热点新闻推送',
+				enabled: true,
+				deleteAfterRun: true, // 相对时间任务执行一次后删除
+				schedule: { kind: 'at', at: runAt.toISOString() },
+				message: msg,
+				platform: 'dingtalk',
+				webhook: sessionWebhook,
+			});
+			await sendMarkdown(
+				sessionWebhook,
+				`✅ 已创建定时任务\n\n⏰ 执行时间：${timeDesc}\n📰 推送内容：今日热点新闻（前 ${topN} 条）\n📱 到时会通过**钉钉**提醒你\n\n发送 \`/任务\` 可查看所有任务`,
+				'⏰ 定时任务已创建',
+				'green'
+			);
+			return;
+		}
+
 		// 检测新闻推送定时请求（每天9点推送热点、明天上午10点推送新闻）
 		const newsScheduleMatch = text.match(/(每天|明天)\s*(上午|下午)?\s*([0-9一二三四五六七八九十]+)\s*[点时]?\s*(?:推送|发送)?\s*(?:今日)?\s*(热点|新闻|热榜)/i);
 		if (newsScheduleMatch) {
@@ -1843,7 +1883,12 @@ async function handleMessage(msg: any) {
 					} else if (j.schedule.kind === 'every') {
 						schedDesc = `每 ${Math.round(j.schedule.everyMs / 60000)} 分钟`;
 					} else {
-						schedDesc = `cron: ${j.schedule.expr}`;
+						try {
+							const humanReadable = humanizeCronInChinese(j.schedule.expr);
+							schedDesc = `${humanReadable}\n   表达式: \`${j.schedule.expr}\``;
+						} catch {
+							schedDesc = `cron: ${j.schedule.expr}`;
+						}
 					}
 					const lastRun = j.state?.lastRunAtMs ? new Date(j.state.lastRunAtMs).toLocaleString('zh-CN') : '从未执行';
 					const content = j.message ? `\n   内容: ${j.message}` : "";
