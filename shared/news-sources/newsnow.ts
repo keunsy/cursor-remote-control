@@ -1,4 +1,5 @@
 import type { NewsSource, NewsItem, FetchOptions, SourceConfig } from './types';
+import { recordMetrics } from './monitoring';
 
 /** newsnow API 响应格式（支持 data.items 或 data 数组） */
 interface NewsnowApiItem {
@@ -30,23 +31,36 @@ export class NewsnowSource implements NewsSource {
   }
 
   async fetch(options: FetchOptions): Promise<NewsItem[]> {
+    const start = Date.now();
     const targetPlatforms = options.platforms || this.platforms;
     const results: NewsItem[] = [];
 
-    for (const platform of targetPlatforms) {
-      try {
-        const items = await this.fetchPlatform(platform, options.topN);
-        results.push(...items);
-      } catch (err) {
-        console.error(`[newsnow] ${platform} 失败:`, err);
-        // 超时错误向上抛出，让调用方感知
-        if (err instanceof Error && err.message === '请求超时') {
-          throw err;
+    try {
+      for (const platform of targetPlatforms) {
+        try {
+          const items = await this.fetchPlatform(platform, options.topN);
+          results.push(...items);
+        } catch (err) {
+          console.error(`[newsnow] ${platform} 失败:`, err);
+          // 超时错误向上抛出，让调用方感知
+          if (err instanceof Error && err.message === '请求超时') {
+            throw err;
+          }
         }
       }
-    }
 
-    return results;
+      recordMetrics(this.id, true, Date.now() - start, results.length);
+      return results;
+    } catch (err) {
+      recordMetrics(
+        this.id,
+        false,
+        Date.now() - start,
+        0,
+        err instanceof Error ? err.message : String(err)
+      );
+      throw err;
+    }
   }
 
   private async fetchPlatform(platform: string, topN: number): Promise<NewsItem[]> {

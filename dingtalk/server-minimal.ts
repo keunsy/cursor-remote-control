@@ -19,6 +19,7 @@ import { execFileSync } from 'node:child_process';
 import { Scheduler, type CronJob } from '../shared/scheduler.js';
 import { MemoryManager } from '../shared/memory.js';
 import { fetchNews } from '../shared/news-fetcher.js';
+import { getHealthStatus } from '../shared/news-sources/monitoring.js';
 import { HeartbeatRunner } from '../shared/heartbeat.js';
 import { FeilianController, type OperationResult } from '../shared/feilian-control.js';
 
@@ -1385,6 +1386,7 @@ async function handleMessage(msg: any) {
 				'**定时任务**',
 				`- ${c('/任务', '/cron')} — 查看所有定时任务`,
 				`- ${c('/新闻', '/news')} — 创建热点新闻定时推送（如：/新闻 每天9点 推送10条）`,
+				`- ${c('/新闻状态', '/news status 或 /health')} — 查看数据源健康状态`,
 				'- `/任务 暂停/恢复/删除/执行 ID`',
 				'- 或在对话中说「每天早上9点做XX」或「每天9点推送热点」由 AI 自动创建',
 				'',
@@ -1461,6 +1463,14 @@ async function handleMessage(msg: any) {
 				sessions,
 			].join('\n');
 			await sendMarkdown(sessionWebhook, statusText, '📊 服务状态', 'blue');
+			return;
+		}
+
+		// /新闻状态、/news status、/health → 新闻源健康状态（必须在 /新闻 之前检查）
+		const newsStatusMatch = message.match(/^\/(新闻状态|news\s+status|health)[\s:：]*$/i);
+		if (newsStatusMatch) {
+			const status = getHealthStatus();
+			await sendMarkdown(sessionWebhook, status, '📊 新闻源健康状态', 'blue');
 			return;
 		}
 

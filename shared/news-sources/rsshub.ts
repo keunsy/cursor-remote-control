@@ -1,5 +1,6 @@
 import { XMLParser } from 'fast-xml-parser';
 import type { NewsSource, NewsItem, FetchOptions, SourceConfig } from './types';
+import { recordMetrics } from './monitoring';
 
 /** RSS 2.0 解析后的 item 结构 */
 interface RssItem {
@@ -37,21 +38,35 @@ export class RSSHubSource implements NewsSource {
   }
 
   async fetch(options: FetchOptions): Promise<NewsItem[]> {
+    const start = Date.now();
     const results: NewsItem[] = [];
 
-    for (const feed of this.feeds) {
-      try {
-        const items = await this.fetchFeed(feed, options.topN);
-        results.push(...items);
-      } catch (err) {
-        console.error(`[rsshub] ${feed} 失败:`, err);
-        if (err instanceof Error && err.message === '请求超时') {
-          throw err;
+    try {
+      for (const feed of this.feeds) {
+        try {
+          const items = await this.fetchFeed(feed, options.topN);
+          results.push(...items);
+        } catch (err) {
+          console.error(`[rsshub] ${feed} 失败:`, err);
+          if (err instanceof Error && err.message === '请求超时') {
+            throw err;
+          }
         }
       }
-    }
 
-    return results.slice(0, options.topN);
+      const sliced = results.slice(0, options.topN);
+      recordMetrics(this.id, true, Date.now() - start, sliced.length);
+      return sliced;
+    } catch (err) {
+      recordMetrics(
+        this.id,
+        false,
+        Date.now() - start,
+        0,
+        err instanceof Error ? err.message : String(err)
+      );
+      throw err;
+    }
   }
 
   private async fetchFeed(feed: string, topN: number): Promise<NewsItem[]> {

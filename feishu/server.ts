@@ -22,6 +22,7 @@ import { Scheduler, type CronJob } from "../shared/scheduler.js";
 import { HeartbeatRunner } from "../shared/heartbeat.js";
 import { FeilianController, type OperationResult } from "../shared/feilian-control.js";
 import { fetchNews } from "../shared/news-fetcher.js";
+import { getHealthStatus } from "../shared/news-sources/monitoring.js";
 import { tryRecordMessagePersistent } from "./feishu/dedup.js";
 import { sendMediaFeishu } from "./feishu/media.js";
 
@@ -2152,6 +2153,7 @@ async function handleInner(
 			`- ${c("/任务", "/cron")} — 查看所有定时任务`,
 			"- `/任务 暂停/恢复/删除/执行 ID`",
 			`- ${c("/新闻", "/news")} — 创建热点新闻定时推送（如：/新闻 每天9点 推送10条）`,
+			`- ${c("/新闻状态", "/news status 或 /health")} — 查看数据源健康状态`,
 			"- 或在对话中说「每天早上9点做XX」「每天9点推送热点」由 AI 自动创建",
 			"",
 		"**心跳系统**",
@@ -2213,6 +2215,14 @@ async function handleInner(
 			sessions,
 		].join("\n");
 		await replyCard(messageId, statusText, { title: "服务状态", color: "blue" });
+		return;
+	}
+
+	// /新闻状态、/news status、/health → 新闻源健康状态（必须在 /新闻 之前检查）
+	const newsStatusMatch = text.match(/^\/(新闻状态|news\s+status|health)[\s:：]*$/i);
+	if (newsStatusMatch) {
+		const status = getHealthStatus();
+		await replyCard(messageId, status, { title: "📊 新闻源健康状态", color: "blue" });
 		return;
 	}
 
