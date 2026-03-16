@@ -2,6 +2,7 @@ import type { NewsItem, FetchOptions, NewsSource, SourceConfig } from './news-so
 import { loadConfig, getEnabledSources } from './news-sources/config-loader';
 import { NewsnowSource } from './news-sources/newsnow';
 import { RSSHubSource } from './news-sources/rsshub';
+import { MockNewsSource } from './news-sources/mock';
 import { aggregateNews } from './news-sources/aggregator';
 import { formatNewsCard } from './news-sources/formatter';
 import type { NewsSourcesConfig } from './news-sources/types';
@@ -31,6 +32,8 @@ function createSource(config: SourceConfig): NewsSource {
       return new NewsnowSource(config);
     case 'rsshub':
       return new RSSHubSource(config);
+    case 'mock':
+      return new MockNewsSource(config);
     default:
       throw new Error(`未知数据源类型: ${config.type}`);
   }

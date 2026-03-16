@@ -3,9 +3,16 @@
   "defaultTopN": 10,
   "sources": [
     {
+      "id": "mock",
+      "name": "Mock 数据源（演示用）",
+      "enabled": true,
+      "type": "mock",
+      "config": {}
+    },
+    {
       "id": "newsnow",
       "name": "NewsNow API",
-      "enabled": true,
+      "enabled": false,
       "type": "newsnow",
       "config": {
         "baseUrl": "https://api.newsnow.cn",

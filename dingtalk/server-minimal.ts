@@ -1311,6 +1311,27 @@ async function handleMessage(msg: any) {
 			return;
 		}
 		
+		// 检测「每个工作日 HH点/HH:MM/HH点MM 提醒」请求，服务器端直接创建
+		const weekdayScheduleMatch = text.match(/每个工作日\s*(\d{1,2})(?:[.:：](\d{1,2})|点(\d{1,2})|点)?\s*(?:提醒|通知)?(?:我)?\s*(.+)$/i);
+		if (weekdayScheduleMatch) {
+			const [, hourStr, minStr, taskMessage] = weekdayScheduleMatch;
+			const hour = Math.min(23, Math.max(0, parseInt(hourStr!, 10) || 14));
+			const minute = minStr != null && minStr !== '' ? Math.min(59, Math.max(0, parseInt(minStr, 10) || 0)) : 0;
+			const task = await scheduler.add({
+				name: '工作日提醒',
+				enabled: true,
+				deleteAfterRun: false,
+				schedule: { kind: 'cron', expr: `${minute} ${hour} * * 1-5`, tz: 'Asia/Shanghai' },
+				message: taskMessage!.trim(),
+				platform: 'dingtalk',
+				webhook: sessionWebhook,
+			});
+			const timeDesc = `${hour}:${String(minute).padStart(2, '0')}`;
+			await sendMarkdown(sessionWebhook, `✅ 已设置好，**每个工作日 ${timeDesc}** 通过钉钉提醒你：\n\n${taskMessage!.trim()}\n\n发送 \`/cron\` 可查看所有任务。`, '⏰ 定时任务已创建');
+			console.log(`[任务] 服务器端创建: 每个工作日 ${timeDesc} 提醒`);
+			return;
+		}
+
 		// 检测简单定时任务请求，服务器端直接创建（不依赖 Agent）
 		const simpleScheduleMatch = text.match(/^(\d+)(分钟|小时)后\s*(?:提醒|通知)?(?:我)?\s*(.+)$/i);
 		if (simpleScheduleMatch) {
