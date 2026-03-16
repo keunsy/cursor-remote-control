@@ -43,7 +43,7 @@ export function recordMetrics(
   const recent = metrics.slice(-10);
   const errorRate = recent.filter((x) => !x.success).length / recent.length;
   if (errorRate > 0.5) {
-    console.warn(`[告警] ${sourceId} 错误率 ${(errorRate * 100).toFixed(1)}%`);
+    console.warn(`[monitoring] alert: ${sourceId} error rate ${(errorRate * 100).toFixed(1)}%`);
   }
 }
 

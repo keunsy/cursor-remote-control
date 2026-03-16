@@ -41,7 +41,7 @@ export class NewsnowSource implements NewsSource {
           const items = await this.fetchPlatform(platform, options.topN);
           results.push(...items);
         } catch (err) {
-          console.error(`[newsnow] ${platform} 失败:`, err);
+          console.error(`[newsnow] ${platform} fetch failed:`, err);
           // 超时错误向上抛出，让调用方感知
           if (err instanceof Error && err.message === '请求超时') {
             throw err;

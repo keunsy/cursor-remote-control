@@ -47,7 +47,7 @@ export class RSSHubSource implements NewsSource {
           const items = await this.fetchFeed(feed, options.topN);
           results.push(...items);
         } catch (err) {
-          console.error(`[rsshub] ${feed} 失败:`, err);
+          console.error(`[rsshub] ${feed} fetch failed:`, err);
           if (err instanceof Error && err.message === '请求超时') {
             throw err;
           }

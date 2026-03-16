@@ -2242,34 +2242,34 @@ const scheduler = new Scheduler({
 						topN = parsed.options?.topN ?? 15;
 					} catch {}
 				}
-				console.log(`[定时] 开始抓取热点新闻 topN=${topN}`);
+				console.log(`[scheduler] fetching news, topN=${topN}`);
 				const { messages } = await fetchNews({ topN, platform: "dingtalk" });
-				console.log(`[定时] 成功抓取 ${messages.length} 批消息`);
+				console.log(`[scheduler] news fetched, ${messages.length} batch(es)`);
 				if (messages.length > 1) {
 					return { status: "ok" as const, result: JSON.stringify({ chunks: messages }) };
 				}
 				return { status: "ok" as const, result: messages[0] ?? "" };
 			} catch (err) {
-				console.error(`[定时] 新闻抓取失败:`, err);
+				console.error(`[scheduler] news fetch failed:`, err);
 				const fallback = `⚠️ 热点抓取失败\n\n${err instanceof Error ? err.message : String(err)}\n\n稍后会自动重试`;
 				return { status: "error" as const, error: String(err), result: fallback };
 			}
 		}
 		// 普通提醒任务
-		console.log(`[定时] 触发任务: ${job.name}`);
+		console.log(`[scheduler] task triggered: ${job.name}`);
 		return { status: 'ok' as const, result: job.message };
 	},
 	onDelivery: async (job: CronJob, result: string) => {
 		// 优先使用任务中保存的 webhook（确保发送到创建任务的平台）
 		const webhook = job.webhook || getWebhook();
 		if (!webhook) {
-			console.warn('[调度] 无活跃 webhook，跳过推送（用户需要先发送至少一条消息）');
+			console.warn('[scheduler] no active webhook, skip delivery (user must send at least one message first)');
 			return;
 		}
 
 		// 只有钉钉创建的任务才发送到钉钉
 		if (job.platform && job.platform !== 'dingtalk') {
-			console.log(`[调度] 任务 ${job.name} 属于 ${job.platform}，跳过钉钉推送`);
+			console.log(`[scheduler] task ${job.name} belongs to ${job.platform}, skip dingtalk delivery`);
 			return;
 		}
 
@@ -2290,7 +2290,7 @@ const scheduler = new Scheduler({
 					await new Promise(r => setTimeout(r, 500));
 				}
 			}
-			console.log(`[定时] 钉钉新闻已发送: ${chunks.length} 条`);
+			console.log(`[scheduler] dingtalk news sent: ${chunks.length} chunk(s)`);
 		} else {
 			// 发送提醒内容（优化格式）
 			const now = new Date();
@@ -2303,7 +2303,7 @@ const scheduler = new Scheduler({
 			});
 			const content = `**${result}**\n\n⏱ 提醒时间：${timeStr}\n📌 任务名称：${job.name}`;
 			await sendMarkdown(webhook, content, '⏰ 定时提醒');
-			console.log(`[定时] 钉钉提醒已发送: ${result}`);
+			console.log(`[scheduler] dingtalk reminder sent: ${result}`);
 		}
 	},
 	log: (msg: string) => console.log(`[调度] ${msg}`),
@@ -2375,11 +2375,11 @@ await client.connect();
 console.log('钉钉 Stream 连接已建立，等待消息...');
 
 // ── 启动定时任务调度器 ────────────────────────────
-console.log('[调度] 正在启动 Scheduler...');
+console.log('[scheduler] starting...');
 scheduler.start().catch((err) => {
-	console.error('[调度] 启动失败:', err);
+	console.error('[scheduler] start failed:', err);
 });
-console.log(`[调度] Scheduler 已启动，文件: ${cronStorePath}`);
+console.log(`[scheduler] started, file: ${cronStorePath}`);
 
 // ── 启动心跳系统 ──────────────────────────────────
 heartbeat.start();

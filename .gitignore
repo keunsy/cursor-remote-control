@@ -83,3 +83,4 @@ feilian-*.md
 /docs/
 !docs/plans/
 !docs/news-push-usage.md
+!docs/news-push-deployment-checklist.md

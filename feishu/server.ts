@@ -263,34 +263,34 @@ const scheduler = new Scheduler({
 						topN = parsed.options?.topN ?? 15;
 					} catch {}
 				}
-				console.log(`[定时] 开始抓取热点新闻 topN=${topN}`);
+				console.log(`[scheduler] fetching news, topN=${topN}`);
 				const { messages } = await fetchNews({ topN, platform: "feishu" });
-				console.log(`[定时] 成功抓取 ${messages.length} 批消息`);
+				console.log(`[scheduler] news fetched, ${messages.length} batch(es)`);
 				if (messages.length > 1) {
 					return { status: "ok" as const, result: JSON.stringify({ chunks: messages }) };
 				}
 				return { status: "ok" as const, result: messages[0] ?? "" };
 			} catch (err) {
-				console.error(`[定时] 新闻抓取失败:`, err);
+				console.error(`[scheduler] news fetch failed:`, err);
 				const fallback = `⚠️ 热点抓取失败\n\n${err instanceof Error ? err.message : String(err)}\n\n稍后会自动重试`;
 				return { status: "error" as const, error: String(err), result: fallback };
 			}
 		}
 		// 普通提醒任务
-		console.log(`[定时] 触发任务: ${job.name}`);
+		console.log(`[scheduler] task triggered: ${job.name}`);
 		return { status: "ok" as const, result: job.message };
 	},
 	onDelivery: async (job: CronJob, result: string) => {
 		// 优先使用任务中保存的 chatId（确保发送到创建任务的平台）
 		const chatId = job.webhook || lastActiveChatId;
 		if (!chatId) {
-			console.warn("[调度] 无活跃会话，跳过发送");
+			console.warn("[scheduler] no active session, skip delivery");
 			return;
 		}
 		
 		// 只有飞书创建的任务才发送到飞书
 		if (job.platform && job.platform !== 'feishu') {
-			console.log(`[调度] 任务 ${job.name} 属于 ${job.platform}，跳过飞书推送`);
+			console.log(`[scheduler] task ${job.name} belongs to ${job.platform}, skip feishu delivery`);
 			return;
 		}
 		
@@ -308,7 +308,7 @@ const scheduler = new Scheduler({
 				const title = chunks.length > 1 ? `📰 今日热点 (${i + 1}/${chunks.length})` : "📰 今日热点";
 				await sendCard(chatId, chunks[i], { title, color: "blue" });
 			}
-			console.log(`[定时] 飞书新闻已发送: ${chunks.length} 条`);
+			console.log(`[scheduler] feishu news sent: ${chunks.length} chunk(s)`);
 		} else {
 			const now = new Date();
 			const timeStr = now.toLocaleString('zh-CN', {
@@ -320,7 +320,7 @@ const scheduler = new Scheduler({
 			});
 			const content = `**${result}**\n\n⏱ 提醒时间：${timeStr}\n📌 任务名称：${job.name}`;
 			await sendCard(chatId, content, { title: "⏰ 定时提醒", color: "blue" });
-			console.log(`[定时] 飞书提醒已发送: ${result}`);
+			console.log(`[scheduler] feishu reminder sent: ${result}`);
 		}
 	},
 	log: (msg: string) => console.log(`[调度] ${msg}`),
@@ -3364,7 +3364,7 @@ ${list}
 `);
 
 // 启动定时任务调度器
-scheduler.start().catch((e) => console.warn(`[调度] 启动失败: ${e}`));
+scheduler.start().catch((e) => console.warn(`[scheduler] start failed: ${e}`));
 
 heartbeat.start();
 

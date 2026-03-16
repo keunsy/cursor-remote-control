@@ -68,7 +68,7 @@ export async function fetchNews(
     } else {
       const errMsg = `${sources[idx].name}: ${result.reason}`;
       errors.push(errMsg);
-      console.error(`[新闻源失败] ${errMsg}`);
+      console.error(`[news-fetcher] source failed: ${errMsg}`);
     }
   }
 
