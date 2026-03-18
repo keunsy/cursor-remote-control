@@ -951,6 +951,8 @@ wsClient.on('message.text', async (frame: WsFrame) => {
 				const agent = activeAgents.get(lk);
 				if (agent) {
 					agent.kill();
+					activeAgents.delete(lk);
+					busySessions.delete(lk);  // Bug #11 修复：清理会话锁定
 					console.log(`[指令] 终止 agent pid=${agent.pid} project=${projectHint} session=${lk}`);
 					await wsClient.reply(frame, {
 						msgtype: 'markdown',
@@ -978,23 +980,25 @@ wsClient.on('message.text', async (frame: WsFrame) => {
 						content: '当前没有正在运行的任务。',
 					},
 				});
-			} else if (runningAgents.length === 1) {
-				const first = runningAgents[0];
-				if (!first) return;
-				const [lockKey, agent] = first;
-				const projectName = getProjectNameByLockKey(lockKey);
-				agent.kill();
-				console.log(`[指令] 终止 agent pid=${agent.pid} session=${lockKey}`);
-				
-				const msg = projectName 
-					? `已终止项目 **${projectName}** 的任务。\n\n发送新消息将继续在当前会话中对话。`
-					: `已终止任务（PID: ${agent.pid}）。\n\n发送新消息将继续在当前会话中对话。`;
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: msg,
-					},
-				});
+		} else if (runningAgents.length === 1) {
+			const first = runningAgents[0];
+			if (!first) return;
+			const [lockKey, agent] = first;
+			const projectName = getProjectNameByLockKey(lockKey);
+			agent.kill();
+			activeAgents.delete(lockKey);
+			busySessions.delete(lockKey);  // Bug #11 修复：清理会话锁定
+			console.log(`[指令] 终止 agent pid=${agent.pid} session=${lockKey}`);
+			
+			const msg = projectName 
+				? `已终止项目 **${projectName}** 的任务。\n\n发送新消息将继续在当前会话中对话。`
+				: `已终止任务（PID: ${agent.pid}）。\n\n发送新消息将继续在当前会话中对话。`;
+			await wsClient.reply(frame, {
+				msgtype: 'markdown',
+				markdown: {
+					content: msg,
+				},
+			});
 			} else {
 				const list = runningAgents
 					.map(([lk, agent]) => {
@@ -1551,36 +1555,8 @@ wsClient.on('message.text', async (frame: WsFrame) => {
 	}
 });
 
-// 连接
-wsClient.connect();
-console.log('[企业微信] 正在连接 WebSocket...');
-
-// 优雅退出
-process.on('SIGINT', async () => {
-	console.log('\n[退出] 正在清理资源...');
-	
-	// 停止心跳和定时任务
-	heartbeat.stop();
-	scheduler.stop();
-	
-	// 关闭记忆系统
-	if (memory) {
-		try {
-			memory.close();
-			console.log('[退出] 记忆系统已关闭');
-		} catch (err) {
-			console.error('[退出] 记忆系统关闭失败:', err);
-		}
-	}
-	
-	// 断开 WebSocket
-	wsClient.disconnect();
-	
-	console.log('[退出] 清理完成，再见！');
-	process.exit(0);
-});
-
 // ── 定时任务调度器 ────────────────────────────────
+// Bug #12 修复：将 scheduler 定义移到 SIGINT 之前
 const cronStorePath = resolve(ROOT, 'cron-jobs-wecom.json');
 const scheduler = new Scheduler({
 	storePath: cronStorePath,
@@ -1633,3 +1609,47 @@ scheduler.start().catch((err) => {
 // ── 启动心跳系统 ──────────────────────────────────
 heartbeat.start();
 console.log(`[心跳] 已启动，默认关闭（发送 /心跳 开启）`);
+
+// 连接
+wsClient.connect();
+console.log('[企业微信] 正在连接 WebSocket...');
+
+// 优雅退出
+process.on('SIGINT', async () => {
+	console.log('\n[退出] 正在清理资源...');
+	
+	// Bug #13 修复：终止所有运行中的 Agent 进程
+	if (activeAgents.size > 0) {
+		console.log(`[退出] 正在终止 ${activeAgents.size} 个运行中的任务...`);
+		for (const [lockKey, agent] of activeAgents.entries()) {
+			try {
+				agent.kill('SIGTERM');
+				console.log(`[退出] 已终止任务: ${lockKey}`);
+			} catch (err) {
+				console.error(`[退出] 终止任务失败 ${lockKey}:`, err);
+			}
+		}
+		activeAgents.clear();
+		busySessions.clear();
+	}
+	
+	// 停止心跳和定时任务
+	heartbeat.stop();
+	scheduler.stop();
+	
+	// 关闭记忆系统
+	if (memory) {
+		try {
+			memory.close();
+			console.log('[退出] 记忆系统已关闭');
+		} catch (err) {
+			console.error('[退出] 记忆系统关闭失败:', err);
+		}
+	}
+	
+	// 断开 WebSocket
+	wsClient.disconnect();
+	
+	console.log('[退出] 清理完成，再见！');
+	process.exit(0);
+});
