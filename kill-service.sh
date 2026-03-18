@@ -6,8 +6,8 @@ set -e
 
 SERVICE="${1:-}"
 
-if [[ "$SERVICE" != "feishu" && "$SERVICE" != "dingtalk" ]]; then
-    echo "❌ 用法: bash kill-service.sh [feishu|dingtalk]"
+if [[ "$SERVICE" != "feishu" && "$SERVICE" != "dingtalk" && "$SERVICE" != "wecom" ]]; then
+    echo "❌ 用法: bash kill-service.sh [feishu|dingtalk|wecom]"
     exit 1
 fi
 
