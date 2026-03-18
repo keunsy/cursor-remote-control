@@ -785,8 +785,10 @@ wsClient.on('message.text', async (frame: WsFrame) => {
 							content: `当前已是 **${exact.id}**（${exact.desc}），无需切换。`,
 						},
 					});
-					return;
-				}
+				return;
+			}
+			// Bug #19 修复：添加文件操作错误处理
+			try {
 				const envContent = readFileSync(ENV_PATH, "utf-8");
 				const updated = envContent.match(/^CURSOR_MODEL=/m)
 					? envContent.replace(/^CURSOR_MODEL=.*$/m, `CURSOR_MODEL=${exact.id}`)
@@ -800,7 +802,16 @@ wsClient.on('message.text', async (frame: WsFrame) => {
 					},
 				});
 				console.log(`[指令] 模型切换: ${prev} → ${exact.id}`);
-				return;
+			} catch (err) {
+				await wsClient.reply(frame, {
+					msgtype: 'markdown',
+					markdown: {
+						content: `❌ 写入 .env 失败: ${err instanceof Error ? err.message : err}`,
+					},
+				});
+				console.error(`[指令] 模型切换失败:`, err);
+			}
+			return;
 			}
 			
 			if (candidates.length > 1) {
@@ -820,10 +831,12 @@ wsClient.on('message.text', async (frame: WsFrame) => {
 					markdown: {
 						content: buildModelListCard(config.CURSOR_MODEL, `「${input}」无匹配，请从列表中选择`),
 					},
-				});
-				return;
-			}
-			
+			});
+			return;
+		}
+		
+		// Bug #19 修复：添加文件操作错误处理
+		try {
 			const envContent = readFileSync(ENV_PATH, "utf-8");
 			const updated = envContent.match(/^CURSOR_MODEL=/m)
 				? envContent.replace(/^CURSOR_MODEL=.*$/m, `CURSOR_MODEL=${input}`)
@@ -837,7 +850,16 @@ wsClient.on('message.text', async (frame: WsFrame) => {
 				},
 			});
 			console.log(`[指令] 模型切换(自定义): ${prev} → ${input}`);
-			return;
+		} catch (err) {
+			await wsClient.reply(frame, {
+				msgtype: 'markdown',
+				markdown: {
+					content: `❌ 写入 .env 失败: ${err instanceof Error ? err.message : err}`,
+				},
+			});
+			console.error(`[指令] 模型切换(自定义)失败:`, err);
+		}
+		return;
 		}
 		
 		// /会话、/sessions → 会话管理
