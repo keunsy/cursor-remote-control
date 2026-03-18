@@ -22,7 +22,8 @@ while IFS= read -r pid; do
 done < <(pgrep -f "cursor-remote-control/$SERVICE" 2>/dev/null || true)
 
 # 2. 通过 lsof 查找工作目录在服务目录下的进程
-SERVICE_DIR="/Users/user/work/cursor/cursor-remote-control/$SERVICE"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SERVICE_DIR="$SCRIPT_DIR/$SERVICE"
 if [[ -d "$SERVICE_DIR" ]]; then
     while IFS= read -r pid; do
         [[ -n "$pid" ]] && PIDS+=("$pid")
