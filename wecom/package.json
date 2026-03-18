@@ -19,6 +19,10 @@
     "cursor-agent"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/keunsy/cursor-remote-control"
+  },
   "devDependencies": {
     "@types/bun": "latest"
   },

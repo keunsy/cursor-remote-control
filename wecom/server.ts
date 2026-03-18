@@ -11,7 +11,7 @@ import AiBot from '@wecom/aibot-node-sdk';
 import type { WsFrame } from '@wecom/aibot-node-sdk';
 import { generateReqId } from '@wecom/aibot-node-sdk';
 import { spawn } from 'node:child_process';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, watchFile, readdirSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, watchFile, unwatchFile, readdirSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Scheduler, type CronJob } from '../shared/scheduler.js';
@@ -1655,7 +1655,7 @@ console.log('[企业微信] 正在连接 WebSocket...');
 // 优雅退出
 process.on('SIGINT', async () => {
 	console.log('\n[退出] 正在清理资源...');
-	
+
 	// Bug #13 修复：终止所有运行中的 Agent 进程
 	if (activeAgents.size > 0) {
 		console.log(`[退出] 正在终止 ${activeAgents.size} 个运行中的任务...`);
@@ -1670,7 +1670,11 @@ process.on('SIGINT', async () => {
 		activeAgents.clear();
 		busySessions.clear();
 	}
-	
+
+	// Bug #20 修复：停止文件监听器
+	unwatchFile(ENV_PATH);
+	console.log('[退出] 文件监听器已停止');
+
 	// 停止心跳和定时任务
 	heartbeat.stop();
 	scheduler.stop();
