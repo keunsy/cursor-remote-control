@@ -1,3 +1,2 @@
-# 忽略参考代码目录——防止 Cursor 加载其中的 AGENTS.md/CLAUDE.md/rules
-参考代码/
+# 忽略模板目录——防止 Cursor 加载通用配置与子项目配置冲突
 templates/

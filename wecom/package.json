@@ -1,0 +1,33 @@
+{
+  "name": "wecom-cursor-claw",
+  "version": "1.0.0",
+  "description": "Turn WeCom (WeChat Work) into a remote control for Cursor AI — your personal AI strategic partner via IM",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run start-with-keepawake.ts",
+    "start": "bun run start.ts"
+  },
+  "engines": {
+    "bun": ">=1"
+  },
+  "keywords": [
+    "cursor",
+    "wecom",
+    "wechat-work",
+    "enterprise-wechat",
+    "ai-agent",
+    "cursor-agent"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@wecom/aibot-node-sdk": "^1.0.0",
+    "axios": "^1.7.9",
+    "cron-chinese": "^1.2.0"
+  }
+}

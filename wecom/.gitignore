@@ -1,0 +1,32 @@
+# 环境变量
+.env
+
+# 日志
+*.log
+
+# 依赖
+node_modules/
+
+# 运行时数据
+.sessions.json
+
+# Cursor 配置
+.cursor/
+
+# 数据库
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.memory.sqlite*
+
+# macOS
+.DS_Store
+
+# 临时文件
+*.tmp
+*.swp
+*.swo
+*~
+
+# 收件箱
+inbox/
