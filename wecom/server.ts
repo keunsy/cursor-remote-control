@@ -192,9 +192,21 @@ interface ProjectsConfig {
 	default_project: string;
 }
 
-const projectsConfig: ProjectsConfig = existsSync(PROJECTS_PATH)
-	? JSON.parse(readFileSync(PROJECTS_PATH, 'utf-8'))
-	: { projects: { default: { path: ROOT, description: 'Default' } }, default_project: 'default' };
+// Bug #22 修复：添加配置加载错误处理
+let projectsConfig: ProjectsConfig;
+try {
+	projectsConfig = existsSync(PROJECTS_PATH)
+		? JSON.parse(readFileSync(PROJECTS_PATH, 'utf-8'))
+		: { projects: { default: { path: ROOT, description: 'Default' } }, default_project: 'default' };
+} catch (err) {
+	console.error(`❌ 加载 projects.json 失败: ${err instanceof Error ? err.message : err}`);
+	console.error(`   文件路径: ${PROJECTS_PATH}`);
+	console.error(`   使用默认配置...\n`);
+	projectsConfig = { 
+		projects: { default: { path: ROOT, description: 'Default' } }, 
+		default_project: 'default' 
+	};
+}
 
 // ── 记忆管理器 ───────────────────────────────────
 const defaultWorkspace = projectsConfig.projects[projectsConfig.default_project]?.path || ROOT;
@@ -1503,18 +1515,19 @@ wsClient.on('message.text', async (frame: WsFrame) => {
 			}
 		}
 		
-		busySessions.add(lockKey);
-		
-		// 流式回复
+		// Bug #21 修复：将 busySessions.add 移入 try 块，确保 finally 一定执行
 		const streamId = generateReqId('stream');
-		await wsClient.replyStream(frame, streamId, '⏳ Cursor AI 正在思考...', false);
-		
-		// 记录用户消息
-		if (memory) {
-			memory.appendSessionLog(workspace, "user", message, config.CURSOR_MODEL);
-		}
-		
 		try {
+			busySessions.add(lockKey);
+			
+			// 流式回复
+			await wsClient.replyStream(frame, streamId, '⏳ Cursor AI 正在思考...', false);
+			
+			// 记录用户消息
+			if (memory) {
+				memory.appendSessionLog(workspace, "user", message, config.CURSOR_MODEL);
+			}
+			
 			const taskStart = Date.now();
 			
 			// 进度回调：实时更新流式消息
