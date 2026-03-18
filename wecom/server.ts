@@ -513,24 +513,39 @@ wsClient.on('event.enter_chat', async (frame: WsFrame) => {
 // 消息去重
 const seenMessages = new Map<string, number>();
 const MAX_SEEN_SIZE = 1000;
+const BATCH_CLEANUP_SIZE = 100;  // Bug #14 修复：批量清理数量
 
 function isDuplicate(messageId: string): boolean {
 	const now = Date.now();
+	
+	// 定期清理过期消息（每次检查时）
 	for (const [id, timestamp] of seenMessages.entries()) {
 		if (now - timestamp > 5 * 60 * 1000) {
 			seenMessages.delete(id);
 		}
 	}
+	
+	// 检查是否重复
 	if (seenMessages.has(messageId)) {
 		const age = now - seenMessages.get(messageId)!;
 		console.log(`[去重] ❌ 重复消息 msgId="${messageId}" (${Math.round(age/1000)}秒前已处理)`);
 		return true;
 	}
+	
+	// 添加新消息
 	seenMessages.set(messageId, now);
+	
+	// Bug #14 修复：达到上限时批量删除最老的消息
 	if (seenMessages.size > MAX_SEEN_SIZE) {
-		const oldest = Array.from(seenMessages.entries()).sort((a, b) => a[1] - b[1])[0];
-		if (oldest) seenMessages.delete(oldest[0]);
+		const sorted = Array.from(seenMessages.entries())
+			.sort((a, b) => a[1] - b[1])
+			.slice(0, BATCH_CLEANUP_SIZE);
+		for (const [id] of sorted) {
+			seenMessages.delete(id);
+		}
+		console.log(`[去重] 缓存超限，已清理 ${BATCH_CLEANUP_SIZE} 条最老消息`);
 	}
+	
 	return false;
 }
 
@@ -1427,16 +1442,17 @@ wsClient.on('message.text', async (frame: WsFrame) => {
 			return;
 		}
 		
-		// 处理路径持久切换（"切换到 /path/to/project"）
+		// Bug #15 修复：路径切换不支持持久化，改为提示用户使用项目名
 		if (routeChanged && intent.type === 'switch' && intent.path) {
 			const pathLabel = intent.path.split('/').pop() || intent.path;
+			const projectNames = Object.keys(projectsConfig.projects).map(n => `\`${n}\``).join('、');
 			await wsClient.reply(frame, {
 				msgtype: 'markdown',
 				markdown: {
-					content: `**临时切换到路径：${pathLabel}**\n\n📁 \`${intent.path}\`\n\n⚠️ 此为临时路径，不会保存到持久配置。\n若要固定使用，请添加到 \`projects.json\`。\n\n下一条消息将在此路径执行。`,
+					content: `⚠️ **路径切换不支持持久化**\n\n您尝试切换到：\`${intent.path}\`\n\n**建议方案**：\n\n1️⃣ **使用项目名切换**（推荐）\n   发送：\`切换到 项目名\`\n   可用项目：${projectNames}\n\n2️⃣ **使用路径前缀**（临时路由）\n   发送：\`#${intent.path} 你的消息\`\n   示例：\`#${intent.path} 帮我分析代码\`\n\n3️⃣ **添加到 projects.json**（永久配置）\n   编辑项目配置文件添加新项目\n\n> 路径切换无法保存到会话中，建议使用项目名进行持久切换。`,
 				},
 			});
-			console.log(`[路由] 临时切换到路径: ${intent.path}`);
+			console.log(`[路由] 路径切换被拒绝（不支持持久化）: ${intent.path}`);
 			return;
 		}
 		

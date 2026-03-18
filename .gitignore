@@ -13,10 +13,16 @@ logs/
 *.log.*
 /tmp/*.log
 
+# 缓存
+.cache/
+
 # 构建产物
 dist/
 build/
+out/
 *.js.map
+*.tgz
+*.tsbuildinfo
 
 # IDE
 .vscode/
@@ -28,9 +34,13 @@ build/
 # macOS
 .DS_Store
 
+# Windows
+Thumbs.db
+
 # 运行时文件
 *.pid
 *.sock
+*.tmp
 
 # 数据库
 *.sqlite

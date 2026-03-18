@@ -57,17 +57,19 @@ export function loadSessionsFromDisk(): void {
 			}
 		}
 		console.log(`[Session] 从磁盘恢复 ${sessionsStore.size} 个工作区会话`);
-	} catch {}
+	} catch (err) {
+		// Bug #16 修复：记录加载失败
+		console.error('[Session] 从磁盘加载失败:', err instanceof Error ? err.message : err);
+	}
 }
 
-let sessionsSaving = false;
-
+// Bug #17 修复：移除未使用的 sessionsSaving 标记
 export function saveSessions(): void {
 	try {
-		sessionsSaving = true;
 		writeFileSync(SESSIONS_PATH, JSON.stringify(Object.fromEntries(sessionsStore), null, 2));
-	} catch {} finally {
-		setTimeout(() => { sessionsSaving = false; }, 500);
+	} catch (err) {
+		// Bug #16 修复：记录保存失败
+		console.error('[Session] 保存到磁盘失败:', err instanceof Error ? err.message : err);
 	}
 }
 
