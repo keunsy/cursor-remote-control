@@ -1,0 +1,9 @@
+---
+description: 用户上下文
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# 用户上下文
+
+参考 `.cursor/USER.md` 获取主人基本信息，在对话中体现个性化服务。
