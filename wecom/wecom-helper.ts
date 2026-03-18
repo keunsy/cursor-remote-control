@@ -137,6 +137,21 @@ export function getSessionHistory(workspace: string, limit = 10): SessionEntry[]
 		.slice(0, limit);
 }
 
+// ── 项目切换管理（Bug #18 修复）──────────────────────────────────
+export function getCurrentProject(workspace: string): string | undefined {
+	return sessionsStore.get(workspace)?.currentProject;
+}
+
+export function setCurrentProject(workspace: string, project: string): void {
+	let ws = sessionsStore.get(workspace);
+	if (!ws) {
+		ws = { active: null, history: [] };
+		sessionsStore.set(workspace, ws);
+	}
+	ws.currentProject = project;
+	saveSessions();
+}
+
 // ── 并发控制 ─────────────────────────────────────
 export function getLockKey(workspace: string): string {
 	const sid = getActiveSessionId(workspace);

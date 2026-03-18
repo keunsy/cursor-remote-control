@@ -22,6 +22,7 @@ import {
 	getSessionHistory, getActiveSessionId, switchToSession, getLockKey, busySessions,
 	describeToolCall, buildToolSummary, resolveWorkspace, detectRouteIntent,
 	loadSessionsFromDisk, saveSessions, sessionsStore,
+	getCurrentProject, setCurrentProject,
 } from './wecom-helper.js';
 
 const HOME = process.env.HOME!;
@@ -752,7 +753,9 @@ wsClient.on('message.text', async (frame: WsFrame) => {
 		
 		// /new、/新对话
 		if (/^\/(new|新对话|新会话)\s*$/i.test(text.trim())) {
-			const workspace = projectsConfig.projects[session.currentProject || projectsConfig.default_project]?.path || defaultWorkspace;
+			// Bug #23 修复: 从 sessionsStore 读取当前项目
+			const currentProject = getCurrentProject(defaultWorkspace) || projectsConfig.default_project;
+			const workspace = projectsConfig.projects[currentProject]?.path || defaultWorkspace;
 			archiveAndResetSession(workspace);
 			
 			const historyCount = getSessionHistory(workspace).length;
@@ -878,7 +881,9 @@ wsClient.on('message.text', async (frame: WsFrame) => {
 		const sessionsMatch = text.match(/^\/(会话|sessions?)[\s:：=]*(.*)/i);
 		if (sessionsMatch) {
 			const input = sessionsMatch[2].trim();
-			const workspace = projectsConfig.projects[session.currentProject || projectsConfig.default_project]?.path || defaultWorkspace;
+			// Bug #23 修复: 从 sessionsStore 读取当前项目
+			const currentProject = getCurrentProject(defaultWorkspace) || projectsConfig.default_project;
+			const workspace = projectsConfig.projects[currentProject]?.path || defaultWorkspace;
 			
 			if (!input) {
 				const history = getSessionHistory(workspace, 10);
@@ -964,8 +969,10 @@ wsClient.on('message.text', async (frame: WsFrame) => {
 		
 		// /项目、/project → 列出所有项目
 		if (/^\/(项目|project)\s*$/i.test(text.trim())) {
+			// Bug #23 修复: 从 sessionsStore 读取当前项目
+			const currentProject = getCurrentProject(defaultWorkspace);
 			const projects = Object.entries(projectsConfig.projects).map(([k, v]) => 
-				`- **${k}**${k === session.currentProject ? ' ✅' : ''}\n  \`${v.path}\`\n  ${v.description || ''}`
+				`- **${k}**${k === currentProject ? ' ✅' : ''}\n  \`${v.path}\`\n  ${v.description || ''}`
 			).join('\n\n');
 			await wsClient.reply(frame, {
 				msgtype: 'markdown',
@@ -1429,12 +1436,12 @@ wsClient.on('message.text', async (frame: WsFrame) => {
 			return;
 		}
 		
-		// 项目路由
+		// 项目路由（Bug #23 修复: 传入 defaultWorkspace）
 		const { workspace, message, label, routeChanged, intent } = resolveWorkspace(
 			text,
 			projectsConfig.projects,
 			projectsConfig.default_project,
-			session.currentProject
+			defaultWorkspace
 		);
 		
 		// 处理项目持久切换（"切换到 XXX 项目"）
@@ -1462,9 +1469,8 @@ wsClient.on('message.text', async (frame: WsFrame) => {
 				return;
 			}
 			
-			// 持久化项目切换
-			session.currentProject = intent.project;
-			saveSessions();
+			// Bug #23 修复: 更新 sessionsStore 而不是 session（持久化存储）
+			setCurrentProject(defaultWorkspace, intent.project);
 			
 			await wsClient.reply(frame, {
 				msgtype: 'markdown',
