@@ -42,16 +42,22 @@ export class RSSHubSource implements NewsSource {
     const results: NewsItem[] = [];
 
     try {
-      for (const feed of this.feeds) {
-        try {
-          const items = await this.fetchFeed(feed, options.topN);
-          results.push(...items);
-        } catch (err) {
-          console.error(`[rsshub] ${feed} fetch failed:`, err);
-          if (err instanceof Error && err.message === '请求超时') {
-            throw err;
-          }
+      // 并行请求所有 feed，避免串行累积超时时间
+      const feedResults = await Promise.allSettled(
+        this.feeds.map((feed) => this.fetchFeed(feed, options.topN))
+      );
+
+      for (const [idx, result] of feedResults.entries()) {
+        if (result.status === 'fulfilled') {
+          results.push(...result.value);
+        } else {
+          console.error(`[rsshub] ${this.feeds[idx]} fetch failed:`, result.reason);
         }
+      }
+
+      // 如果所有 feed 都失败，抛出错误
+      if (results.length === 0) {
+        throw new Error(`所有 RSS feed 请求失败（${this.feeds.join(', ')}）`);
       }
 
       const sliced = results.slice(0, options.topN);

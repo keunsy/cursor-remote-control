@@ -1,7 +1,11 @@
-import { resolve } from 'node:path';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { NewsSourcesConfig, SourceConfig } from './types';
 
-const DEFAULT_CONFIG_PATH = resolve(process.cwd(), 'config/news-sources.json');
+// 项目根目录（从当前文件位置向上两级：shared/news-sources -> shared -> root）
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = resolve(__dirname, '../..');
+const DEFAULT_CONFIG_PATH = resolve(PROJECT_ROOT, 'config/news-sources.json');
 
 /** 默认配置（文件不存在时使用） */
 export const DEFAULT_CONFIG: NewsSourcesConfig = {
@@ -14,8 +18,8 @@ export const DEFAULT_CONFIG: NewsSourcesConfig = {
       enabled: true,
       type: 'newsnow',
       config: {
-        baseUrl: 'https://api.newsnow.cn',
-        platforms: ['weibo', 'zhihu', 'baidu', 'douyin', 'toutiao'],
+        baseUrl: 'https://newsnow.busiyi.world', // 默认使用 busiyi.world
+        preset: 'brief', // 使用 preset 而不是显式 platforms
         timeout: 10000,
       },
     },
@@ -44,6 +48,7 @@ export const DEFAULT_CONFIG: NewsSourcesConfig = {
     includeDescription: true,
     descriptionMaxLength: 80,
     includeUrl: true,
+    useEnhancedStyle: true, // 使用增强样式（新样式）。设为 false 使用旧样式（emoji 标题）
   },
 };
 
@@ -112,11 +117,14 @@ export async function loadConfig(options?: LoadConfigOptions): Promise<NewsSourc
 
   const exists = await fileExists(configPath);
   if (!exists) {
+    console.log(`[config-loader] 配置文件不存在 (${configPath}), 使用 DEFAULT_CONFIG`);
     return applyEnvOverrides(DEFAULT_CONFIG);
   }
 
+  console.log(`[config-loader] 加载配置文件: ${configPath}`);
   const raw = await readFile(configPath);
   const config = JSON.parse(raw) as NewsSourcesConfig;
+  console.log(`[config-loader] 配置文件中的 presets: ${JSON.stringify(config.presets)}`);
   return applyEnvOverrides(config);
 }
 

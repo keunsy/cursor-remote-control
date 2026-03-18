@@ -19,7 +19,7 @@
 ```
 手机飞书 ──WebSocket──→ feishu/server.ts ──┐
                                           ├──→ Cursor CLI ──→ 本地 Cursor IDE
-手机钉钉 ──Stream─────→ dingtalk/server-minimal.ts ─┘         │
+手机钉钉 ──Stream─────→ dingtalk/server.ts ─────────┘         │
                                                       │
         ┌─────────────────────────────────────────────┘
         │
@@ -92,7 +92,7 @@ cursor-remote-control/
 │   └── README.md                # 飞书详细文档
 │
 ├── dingtalk/                    # 钉钉服务（独立）
-│   ├── server-minimal.ts        # 钉钉主服务
+│   ├── server.ts                # 钉钉主服务
 │   ├── dingtalk-client.ts       # 钉钉 Stream 客户端
 │   ├── memory-tool.ts           # 记忆 CLI（供 Agent 调用）
 │   ├── service.sh               # 钉钉服务管理脚本
@@ -265,7 +265,8 @@ bash manage-services.sh logs dingtalk    # 查看钉钉日志
 | `/memory 关键词` | `/记忆 关键词` | 语义搜索记忆 |
 | `/log 内容` | `/记录 内容` | 写入今日日记 |
 | `/任务` | `/cron` `/定时` | 查看/管理定时任务 |
-| `/新闻状态` | `/news` `/health` | 查看新闻数据源健康状态（飞书） |
+| `/新闻` | `/news` | **热点**：立即推送今日热点；或 `/新闻 每天9点 推送10条` 定时 |
+| `/新闻状态` | `/health` | 查看热点数据源健康状态 |
 | `/心跳` | `/heartbeat` | 查看/管理心跳系统 |
 | `/飞连` | `/vpn` `/feilian` | 远程控制飞连 VPN（开/关/状态） |
 | `/发送文件 <路径>` | `/sendfile` `/send` | **飞书专用** - 发送本地文件（最大 30MB） |

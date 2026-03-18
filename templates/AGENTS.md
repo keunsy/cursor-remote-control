@@ -8,7 +8,7 @@
 - Cursor Agent CLI
 
 ## 核心模块
-- server-minimal.ts - 主服务
+- server.ts - 主服务
 - memory.ts - 记忆管理
 - scheduler.ts - 定时任务
 - heartbeat.ts - 心跳系统

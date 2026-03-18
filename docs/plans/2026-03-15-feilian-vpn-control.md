@@ -383,11 +383,11 @@ git commit -m "feat(feishu): 集成飞连 VPN 控制指令"
 ## Task 4: 集成到钉钉服务
 
 **Files:**
-- Modify: `dingtalk/server-minimal.ts`
+- Modify: `dingtalk/server.ts`
 
 **Step 1: 导入飞连控制器**
 
-在 `dingtalk/server-minimal.ts` 顶部添加：
+在 `dingtalk/server.ts` 顶部添加：
 
 ```typescript
 import { FeilianController } from '../shared/feilian-control';
@@ -432,14 +432,14 @@ if (text.match(/^\/(飞连|vpn|feilian)\s*/i)) {
 
 **Step 3: 测试钉钉集成**
 
-1. 启动钉钉服务：`cd dingtalk && bun run server-minimal.ts`
+1. 启动钉钉服务：`cd dingtalk && bun run server.ts`
 2. 在钉钉中发送：`@机器人 /飞连 状态`
 3. 预期返回当前 VPN 状态
 
 **Step 4: 提交**
 
 ```bash
-git add dingtalk/server-minimal.ts
+git add dingtalk/server.ts
 git commit -m "feat(dingtalk): 集成飞连 VPN 控制指令"
 ```
 
@@ -449,7 +449,7 @@ git commit -m "feat(dingtalk): 集成飞连 VPN 控制指令"
 
 **Files:**
 - Modify: `feishu/server.ts` (帮助信息)
-- Modify: `dingtalk/server-minimal.ts` (帮助信息)
+- Modify: `dingtalk/server.ts` (帮助信息)
 - Modify: `README.md`
 
 **Step 1: 更新飞书帮助信息**
@@ -470,7 +470,7 @@ const helpText = `
 
 **Step 2: 更新钉钉帮助信息**
 
-在 `dingtalk/server-minimal.ts` 中同样更新 `/help` 信息。
+在 `dingtalk/server.ts` 中同样更新 `/help` 信息。
 
 **Step 3: 更新 README.md**
 
@@ -514,7 +514,7 @@ cd dingtalk && bash service.sh restart
 **Step 4: 提交**
 
 ```bash
-git add feishu/server.ts dingtalk/server-minimal.ts README.md
+git add feishu/server.ts dingtalk/server.ts README.md
 git commit -m "docs: 添加飞连 VPN 控制使用文档"
 ```
 

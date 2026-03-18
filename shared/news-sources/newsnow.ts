@@ -1,6 +1,6 @@
 import type { NewsSource, NewsItem, FetchOptions, SourceConfig } from './types';
 import { recordMetrics } from './monitoring';
-import { translate } from '@vitalets/google-translate-api';
+import translate from '@vitalets/google-translate-api';
 
 /** newsnow API 响应格式 */
 interface NewsnowApiItem {
@@ -39,16 +39,19 @@ export class NewsnowSource implements NewsSource {
     this.id = config.id;
     this.name = config.name;
     this.enabled = config.enabled;
-    this.baseUrl = (config.config.baseUrl as string) || 'https://api.newsnow.cn';
+    this.baseUrl = (config.config.baseUrl as string) || 'https://newsnow.busiyi.world';
+    console.log(`[newsnow] baseUrl: ${this.baseUrl} (from config: ${config.config.baseUrl || 'undefined'})`);
     
     // 平台列表优先级：显式配置 platforms > preset（从配置/默认） > 默认brief
     if (config.config.platforms && Array.isArray(config.config.platforms)) {
       this.platforms = config.config.platforms;
+      console.log(`[newsnow] 使用显式配置的平台列表: ${this.platforms.join(', ')}`);
     } else {
       const preset = (config.config.preset as 'brief' | 'full') || 'brief';
       // 优先使用配置文件的 presets，没有则使用代码默认值
       const availablePresets = presets || NewsnowSource.DEFAULT_PRESETS;
       this.platforms = (preset === 'brief' ? availablePresets.brief : availablePresets.full) || NewsnowSource.DEFAULT_PRESETS.brief;
+      console.log(`[newsnow] 使用 preset="${preset}", presets=${presets ? 'from config' : 'default'}, platforms: ${this.platforms.join(', ')}`);
     }
     
     this.timeout = (config.config.timeout as number) ?? 5000;
@@ -60,17 +63,22 @@ export class NewsnowSource implements NewsSource {
     const results: NewsItem[] = [];
 
     try {
-      for (const platform of targetPlatforms) {
-        try {
-          const items = await this.fetchPlatform(platform, options.topN);
-          results.push(...items);
-        } catch (err) {
-          console.error(`[newsnow] ${platform} fetch failed:`, err);
-          // 超时错误向上抛出，让调用方感知
-          if (err instanceof Error && err.message === '请求超时') {
-            throw err;
-          }
+      // 并行请求所有平台，避免串行累积超时时间
+      const platformResults = await Promise.allSettled(
+        targetPlatforms.map((platform) => this.fetchPlatform(platform, options.topN))
+      );
+
+      for (const [idx, result] of platformResults.entries()) {
+        if (result.status === 'fulfilled') {
+          results.push(...result.value);
+        } else {
+          console.error(`[newsnow] ${targetPlatforms[idx]} fetch failed:`, result.reason);
         }
+      }
+
+      // 如果所有平台都失败，抛出错误
+      if (results.length === 0) {
+        throw new Error(`所有平台请求失败（${targetPlatforms.join(', ')}）`);
       }
 
       // 翻译英文描述
@@ -147,6 +155,9 @@ export class NewsnowSource implements NewsSource {
       ithome: 'IT之家',
       zaobao: '前端早报',
       bilibili: 'B站',
+      ifeng: '凤凰网',
+      hackernews: 'Hacker News',
+      producthunt: 'Product Hunt',
     };
     return map[id] || id;
   }
@@ -181,14 +192,43 @@ export class NewsnowSource implements NewsSource {
     return totalChars > 0 && englishChars / totalChars > 0.5;
   }
 
-  /** 翻译单条文本 */
+  /** 翻译单条文本（Google Translate API + DeepLX 备用） */
   private async translateText(text: string): Promise<string> {
+    // 方案 1: Google Translate API（稳定可靠）
     try {
-      const result = await translate(text, { to: 'zh-CN' });
-      return result.text;
+      const result = await translate(text, { from: 'en', to: 'zh-CN' });
+      if (result.text) {
+        return result.text;
+      }
     } catch (err) {
-      console.warn(`[newsnow] translate failed:`, err);
-      return text; // 翻译失败返回原文
+      console.warn(`[newsnow] Google Translate failed, fallback to DeepLX:`, err);
+    }
+
+    // 方案 2: DeepLX 备用（降级方案）
+    try {
+      const response = await fetch('https://deeplx.mingming.dev/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: text,
+          source_lang: 'EN',
+          target_lang: 'ZH',
+        }),
+      });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      
+      const data = await response.json() as { code: number; data?: string; message?: string };
+      if (data.code === 200 && data.data) {
+        return data.data;
+      }
+      
+      throw new Error(data.message || 'Translation failed');
+    } catch (err) {
+      console.warn(`[newsnow] All translation methods failed:`, err);
+      return text; // 最终降级：返回原文
     }
   }
 }

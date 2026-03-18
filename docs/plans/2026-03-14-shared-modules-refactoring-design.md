@@ -44,7 +44,7 @@ cursor-remote-control/
 │
 ├── dingtalk/
 │   ├── bridge.ts       # 保留（依赖本地 .env）
-│   ├── server-minimal.ts
+│   ├── server.ts
 │   └── ...
 │
 └── feishu/
@@ -96,7 +96,7 @@ cursor-remote-control/
 ### 修改规则
 
 ```typescript
-// dingtalk/server-minimal.ts 和 feishu/server.ts
+// dingtalk/server.ts 和 feishu/server.ts
 
 // 修改前
 import { MemoryManager } from './memory.ts';
@@ -112,7 +112,7 @@ import { HeartbeatRunner } from '../shared/heartbeat.ts';
 ### 受影响文件
 
 **dingtalk/ 目录：**
-- `server-minimal.ts` - 主服务文件
+- `server.ts` - 主服务文件
 - `server.ts` - 备用服务文件（如果存在）
 
 **feishu/ 目录：**
@@ -127,7 +127,7 @@ import { HeartbeatRunner } from '../shared/heartbeat.ts';
 | 项目 | 说明 |
 |------|------|
 | 运行时 | 仍用 Bun，启动命令不变 |
-| 工作目录 | `cd dingtalk && bun run server-minimal.ts` |
+| 工作目录 | `cd dingtalk && bun run server.ts` |
 | 配置文件 | `.env` 位置和格式保持不变 |
 | 数据文件 | `cron-jobs.json`、`embeddings-cache/` 等位置不变 |
 | 功能行为 | 记忆、定时、心跳、同步逻辑完全一致 |
@@ -158,7 +158,7 @@ bunx tsc --noEmit
 ### 2. 服务启动测试
 ```bash
 # 测试钉钉服务
-cd dingtalk && bun run server-minimal.ts
+cd dingtalk && bun run server.ts
 
 # 测试飞书服务  
 cd feishu && bun run server.ts
@@ -266,7 +266,7 @@ git restore dingtalk/memory.ts dingtalk/scheduler.ts \
 - `dingtalk/sync-apple-notes.ts` → `shared/sync-apple-notes.ts`
 
 **将修改 import 的文件：**
-- `dingtalk/server-minimal.ts`
+- `dingtalk/server.ts`
 - `dingtalk/server.ts`（如存在）
 - `feishu/server.ts`
 

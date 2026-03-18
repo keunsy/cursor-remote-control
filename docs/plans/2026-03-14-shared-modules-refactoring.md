@@ -73,10 +73,10 @@ Expected: 显示 4 个 .ts 文件（memory, scheduler, heartbeat, sync-apple-not
 
 ---
 
-## Task 2: 更新 dingtalk/server-minimal.ts 的 import 路径
+## Task 2: 更新 dingtalk/server.ts 的 import 路径
 
 **Files:**
-- Modify: `dingtalk/server-minimal.ts:19-21`
+- Modify: `dingtalk/server.ts:19-21`
 
 **Step 1: 找到现有 import 语句**
 
@@ -99,7 +99,7 @@ import { HeartbeatRunner } from '../shared/heartbeat.js';
 **Step 3: 验证修改**
 
 ```bash
-grep -n "from '../shared/" /Users/keunsy/work/cursor/cursor-remote-control/dingtalk/server-minimal.ts
+grep -n "from '../shared/" /Users/keunsy/work/cursor/cursor-remote-control/dingtalk/server.ts
 ```
 
 Expected: 显示 3 行修改后的 import 语句
@@ -209,13 +209,13 @@ Expected: 编译通过
 ## Task 6: 测试 dingtalk 服务启动
 
 **Files:**
-- Test: `dingtalk/server-minimal.ts`
+- Test: `dingtalk/server.ts`
 
 **Step 1: 启动 dingtalk 服务**
 
 ```bash
 cd /Users/keunsy/work/cursor/cursor-remote-control/dingtalk
-timeout 10 bun run server-minimal.ts 2>&1 | head -n 20
+timeout 10 bun run server.ts 2>&1 | head -n 20
 ```
 
 Expected: 服务正常启动，无 "Cannot find module" 错误
@@ -364,7 +364,7 @@ Expected: 无新增错误
 
 ```bash
 cd dingtalk
-timeout 10 bun run server-minimal.ts 2>&1 | head -n 20
+timeout 10 bun run server.ts 2>&1 | head -n 20
 ```
 
 Expected: 正常启动
@@ -429,7 +429,7 @@ git status
 
 Expected: 
 - New: `shared/` directory with 4 files
-- Modified: `dingtalk/server-minimal.ts`, `feishu/server.ts`
+- Modified: `dingtalk/server.ts`, `feishu/server.ts`
 - Deleted: 8 files (4 from dingtalk, 4 from feishu)
 - Modified: `README.md`
 
@@ -437,7 +437,7 @@ Expected:
 
 ```bash
 git add shared/
-git add dingtalk/server-minimal.ts feishu/server.ts
+git add dingtalk/server.ts feishu/server.ts
 git add README.md
 git add -u dingtalk/ feishu/  # 暂存删除的文件
 ```
@@ -455,7 +455,7 @@ refactor: 提取共享模块到 shared/ 目录
   - sync-apple-notes.ts: Apple Notes 同步
 
 - 更新 import 路径
-  - dingtalk/server-minimal.ts
+  - dingtalk/server.ts
   - feishu/server.ts
 
 - 删除重复文件
@@ -487,7 +487,7 @@ Expected: 显示最新提交，包含所有变更文件
 完成所有任务后，确认：
 
 - ✅ `shared/` 目录包含 4 个模块
-- ✅ `dingtalk/server-minimal.ts` 和 `feishu/server.ts` 使用 `../shared/` import
+- ✅ `dingtalk/server.ts` 和 `feishu/server.ts` 使用 `../shared/` import
 - ✅ `bridge.ts` 仍在 `dingtalk/` 和 `feishu/` 目录
 - ✅ `bunx tsc --noEmit` 无新增错误
 - ✅ 两个服务都能正常启动
@@ -513,5 +513,5 @@ git restore dingtalk/memory.ts dingtalk/scheduler.ts \
            feishu/memory.ts feishu/scheduler.ts \
            feishu/heartbeat.ts feishu/sync-apple-notes.ts
 rm -rf shared/
-git restore dingtalk/server-minimal.ts feishu/server.ts README.md
+git restore dingtalk/server.ts feishu/server.ts README.md
 ```

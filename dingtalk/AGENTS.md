@@ -1,6 +1,6 @@
 # AGENTS.md — dingtalk-cursor-claw
 
-> 钉钉 → Cursor Agent 中继服务（MVP 版本）
+> 钉钉 → Cursor Agent 中继服务 v2
 
 ---
 
@@ -25,7 +25,7 @@
 
 ```
 dingtalk-cursor-claw/
-├── server-minimal.ts      # 主服务入口（MVP）：钉钉 Stream → Cursor Agent CLI
+├── server.ts              # 主服务入口：钉钉 Stream → Cursor Agent CLI
 ├── dingtalk-client.ts     # 钉钉 Stream 客户端封装
 ├── dingtalk-helper.ts     # 钉钉工具函数
 ├── start.ts               # 启动脚本
@@ -53,33 +53,34 @@ dingtalk-cursor-claw/
 
 ---
 
-## 当前状态（MVP）
+## 当前状态 v2
 
 **已实现：**
 - ✅ 钉钉 Stream 长连接接收消息
 - ✅ 调用 Cursor Agent CLI 执行任务
 - ✅ 会话管理（--resume 持久化会话）
-- ✅ 项目路由（传统 + 对话式）
+- ✅ 项目路由（传统 + 对话式 + 持久切换）
 - ✅ 消息去重
 - ✅ Markdown 回复
 - ✅ 语音识别（本地 whisper）
 - ✅ 图片、文件处理
+- ✅ 命令系统（/help、/模型、/会话、/新闻、/任务 等）
+- ✅ 定时任务（独立配置 cron-jobs-dingtalk.json）
+- ✅ 心跳系统
+- ✅ 记忆搜索（共享飞书记忆库）
+- ✅ 新闻推送（定时/立即）
 
-**未实现（后续版本）：**
-- ❌ 命令系统（/help、/模型、/会话 等）
-- ❌ 定时任务
-- ❌ 心跳系统
-- ❌ 记忆搜索
-- ❌ 实时卡片更新
+**暂不支持：**
+- ⏸️ 实时卡片更新（钉钉限制：不支持消息更新）
 
 ---
 
 ## 关键设计决策
 
-1. **MVP 优先** — 先实现核心功能，扩展功能按需添加
+1. **功能完整** — 命令系统、定时任务、心跳检测、记忆搜索等核心功能已实现
 2. **代码复用** — 通过符号链接共享飞书项目的核心模块
 3. **独立部署** — 与飞书服务并行运行，互不干扰
-4. **简化设计** — server-minimal.ts 只保留最核心的逻辑
+4. **对话式路由** — 支持持久切换、临时路由、简化符号三种方式
 
 ---
 

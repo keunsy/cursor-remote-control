@@ -4,7 +4,7 @@
  * OpenClaw → 本服务 (OpenAI Chat Completions 格式) → Cursor Agent CLI
  *
  * OpenClaw 将本服务视为一个"模型 provider"，
- * 收到请求后提取消息内容，通过 expect/PTY 调用 Cursor Agent CLI，
+ * 收到请求后提取消息内容，通过 spawn 调用 Cursor Agent CLI，
  * 将结果以 OpenAI 格式返回。
  *
  * 启动: bun run bridge.ts
@@ -108,7 +108,7 @@ function extractPrompt(messages: ChatMessage[]): string {
 // ── Cursor Agent CLI 调用（直接 spawn，不依赖 expect）──
 const MAX_CONCURRENT = 2;
 const MAX_EXEC_TIMEOUT = 30 * 60 * 1000;
-const IDLE_TIMEOUT = 60 * 1000;
+const IDLE_TIMEOUT = 10 * 60 * 1000;
 
 function runAgent(prompt: string): Promise<string> {
 	const workspace = resolve(import.meta.dirname, "..");
@@ -201,10 +201,18 @@ async function handleRequest(req: Request): Promise<Response> {
 		req.method === "POST" &&
 		(url.pathname === "/v1/chat/completions" || url.pathname === "/chat/completions")
 	) {
-		const body = (await req.json()) as {
-			messages?: ChatMessage[];
-			stream?: boolean;
-		};
+		let body: { messages?: ChatMessage[]; stream?: boolean };
+		try {
+			body = (await req.json()) as {
+				messages?: ChatMessage[];
+				stream?: boolean;
+			};
+		} catch (e) {
+			return Response.json(
+				{ error: { message: "Invalid JSON", type: "invalid_request_error" } },
+				{ status: 400 },
+			);
+		}
 
 		if (activeRequests >= MAX_CONCURRENT) {
 			return Response.json(

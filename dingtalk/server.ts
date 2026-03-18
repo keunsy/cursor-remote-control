@@ -1,13 +1,14 @@
 /**
- * 钉钉 Stream → Cursor Agent CLI 中继服务 v1 (MVP)
+ * 钉钉 Stream → Cursor Agent CLI 中继服务 v2
  *
  * 核心功能：
  * - 钉钉消息 → Cursor CLI → 钉钉回复
- * - 支持文字、语音、图片
+ * - 支持文字、语音、图片、文件
  * - 会话管理（--resume）
- * - 项目路由
+ * - 项目路由（传统 + 对话式）
+ * - 命令系统、定时任务、心跳检测、记忆搜索
  *
- * 启动: bun run server-minimal.ts
+ * 启动: bun run server.ts
  */
 
 import { DWClient, TOPIC_ROBOT } from 'dingtalk-stream';
@@ -598,6 +599,21 @@ function getLockKey(workspace: string): string {
 	return sid ? `session:${sid}` : `ws:${workspace}`;
 }
 
+// 同一 session 的消息串行执行；不同 session（即使同工作区）可并行
+const sessionLocks = new Map<string, Promise<void>>();
+async function withSessionLock<T>(lockKey: string, fn: () => Promise<T>): Promise<T> {
+	const prev = sessionLocks.get(lockKey) || Promise.resolve();
+	let release!: () => void;
+	const next = new Promise<void>((r) => { release = r; });
+	sessionLocks.set(lockKey, next);
+	await prev;
+	try {
+		return await fn();
+	} finally {
+		release();
+	}
+}
+
 // 同会话串行执行，不同会话可并行
 const busySessions = new Set<string>();
 
@@ -738,6 +754,7 @@ async function runAgent(
 			if (context?.webhook) env.CURSOR_WEBHOOK = context.webhook;
 			env.CURSOR_CRON_FILE = resolve(ROOT, 'cron-jobs-dingtalk.json');
 
+			console.log(`[CLI] 启动 agent 进程，model=${model}, resume=${!!agentId}`);
 			const proc = spawn('agent', args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
 
 			const lockKey = getLockKey(workspace);
@@ -772,7 +789,9 @@ async function runAgent(
 					if (!line.trim()) continue;
 					try {
 						const ev = JSON.parse(line);
-						if (ev.session_id && !sessionId) sessionId = ev.session_id;
+						if (ev.session_id && !sessionId) {
+							sessionId = ev.session_id;
+						}
 
 						if (ev.type === 'result' && ev.result != null) {
 							resultText = ev.result;
@@ -800,6 +819,7 @@ async function runAgent(
 			proc.on('close', (code) => {
 				if (done) return;
 				cleanup();
+				
 				if (lineBuf.trim()) {
 					try {
 						const ev = JSON.parse(lineBuf);
@@ -1383,18 +1403,39 @@ async function handleMessage(msg: any) {
 			const runAtMs = Date.now() + minutes * 60 * 1000;
 			const runAt = new Date(runAtMs);
 			
+			// 检测是否为新闻推送请求
+			const isNewsRequest = /推送|发送/.test(taskMessage) && /热点|新闻|热榜/.test(taskMessage);
+			let finalMessage: string;
+			let taskName: string;
+
+			console.log(`[定时] 解析任务: "${text}" → taskMessage="${taskMessage}" isNewsRequest=${isNewsRequest}`);
+
+			if (isNewsRequest) {
+				// 提取条数（默认 15 条）
+				const topNMatch = taskMessage.match(/(\d+)\s*条/);
+				const topN = topNMatch ? Math.min(50, Math.max(1, parseInt(topNMatch[1], 10))) : 15;
+				finalMessage = JSON.stringify({ type: 'fetch-news', options: { topN } });
+				taskName = '热点新闻推送';
+				console.log(`[定时] → 创建新闻推送任务，topN=${topN}`);
+			} else {
+				finalMessage = taskMessage.trim();
+				taskName = `${num}${unit}后提醒`;
+				console.log(`[定时] → 创建普通提醒任务`);
+			}
+			
 			const task = await scheduler.add({
-				name: `${num}${unit}后提醒`,
+				name: taskName,
 				enabled: true,
 				deleteAfterRun: true,
 				schedule: { kind: 'at', at: runAt.toISOString() },
-				message: taskMessage.trim(),
+				message: finalMessage,
 				platform: 'dingtalk',
 				webhook: sessionWebhook,
 			});
 			
 			const timeStr = runAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-			await sendMarkdown(sessionWebhook, `✅ 已设置好，大约在 **${timeStr}** 通过钉钉提醒你：\n\n${taskMessage}\n\n发送 \`/cron\` 可查看所有任务。`, '⏰ 定时任务已创建');
+			const content = isNewsRequest ? `今日热点新闻（前 ${JSON.parse(finalMessage).options.topN} 条）` : taskMessage;
+			await sendMarkdown(sessionWebhook, `✅ 已设置好，大约在 **${timeStr}** 通过钉钉提醒你：\n\n${content}\n\n发送 \`/cron\` 可查看所有任务。`, '⏰ 定时任务已创建');
 			console.log(`[任务] 服务器端创建: ${task.name} @ ${timeStr}`);
 			return;
 		}
@@ -1431,6 +1472,11 @@ async function handleMessage(msg: any) {
 				`- ${c('/新对话', '/new')} — 重置当前会话`,
 				`- ${c('/终止', '/stop')} — 终止正在执行的任务`,
 				'',
+				'**热点 / 新闻**',
+				`- ${c('/新闻', '/news')} — **立即推送**今日热点（直接发 \`/新闻\`）；定时例：\`/新闻 每天9点 推送10条\``,
+				`- ${c('/新闻状态', '/news status')} — 各数据源是否可用`,
+				'- 也可说：「每天9点推送热点」「30分钟后推送10条新闻」等自动建定时任务',
+				'',
 				'**会话管理**',
 				`- ${c('/会话', '/sessions')} — 查看最近会话列表`,
 				'- `/会话 编号` — 切换到指定会话',
@@ -1448,11 +1494,8 @@ async function handleMessage(msg: any) {
 				`- ${c('/整理记忆', '/reindex')} — 重建记忆索引`,
 				'',
 				'**定时任务**',
-				`- ${c('/任务', '/cron')} — 查看所有定时任务`,
-				`- ${c('/新闻', '/news')} — 创建热点新闻定时推送（如：/新闻 每天9点 推送10条）`,
-				`- ${c('/新闻状态', '/news status 或 /health')} — 查看数据源健康状态`,
-				'- `/任务 暂停/恢复/删除/执行 ID`',
-				'- 或在对话中说「每天早上9点做XX」或「每天9点推送热点」由 AI 自动创建',
+				`- ${c('/任务', '/cron')} — 查看/暂停/恢复/删除/执行（含热点推送任务）`,
+				'- 热点定时见上文 **热点 / 新闻**；其它定时也可说「每天早上9点提醒我XX」',
 				'',
 			'**心跳系统**',
 			`- ${c('/心跳', '/heartbeat')} — 查看心跳状态`,
@@ -1530,32 +1573,56 @@ async function handleMessage(msg: any) {
 			return;
 		}
 
-		// /新闻状态、/news status、/health → 新闻源健康状态（必须在 /新闻 之前检查）
-		const newsStatusMatch = message.match(/^\/(新闻状态|news\s+status|health)[\s:：]*$/i);
+		// /新闻状态、/news status → 新闻源健康状态（必须在 /新闻 之前检查）
+		const newsStatusMatch = message.match(/^\/(新闻状态|news\s+status)[\s:：]*$/i);
 		if (newsStatusMatch) {
 			const status = getHealthStatus();
 			await sendMarkdown(sessionWebhook, status, '📊 新闻源健康状态', 'blue');
 			return;
 		}
 
-		// /新闻、/news → 创建热点新闻定时推送任务
+		// /新闻、/news → 立即推送或创建定时任务
 		if (message.match(/^\/(新闻|news)\s*/i)) {
 			const args = message.replace(/^\/(新闻|news)\s*/i, '').trim();
 			let topN = 15;
 			const topMatch = args.match(/(?:推送|前|top)\s*(\d+)\s*条/i) ?? args.match(/(\d+)\s*条/i);
 			if (topMatch) topN = Math.min(50, Math.max(1, parseInt(topMatch[1], 10)));
-			
+
 			// 支持多种时间表达式
 			const dailyMatch = args.match(/每天\s*([0-9一二三四五六七八九十]+)\s*[点时]/);
 			const tomorrowMatch = args.match(/明天\s*(上午|下午)?\s*([0-9一二三四五六七八九十]+)\s*[点时]/);
 			const minutesMatch = args.match(/(\d+)\s*分钟[后以]后/);
 			const hoursMatch = args.match(/(\d+)\s*[个小]时[后以]后/);
-			
+
+			// 如果没有时间表达式，立即执行推送
+			if (!minutesMatch && !hoursMatch && !dailyMatch && !tomorrowMatch) {
+				await sendMarkdown(sessionWebhook, `📰 正在抓取热点新闻...`, '🔄 处理中', 'blue');
+				try {
+					const { messages } = await fetchNews({ topN, platform: 'dingtalk' });
+					
+					if (messages.length === 0) {
+						await sendMarkdown(sessionWebhook, `❌ 未获取到新闻数据`, '失败', 'red');
+						return;
+					}
+
+					// 多条消息分批发送
+					const chunks = typeof messages === 'string' ? [messages] : messages;
+					for (let i = 0; i < chunks.length; i++) {
+						const title = chunks.length > 1 ? `📰 今日热点 (${i + 1}/${chunks.length})` : '📰 今日热点';
+						await sendMarkdown(sessionWebhook, chunks[i], title, 'green');
+					}
+				} catch (error) {
+					await sendMarkdown(sessionWebhook, `❌ 推送失败\n\n${error instanceof Error ? error.message : String(error)}`, '失败', 'red');
+				}
+				return;
+			}
+
+			// 有时间表达式，创建定时任务
 			const numMap: Record<string, number> = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
 			const toNum = (s: string) => (numMap[s] ?? parseInt(s, 10)) || 9;
 			let schedule: { kind: 'cron'; expr: string; tz?: string } | { kind: 'at'; at: string };
 			let timeDesc: string;
-			
+
 			if (minutesMatch) {
 				// X分钟后
 				const minutes = parseInt(minutesMatch[1], 10);
@@ -1583,25 +1650,20 @@ async function handleMessage(msg: any) {
 				d.setHours(hour, 0, 0, 0);
 				schedule = { kind: 'at', at: d.toISOString() };
 				timeDesc = `明天 ${hour}:00`;
-			} else {
-				// 默认每天9点
-				const hour = 9;
-				schedule = { kind: 'cron', expr: `0 ${hour} * * *`, tz: 'Asia/Shanghai' };
-				timeDesc = `每天 ${hour}:00（默认）`;
 			}
 			const msg = JSON.stringify({ type: 'fetch-news', options: { topN } });
 			await scheduler.add({
 				name: '热点新闻推送',
 				enabled: true,
 				deleteAfterRun: false,
-				schedule,
+				schedule: schedule!,
 				message: msg,
 				platform: 'dingtalk',
 				webhook: sessionWebhook,
 			});
 			await sendMarkdown(
 				sessionWebhook,
-				`✅ 已创建定时任务\n\n⏰ 执行时间：${timeDesc}\n📰 推送内容：今日热点新闻（前 ${topN} 条）\n📱 到时会通过**钉钉**提醒你\n\n发送 \`/任务\` 可查看所有任务`,
+				`✅ 已创建定时任务\n\n⏰ 执行时间：${timeDesc!}\n📰 推送内容：今日热点新闻（前 ${topN} 条）\n📱 到时会通过**钉钉**提醒你\n\n发送 \`/任务\` 可查看所有任务`,
 				'⏰ 定时任务已创建',
 				'green'
 			);
@@ -1640,6 +1702,8 @@ async function handleMessage(msg: any) {
 		// /new、/新对话、/新会话 → 归档当前会话，开启新对话
 		if (/^\/(new|新对话|新会话)\s*$/i.test(message.trim())) {
 			archiveAndResetSession(workspace);
+			// 清空内存中的 agentId，确保下次对话不会 --resume
+			session.agentId = undefined;
 			const historyCount = getSessionHistory(workspace).length;
 			const hint = historyCount > 0 ? `\n\n历史会话已保留（共 ${historyCount} 个），发送 \`/会话\` 可查看和切换。` : '';
 			await sendMarkdown(sessionWebhook, `**[${label}]** 新会话已开始，下一条消息将创建全新对话。${hint}`, '🆕 新会话', 'green');
@@ -1682,6 +1746,8 @@ async function handleMessage(msg: any) {
 					return;
 				}
 				switchToSession(workspace, target.id);
+				// 同步更新内存中的 agentId
+				session.agentId = target.id;
 				await sendMarkdown(sessionWebhook, `已切换到会话 #${num}：**${target.summary}**\n\n下一条消息将在此会话中继续对话。\n\`${target.id.slice(0, 12)}\` · ${formatRelativeTime(target.lastActiveAt)}`, '💬 已切换', 'green');
 				console.log(`[Session] 切换到 ${target.id.slice(0, 12)} (${target.summary})`);
 				return;
@@ -1692,6 +1758,8 @@ async function handleMessage(msg: any) {
 				const target = history.find(h => h.id.startsWith(subArg));
 				if (target) {
 					switchToSession(workspace, target.id);
+					// 同步更新内存中的 agentId
+					session.agentId = target.id;
 					await sendMarkdown(sessionWebhook, `已切换到：**${target.summary}**\n\n\`${target.id.slice(0, 12)}\` · ${formatRelativeTime(target.lastActiveAt)}`, '💬 已切换');
 					return;
 				}
@@ -2122,13 +2190,19 @@ async function handleMessage(msg: any) {
 		// 调用 Cursor（并发控制）
 		const lockKey = getLockKey(workspace);
 		
-		// 检查是否有同会话任务运行中
-		if (busySessions.has(lockKey)) {
+		// 检查是否有同会话任务运行中（用于显示排队提示）
+		const hasLock = sessionLocks.has(lockKey);
+		const isBusy = busySessions.has(lockKey) || hasLock;
+		
+		if (isBusy) {
 			await sendMarkdown(sessionWebhook, '⏳ 排队中（同会话有任务进行中）\n\n请稍候...', '⏸️ 排队中', 'orange');
 			console.log(`[并发] 会话 ${lockKey} 已在运行，等待中...`);
 		}
 		
-	busySessions.add(lockKey);
+		// 使用会话锁确保串行执行
+		await withSessionLock(lockKey, async () => {
+			busySessions.add(lockKey);
+	
 	console.log(`[执行] workspace=${workspace} message="${message.slice(0, 60)}"`);
 	
 	await sendMarkdown(sessionWebhook, '⏳ Cursor AI 正在思考...', '💭 思考中', 'wathet');
@@ -2164,7 +2238,8 @@ async function handleMessage(msg: any) {
 	}
 	
 	try {
-		const taskStart = Date.now();
+		const agentStart = Date.now();
+		
 		const { result, quotaWarning } = await runAgent(workspace, message, session.agentId, {
 			platform: 'dingtalk',
 			webhook: sessionWebhook,
@@ -2173,8 +2248,9 @@ async function handleMessage(msg: any) {
 				setActiveSession(workspace, sid, message.slice(0, 40));
 			},
 		});
-
-		const elapsed = formatElapsed(Math.round((Date.now() - taskStart) / 1000));
+		
+		const agentElapsedMs = Date.now() - agentStart;
+		const elapsed = formatElapsed(Math.round(agentElapsedMs / 1000));
 		const title = quotaWarning ? `⚠️ 完成 · ${elapsed}（已降级）` : `✅ 完成 · ${elapsed}`;
 		console.log(`[完成] model=${quotaWarning ? 'auto' : config.CURSOR_MODEL} elapsed=${elapsed} (${result.length} chars)`);
 
@@ -2224,6 +2300,7 @@ async function handleMessage(msg: any) {
 		} finally {
 			busySessions.delete(lockKey);
 		}
+		}); // 闭合 withSessionLock
 		
 	} catch (error) {
 		const msg = error instanceof Error ? error.message : String(error);
@@ -2418,7 +2495,7 @@ ${Object.entries(projectsConfig.projects).map(([k, v]) => `│    /${k} → ${v.
 │  ✅ 已支持:
 │    - 消息: 文本、语音、图片、文件
 │    - 路由: 传统(/project) + 对话式(切换到/# /@)
-│    - 命令: /帮助 /状态 /新对话 /会话 /模型 /密钥 /终止 /任务
+│    - 命令: /帮助 /状态 /新闻 /任务 /新对话 /会话 /模型 /密钥 /终止
 │    - 会话: 持久化、历史、切换
 │    - 记忆: 语义搜索、日志记录、全工作区索引（与飞书共享）
 │    - 心跳: 定期检查、主动推送

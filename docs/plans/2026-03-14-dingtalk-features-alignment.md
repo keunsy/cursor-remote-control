@@ -92,7 +92,7 @@ mkdir -p /Users/keunsy/work/cursor/cursor-remote-control/templates/.cursor/sessi
 - Cursor Agent CLI
 
 ## 核心模块
-- server-minimal.ts - 主服务
+- server.ts - 主服务
 - memory.ts - 记忆管理
 - scheduler.ts - 定时任务
 - heartbeat.ts - 心跳系统
@@ -135,11 +135,11 @@ Expected: 显示完整的目录树
 **目的：** 在钉钉版添加 ensureWorkspace() 函数，自动复制模板到工作区
 
 **Files:**
-- Modify: `/Users/keunsy/work/cursor/cursor-remote-control/dingtalk/server-minimal.ts:110-120` (在项目配置加载后添加)
+- Modify: `/Users/keunsy/work/cursor/cursor-remote-control/dingtalk/server.ts:110-120` (在项目配置加载后添加)
 
 **Step 1: 添加模板目录常量**
 
-在 `server-minimal.ts` 的配置部分（约第109行后）添加：
+在 `server.ts` 的配置部分（约第109行后）添加：
 
 ```typescript
 // ── 工作区模板自动初始化 ─────────────────────────
@@ -210,7 +210,7 @@ function ensureWorkspace(wsPath: string): boolean {
 
 **Step 2: 在记忆管理器初始化前调用**
 
-在 `server-minimal.ts` 约第120行（记忆管理器初始化前）添加：
+在 `server.ts` 约第120行（记忆管理器初始化前）添加：
 
 ```typescript
 // 初始化记忆工作区
@@ -242,11 +242,11 @@ Expected: 看到 "[工作区] 从模板复制: xxx" 的日志
 **目的：** 服务启动时自动执行 .cursor/BOOT.md 检查清单，可选推送结果到钉钉
 
 **Files:**
-- Modify: `/Users/keunsy/work/cursor/cursor-remote-control/dingtalk/server-minimal.ts:1900-1920` (在服务启动后添加)
+- Modify: `/Users/keunsy/work/cursor/cursor-remote-control/dingtalk/server.ts:1900-1920` (在服务启动后添加)
 
 **Step 1: 添加启动自检逻辑**
 
-在 `server-minimal.ts` 末尾（约第1900行，服务启动日志后）添加：
+在 `server.ts` 末尾（约第1900行，服务启动日志后）添加：
 
 ```typescript
 // ── 启动自检（.cursor/BOOT.md）───────────────────────
@@ -318,7 +318,7 @@ Expected: 如果 BOOT.md 返回了内容（非 HEARTBEAT_OK），会收到钉钉
 **目的：** 首次对话时触发 BOOTSTRAP.md，AI 自我介绍并与用户建立关系
 
 **Files:**
-- Modify: `/Users/keunsy/work/cursor/cursor-remote-control/dingtalk/server-minimal.ts:800-850` (消息处理逻辑中)
+- Modify: `/Users/keunsy/work/cursor/cursor-remote-control/dingtalk/server.ts:800-850` (消息处理逻辑中)
 
 **Step 1: 在消息处理前添加 BOOTSTRAP 检查**
 
@@ -406,7 +406,7 @@ Expected: 文件不存在
 
 **Files:**
 - Create: `/Users/keunsy/work/cursor/cursor-remote-control/dingtalk/send-file-dingtalk.ts`
-- Modify: `/Users/keunsy/work/cursor/cursor-remote-control/dingtalk/server-minimal.ts:1400-1420` (添加命令处理)
+- Modify: `/Users/keunsy/work/cursor/cursor-remote-control/dingtalk/server.ts:1400-1420` (添加命令处理)
 
 **Step 1: 研究钉钉文件上传 API**
 
@@ -494,7 +494,7 @@ export async function sendFileDingtalk(webhook: string, mediaId: string, fileNam
 
 **Step 3: 添加命令处理逻辑**
 
-在 `server-minimal.ts` 的命令处理部分（约第1400行）添加：
+在 `server.ts` 的命令处理部分（约第1400行）添加：
 
 ```typescript
 // /发送文件、/sendfile、/send
@@ -582,7 +582,7 @@ Expected:
 **目的：** 更新 `/帮助` 命令输出，说明新功能
 
 **Files:**
-- Modify: `/Users/keunsy/work/cursor/cursor-remote-control/dingtalk/server-minimal.ts:1196-1210`
+- Modify: `/Users/keunsy/work/cursor/cursor-remote-control/dingtalk/server.ts:1196-1210`
 
 **Step 1: 添加新命令到帮助信息**
 
@@ -795,7 +795,7 @@ Expected: 显示工作区、模板、BOOT、BOOTSTRAP 状态
 
 ```bash
 cd /Users/keunsy/work/cursor/cursor-remote-control/dingtalk
-git checkout server-minimal.ts
+git checkout server.ts
 bash service.sh restart
 ```
 

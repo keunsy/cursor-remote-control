@@ -2129,6 +2129,11 @@ async function handleInner(
 			`- ${c("/新对话", "/new")} — 重置当前会话`,
 			`- ${c("/终止", "/stop")} — 终止正在执行的任务`,
 			"",
+			"**热点 / 新闻**",
+			`- ${c("/新闻", "/news")} — **立即推送**今日热点（直接发 \`/新闻\`）；定时例：\`/新闻 每天9点 推送10条\``,
+			`- ${c("/新闻状态", "/news status")} — 各数据源是否可用`,
+			"- 也可说：「每天9点推送热点」「30分钟后推送10条新闻」等自动建定时任务",
+			"",
 			"**会话管理**",
 			`- ${c("/会话", "/sessions")} — 查看最近会话列表`,
 			`- \`/会话 编号\` — 切换到指定会话`,
@@ -2151,11 +2156,8 @@ async function handleInner(
 		`- 示例: \`/发送文件 ~/document.pdf\``,
 		"",
 			"**定时任务**",
-			`- ${c("/任务", "/cron")} — 查看所有定时任务`,
-			"- `/任务 暂停/恢复/删除/执行 ID`",
-			`- ${c("/新闻", "/news")} — 创建热点新闻定时推送（如：/新闻 每天9点 推送10条）`,
-			`- ${c("/新闻状态", "/news status 或 /health")} — 查看数据源健康状态`,
-			"- 或在对话中说「每天早上9点做XX」「每天9点推送热点」由 AI 自动创建",
+			`- ${c("/任务", "/cron")} — 查看/暂停/恢复/删除/执行（含热点推送任务）`,
+			"- 热点定时见上文 **热点 / 新闻**；其它定时也可说「每天早上9点提醒我XX」",
 			"",
 		"**心跳系统**",
 		`- ${c("/心跳", "/heartbeat")} — 查看心跳状态`,
@@ -2219,8 +2221,8 @@ async function handleInner(
 		return;
 	}
 
-	// /新闻状态、/news status、/health → 新闻源健康状态（必须在 /新闻 之前检查）
-	const newsStatusMatch = text.match(/^\/(新闻状态|news\s+status|health)[\s:：]*$/i);
+	// /新闻状态、/news status → 新闻源健康状态（必须在 /新闻 之前检查）
+	const newsStatusMatch = text.match(/^\/(新闻状态|news\s+status)[\s:：]*$/i);
 	if (newsStatusMatch) {
 		const status = getHealthStatus();
 		await replyCard(messageId, status, { title: "📊 新闻源健康状态", color: "blue" });
@@ -2240,6 +2242,34 @@ async function handleInner(
 		const minutesMatch = args.match(/(\d+)\s*分钟[后以]后/);
 		const hoursMatch = args.match(/(\d+)\s*[个小]时[后以]后/);
 		
+		// 如果没有时间表达式，立即执行推送
+		if (!minutesMatch && !hoursMatch && !dailyMatch && !tomorrowMatch) {
+			const cardId = await replyCard(messageId, `📰 正在抓取热点新闻...`, { title: "🔄 处理中", color: "blue" });
+			try {
+				const { messages } = await fetchNews({ topN, platform: "feishu" });
+				
+				if (messages.length === 0) {
+					await updateCard(cardId, `❌ 未获取到新闻数据`, { title: "失败", color: "red" });
+					return;
+				}
+
+				// 多条消息分批发送
+				const chunks = typeof messages === "string" ? [messages] : messages;
+				for (let i = 0; i < chunks.length; i++) {
+					const title = chunks.length > 1 ? `📰 今日热点 (${i + 1}/${chunks.length})` : "📰 今日热点";
+					if (i === 0) {
+						await updateCard(cardId, chunks[i], { title, color: "green" });
+					} else {
+						await replyCard(messageId, chunks[i], { title, color: "green" });
+					}
+				}
+			} catch (error) {
+				await updateCard(cardId, `❌ 推送失败\n\n${error instanceof Error ? error.message : String(error)}`, { title: "失败", color: "red" });
+			}
+			return;
+		}
+		
+		// 有时间表达式，创建定时任务
 		const numMap: Record<string, number> = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
 		const toNum = (s: string) => (numMap[s] ?? parseInt(s, 10)) || 9;
 		let schedule: { kind: "cron"; expr: string; tz?: string } | { kind: "at"; at: string };
@@ -2272,25 +2302,20 @@ async function handleInner(
 			d.setHours(hour, 0, 0, 0);
 			schedule = { kind: "at", at: d.toISOString() };
 			timeDesc = `明天 ${hour}:00`;
-		} else {
-			// 默认每天9点
-			const hour = 9;
-			schedule = { kind: "cron", expr: `0 ${hour} * * *`, tz: "Asia/Shanghai" };
-			timeDesc = `每天 ${hour}:00（默认）`;
 		}
 		const message = JSON.stringify({ type: "fetch-news", options: { topN } });
 		await scheduler.add({
 			name: "热点新闻推送",
 			enabled: true,
 			deleteAfterRun: false,
-			schedule,
+			schedule: schedule!,
 			message,
 			platform: "feishu",
 			webhook: chatId,
 		});
 		await replyCard(
 			messageId,
-			`✅ 已创建定时任务\n\n⏰ 执行时间：${timeDesc}\n📰 推送内容：今日热点新闻（前 ${topN} 条）\n📱 到时会通过**飞书**提醒你\n\n发送 \`/任务\` 可查看所有任务`,
+			`✅ 已创建定时任务\n\n⏰ 执行时间：${timeDesc!}\n📰 推送内容：今日热点新闻（前 ${topN} 条）\n📱 到时会通过**飞书**提醒你\n\n发送 \`/任务\` 可查看所有任务`,
 			{ title: "⏰ 定时任务已创建", color: "green" },
 		);
 		return;
@@ -3040,18 +3065,39 @@ async function handleInner(
 		const runAtMs = Date.now() + minutes * 60 * 1000;
 		const runAt = new Date(runAtMs);
 		
+		// 检测是否为新闻推送请求
+		const isNewsRequest = /推送|发送/.test(taskMessage) && /热点|新闻|热榜/.test(taskMessage);
+		let finalMessage: string;
+		let taskName: string;
+		
+		console.log(`[定时] 解析任务: "${text}" → taskMessage="${taskMessage}" isNewsRequest=${isNewsRequest}`);
+		
+		if (isNewsRequest) {
+			// 提取条数（默认 15 条）
+			const topNMatch = taskMessage.match(/(\d+)\s*条/);
+			const topN = topNMatch ? Math.min(50, Math.max(1, parseInt(topNMatch[1], 10))) : 15;
+			finalMessage = JSON.stringify({ type: 'fetch-news', options: { topN } });
+			taskName = '热点新闻推送';
+			console.log(`[定时] → 创建新闻推送任务，topN=${topN}`);
+		} else {
+			finalMessage = taskMessage.trim();
+			taskName = `${num}${unit}后提醒`;
+			console.log(`[定时] → 创建普通提醒任务`);
+		}
+		
 		const task = await scheduler.add({
-			name: `${num}${unit}后提醒`,
+			name: taskName,
 			enabled: true,
 			deleteAfterRun: true,
 			schedule: { kind: 'at', at: runAt.toISOString() },
-			message: taskMessage.trim(),
+			message: finalMessage,
 			platform: 'feishu',
 			webhook: chatId,
 		});
 		
 		const timeStr = runAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-		await replyCard(messageId, `✅ 已设置好，大约在 **${timeStr}** 通过飞书提醒你：\n\n${taskMessage}\n\n发送 \`/cron\` 可查看所有任务。`, { title: '⏰ 定时任务已创建', color: 'green' });
+		const content = isNewsRequest ? `今日热点新闻（前 ${JSON.parse(finalMessage).options.topN} 条）` : taskMessage;
+		await replyCard(messageId, `✅ 已设置好，大约在 **${timeStr}** 通过飞书提醒你：\n\n${content}\n\n发送 \`/cron\` 可查看所有任务。`, { title: '⏰ 定时任务已创建', color: 'green' });
 		console.log(`[任务] 服务器端创建: ${task.name} @ ${timeStr}`);
 		return;
 	}

@@ -46,7 +46,7 @@
 ### 整体架构
 
 ```
-飞书/钉钉消息 → server.ts/server-minimal.ts → 命令解析器
+飞书/钉钉消息 → server.ts → 命令解析器
                                                 ↓
                                            识别飞连指令
                                                 ↓
@@ -73,7 +73,7 @@ shared/
 **修改文件**：
 ```
 feishu/server.ts                # 添加 /飞连 命令处理（约 30 行）
-dingtalk/server-minimal.ts      # 添加 /飞连 命令处理（约 30 行）
+dingtalk/server.ts              # 添加 /飞连 命令处理（约 30 行）
 README.md                       # 添加使用文档
 ```
 
@@ -250,7 +250,7 @@ async toggle(): Promise<OperationResult> {
 1. ✅ 创建 `shared/feilian-control.ts`（核心逻辑）
 2. ✅ 创建 `shared/feilian-control.applescript`（快捷键脚本）
 3. ✅ 集成到 `feishu/server.ts`（命令处理）
-4. ✅ 集成到 `dingtalk/server-minimal.ts`（命令处理）
+4. ✅ 集成到 `dingtalk/server.ts`（命令处理）
 5. ✅ 配置系统权限（辅助功能）
 6. ✅ 测试验证（锁屏/解锁状态）
 7. ✅ 更新 README 文档

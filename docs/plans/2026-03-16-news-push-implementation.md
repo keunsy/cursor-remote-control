@@ -1145,11 +1145,11 @@ git commit -m "feat(news): integrate news push into Feishu scheduler"
 ## Task 9: 集成到 scheduler（钉钉）
 
 **Files:**
-- Modify: `/Users/user/work/cursor/cursor-remote-control/dingtalk/server-minimal.ts:2127-2157`
+- Modify: `/Users/user/work/cursor/cursor-remote-control/dingtalk/server.ts:2127-2157`
 
 **Step 1: 导入依赖**
 
-在 `dingtalk/server-minimal.ts` 顶部添加：
+在 `dingtalk/server.ts` 顶部添加：
 
 ```typescript
 import { fetchNews } from '../shared/news-fetcher.js';
@@ -1228,7 +1228,7 @@ if (newsScheduleMatch) {
 **Step 4: 提交**
 
 ```bash
-git add dingtalk/server-minimal.ts
+git add dingtalk/server.ts
 git commit -m "feat(news): integrate news push into DingTalk scheduler"
 ```
 

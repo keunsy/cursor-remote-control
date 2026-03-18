@@ -99,7 +99,7 @@
 ## 5. 导入路径检查
 
 - [ ] `feishu/server.ts` 正确导入 `news-fetcher.js`、`monitoring.js`
-- [ ] `dingtalk/server-minimal.ts` 正确导入 `news-fetcher.js`、`monitoring.js`
+- [ ] `dingtalk/server.ts` 正确导入 `news-fetcher.js`、`monitoring.js`
 - [ ] `shared/news-fetcher.ts` 正确导入 types、config-loader、newsnow、rsshub、aggregator、formatter
 
 ---
@@ -117,7 +117,7 @@ bun test
 
 ## 7. 部署后验证
 
-1. 启动服务：`bun run feishu/server.ts` 或 `bun run dingtalk/server-minimal.ts`
+1. 启动服务：`bun run feishu/server.ts` 或 `bun run dingtalk/server.ts`
 2. 在对应平台发送：`/新闻 明天上午10点推送10条热点`
 3. 检查 `cron-jobs-*.json` 是否写入新任务
 4. 发送 `/新闻状态` 确认健康检查正常

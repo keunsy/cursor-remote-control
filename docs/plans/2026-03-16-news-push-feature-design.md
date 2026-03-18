@@ -47,7 +47,7 @@ cursor-remote-control/
 ├── config/
 │   └── news-sources.json           # 新增：数据源配置
 ├── feishu/server.ts                # 修改：集成新闻推送
-└── dingtalk/server-minimal.ts      # 修改：集成新闻推送
+└── dingtalk/server.ts              # 修改：集成新闻推送
 ```
 
 ### 核心接口

@@ -9,6 +9,7 @@ export interface FormattingConfig {
   includeUrl: boolean;
   platformOrder?: string[]; // 平台显示顺序
   platformMaxItems?: Record<string, number>; // 每个平台的最大条数
+  useEnhancedStyle?: boolean; // 是否使用增强样式（默认 true）
 }
 
 /** 飞书卡片 JSON 估算限制（字节） */
@@ -51,35 +52,63 @@ function truncate(text: string, maxLen: number): string {
   return text.slice(0, maxLen - 3) + '...';
 }
 
-/** 获取排名 emoji */
-function getRankEmoji(rank?: number): string {
-  if (!rank) return '▪️';
+/** 获取排名标记（支持 emoji 和数字格式） */
+function getRankPrefix(rank?: number, useEnhancedStyle?: boolean): string {
+  if (!rank) return useEnhancedStyle ? '**▪️**' : '▪️';
+  
+  if (useEnhancedStyle) {
+    return `**${rank}.**`;
+  }
+  
   const emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
   return emojis[rank - 1] || '▪️';
 }
 
 /** 格式化单个新闻项（Markdown） */
 function formatItem(item: NewsItem, config: FormattingConfig): string {
-  const emoji = getRankEmoji(item.rank);
+  const useEnhanced = config.useEnhancedStyle ?? true;
+  const rankPrefix = getRankPrefix(item.rank, useEnhanced);
   
   // 标题行
-  let result = `${emoji} **${item.title}**`;
-  if (config.includeHotValue && item.hotValue) {
-    result += ` 🔥 \`${item.hotValue}\``;
-  }
+  if (useEnhanced) {
+    // 新样式：**1.** 标题 · 🔥 123.4万热
+    let result = `${rankPrefix} ${item.title}`;
+    if (config.includeHotValue && item.hotValue) {
+      result += ` · 🔥 ${item.hotValue}热`;
+    }
 
-  // 描述（引用样式）
-  if (config.includeDescription && item.description) {
-    const desc = truncate(item.description, config.descriptionMaxLength);
-    result += `\n  > *${desc}*`;
-  }
+    // 描述（引用样式，移除斜体）
+    if (config.includeDescription && item.description) {
+      const desc = truncate(item.description, config.descriptionMaxLength);
+      result += `\n> ${desc}`;
+    }
 
-  // 链接
-  if (config.includeUrl) {
-    result += `\n  🔗 [查看原文](${item.url})`;
-  }
+    // 链接（简化格式）
+    if (config.includeUrl) {
+      result += `\n[→ 查看原文](${item.url})`;
+    }
 
-  return result;
+    return result;
+  } else {
+    // 旧样式：1️⃣ **标题** 🔥 `123.4万`
+    let result = `${rankPrefix} **${item.title}**`;
+    if (config.includeHotValue && item.hotValue) {
+      result += ` 🔥 \`${item.hotValue}\``;
+    }
+
+    // 描述（引用样式 + 斜体）
+    if (config.includeDescription && item.description) {
+      const desc = truncate(item.description, config.descriptionMaxLength);
+      result += `\n  > *${desc}*`;
+    }
+
+    // 链接
+    if (config.includeUrl) {
+      result += `\n  🔗 [查看原文](${item.url})`;
+    }
+
+    return result;
+  }
 }
 
 /** 格式化平台区块 */
@@ -88,7 +117,17 @@ function formatSection(
   items: NewsItem[],
   config: FormattingConfig
 ): string {
-  let section = `\n## 📌 ${platform}\n\n`;
+  const useEnhanced = config.useEnhancedStyle ?? true;
+  
+  let section = '';
+  
+  if (useEnhanced) {
+    // 新样式：添加分隔线
+    section = `\n━━━━━━━━━━━━━━━━━━━━━━\n## 🌟 ${platform}\n\n`;
+  } else {
+    // 旧样式
+    section = `\n## 📌 ${platform}\n\n`;
+  }
 
   for (const item of items) {
     section += formatItem(item, config) + '\n\n';
