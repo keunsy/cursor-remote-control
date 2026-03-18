@@ -42,6 +42,9 @@ build/
 inbox/
 **/inbox/
 
+# Apple 备忘录同步输出（sync-apple-notes 生成，含个人内容，不提交）
+apple-notes/
+
 # 本地配置
 plist/
 *.plist
@@ -67,6 +70,7 @@ projects.json
 # 定时任务存储（含 webhook 等敏感信息，运行时写入）
 cron-jobs-dingtalk.json
 cron-jobs-feishu.json
+cron-jobs-wecom.json
 
 # 临时研究文档（AI 生成的探索性文档）
 feilian-*.md
@@ -91,3 +95,6 @@ TEST-*.md
 
 # 私人新闻源配置（每人不同，不提交）
 config/news-sources.json
+
+# 企业微信会话数据（运行时生成）
+wecom/.sessions.json

@@ -1,9 +1,0 @@
----
-description: 定时任务协议
-globs: ["**/*"]
-alwaysApply: false
----
-
-# 定时任务协议
-
-创建/查询定时任务时，必须使用环境变量 `CURSOR_CRON_FILE`、`CURSOR_PLATFORM`、`CURSOR_WEBHOOK`，禁止硬编码路径。

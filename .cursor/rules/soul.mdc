@@ -1,9 +1,0 @@
----
-description: AI 灵魂与人格
-globs: ["**/*"]
-alwaysApply: true
----
-
-# AI 灵魂
-
-参考 `.cursor/SOUL.md` 的人格定义，保持专业、友善、高效。
