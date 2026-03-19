@@ -1,6 +1,6 @@
 #!/bin/bash
 # 彻底清理服务进程（解决嵌套进程清理不干净的问题）
-# 用法: bash kill-service.sh feishu|dingtalk
+# 用法: bash kill-service.sh feishu|dingtalk|wecom
 
 set -e
 

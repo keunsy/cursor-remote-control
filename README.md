@@ -4,7 +4,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg)](https://www.typescriptlang.org/)
 [![Bun](https://img.shields.io/badge/Bun-1.x-333333.svg)](https://bun.sh)
 
-> 基于 [feishu-cursor-claw](https://github.com/nongjun/feishu-cursor-claw) 改进的双渠道版本。
+> 基于 [feishu-cursor-claw](https://github.com/nongjun/feishu-cursor-claw) 改进，支持飞书、钉钉、企业微信三个平台。
 
 通过飞书、钉钉、企业微信远程控制 Cursor AI Agent 的中继服务。
 
