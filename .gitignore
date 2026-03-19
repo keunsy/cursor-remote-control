@@ -107,3 +107,8 @@ config/news-sources.json
 dingtalk/.sessions.json
 feishu/.sessions.json
 wecom/.sessions.json
+
+# 临时报告文档（AI 生成的审查报告）
+DOCS-VERIFICATION-*.md
+FINAL-CHECK-REPORT-*.md
+REFACTOR-SUMMARY.md
