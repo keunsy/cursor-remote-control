@@ -98,7 +98,13 @@ TEST-*.md
 # 模板和用户文档（包含本机路径或过时信息）
 /feishu/templates/
 /feishu/发送文件到飞书.md
-/docs/
+# docs/ 目录中部分文档包含本机路径，仅提交技术文档
+/docs/*
+!/docs/cc-connect-comparison.md
+!/docs/ARCHITECTURE.md
+!/docs/DEVELOPMENT.md
+!/docs/TROUBLESHOOTING.md
+!/docs/test-plan-*.md
 
 # 私人新闻源配置（每人不同，不提交）
 config/news-sources.json
