@@ -106,5 +106,7 @@ TEST-*.md
 # 私人新闻源配置（每人不同，不提交）
 config/news-sources.json
 
-# 企业微信会话数据（运行时生成）
+# 平台会话数据（运行时生成）
+dingtalk/.sessions.json
+feishu/.sessions.json
 wecom/.sessions.json
