@@ -1667,6 +1667,49 @@ scheduler.start().catch((err) => {
 heartbeat.start();
 console.log(`[心跳] 已启动，默认关闭（发送 /心跳 开启）`);
 
+// ── 启动自检（.cursor/BOOT.md）───────────────────────
+setTimeout(async () => {
+	const bootPath = resolve(memoryWorkspace, ".cursor/BOOT.md");
+	try {
+		if (!existsSync(bootPath)) return;
+		const content = readFileSync(bootPath, "utf-8").trim();
+		if (!content) return;
+
+		console.log("[启动] 检测到 .cursor/BOOT.md，执行启动自检...");
+
+		const bootPrompt = [
+			"你正在执行启动自检。严格按以下清单执行：",
+			"",
+			content,
+			"",
+			"如果无事可做，回复 'HEARTBEAT_OK'。",
+		].join("\n");
+
+		const { result, quotaWarning } = await runAgent(memoryWorkspace, bootPrompt);
+		const trimmed = result.trim();
+		const finalResult = quotaWarning ? `${quotaWarning}\n\n---\n\n${trimmed}` : trimmed;
+
+		// 如果有需要推送的内容且有活跃会话
+		if (finalResult && !/^(无输出|HEARTBEAT_OK)$/i.test(trimmed) && lastActiveSession) {
+			try {
+				await wsClient.sendMessage(lastActiveSession.chatid, {
+					msgtype: 'markdown',
+					markdown: {
+						content: `🚀 **启动自检**\n\n${finalResult.slice(0, 3000)}`,
+					},
+				});
+				console.log("[启动] 自检结果已推送到企业微信");
+			} catch (err) {
+				console.warn('[启动] 自检推送失败:', err);
+			}
+		}
+
+		console.log("[启动] .cursor/BOOT.md 自检完成");
+	} catch (e) {
+		console.warn(`[启动] .cursor/BOOT.md 执行失败: ${e}`);
+	}
+}, BOOT_DELAY_MS);
+
 // 连接
 wsClient.connect();
 console.log('[企业微信] 正在连接 WebSocket...');
