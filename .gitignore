@@ -97,11 +97,8 @@ TEST-*.md
 
 # 模板和用户文档（包含本机路径或过时信息）
 /feishu/templates/
+/feishu/发送文件到飞书.md
 /docs/
-!docs/plans/
-!docs/news-push-usage.md
-!docs/news-push-deployment-checklist.md
-!docs/news-platform-config.md
 
 # 私人新闻源配置（每人不同，不提交）
 config/news-sources.json

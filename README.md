@@ -83,6 +83,7 @@
 cursor-remote-control/
 ├── shared/                      # 共享模块（三个平台共用）
 │   ├── memory.ts                # 记忆管理器 v2（SQLite + 向量 + FTS5）
+│   ├── memory-tool.ts           # 记忆 CLI（统一版本，供 Agent 调用）
 │   ├── scheduler.ts             # 定时任务调度
 │   ├── heartbeat.ts             # 心跳系统
 │   └── sync-apple-notes.ts      # Apple Notes 同步
@@ -90,20 +91,21 @@ cursor-remote-control/
 ├── feishu/                      # 飞书服务（独立）
 │   ├── server.ts                # 飞书主服务
 │   ├── bridge.ts                # OpenAI API 桥接
-│   ├── memory-tool.ts           # 记忆 CLI（供 Agent 调用）
+│   ├── memory-tool.ts           # 记忆 CLI 包装（转发到 shared）
 │   ├── service.sh               # 飞书服务管理脚本
 │   └── README.md                # 飞书详细文档
 │
 ├── dingtalk/                    # 钉钉服务（独立）
 │   ├── server.ts                # 钉钉主服务
 │   ├── dingtalk-client.ts       # 钉钉 Stream 客户端
-│   ├── memory-tool.ts           # 记忆 CLI（供 Agent 调用）
+│   ├── memory-tool.ts           # 记忆 CLI 包装（转发到 shared）
 │   ├── service.sh               # 钉钉服务管理脚本
 │   └── README.md                # 钉钉详细文档
 │
 ├── wecom/                       # 企业微信服务（独立）
 │   ├── server.ts                # 企业微信主服务
 │   ├── wecom-helper.ts          # 企业微信工具函数
+│   ├── memory-tool.ts           # 记忆 CLI 包装（转发到 shared）
 │   ├── service.sh               # 企业微信服务管理脚本
 │   └── README.md                # 企业微信详细文档
 │
@@ -207,8 +209,11 @@ bash service.sh install
 
 ```bash
 cd wecom
+
+# ⚠️ 重要：必须先创建 .env 文件
 cp .env.example .env
 # 编辑 .env 填入企业微信机器人凭据（BotID 和 Secret）
+
 bun install
 bash service.sh install
 ```
@@ -540,6 +545,7 @@ A: 可以！三个服务独立运行，互不干扰，共享 `projects.json` 配
 **共享模块**（`shared/` 目录）：
 - 项目路由配置 (`projects.json`)
 - 记忆管理器 (`shared/memory.ts`)
+- 记忆工具 CLI (`shared/memory-tool.ts`) - 统一版本 ⭐
 - 定时任务系统 (`shared/scheduler.ts`)
 - 心跳系统 (`shared/heartbeat.ts`)
 - Apple Notes 同步 (`shared/sync-apple-notes.ts`)
