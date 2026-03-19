@@ -3554,15 +3554,24 @@ setTimeout(async () => {
 		if (!existsSync(bootPath)) return;
 		const content = readFileSync(bootPath, "utf-8").trim();
 		if (!content) return;
+
 		console.log("[启动] 检测到 .cursor/BOOT.md，执行启动自检...");
+
 		const bootPrompt = [
-			"你正在执行启动自检。严格按 .cursor/BOOT.md 指示操作。",
-			"如果无事可做，不需要回复任何内容。",
+			"你正在执行启动自检。严格按以下清单执行：",
+			"",
+			content,
+			"",
+			"如果无事可做，回复 'HEARTBEAT_OK'。",
 		].join("\n");
-		const { result } = await runAgent(memoryWorkspace, bootPrompt);  // 修复：使用 memoryWorkspace
+
+		const { result, quotaWarning } = await runAgent(memoryWorkspace, bootPrompt);
 		const trimmed = result.trim();
-		if (trimmed && !/^(无输出|HEARTBEAT_OK)$/i.test(trimmed) && lastActiveChatId) {
-			await sendCard(lastActiveChatId, trimmed, { title: "🚀 启动自检", color: "wathet" });
+		const finalResult = quotaWarning ? `${quotaWarning}\n\n---\n\n${trimmed}` : trimmed;
+
+		// 如果有需要推送的内容且有活跃会话
+		if (finalResult && !/^(无输出|HEARTBEAT_OK)$/i.test(trimmed) && lastActiveChatId) {
+			await sendCard(lastActiveChatId, finalResult, { title: "🚀 启动自检", color: "wathet" });
 		}
 		console.log("[启动] .cursor/BOOT.md 自检完成");
 	} catch (e) {
