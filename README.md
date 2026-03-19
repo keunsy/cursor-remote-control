@@ -6,7 +6,7 @@
 
 > 基于 [feishu-cursor-claw](https://github.com/nongjun/feishu-cursor-claw) 改进的双渠道版本。
 
-通过飞书和钉钉远程控制 Cursor AI Agent 的中继服务。
+通过飞书、钉钉、企业微信远程控制 Cursor AI Agent 的中继服务。
 
 在手机上发消息，你的 Mac 就自动写代码、审文档、执行任务。将 Cursor 变成你的**私人 AI 战略合伙人**，随时随地通过 IM 调用。
 
@@ -17,11 +17,13 @@
 ### 整体架构
 
 ```
-手机飞书 ──WebSocket──→ feishu/server.ts ──┐
-                                          ├──→ Cursor CLI ──→ 本地 Cursor IDE
-手机钉钉 ──Stream─────→ dingtalk/server.ts ─────────┘         │
-                                                      │
-        ┌─────────────────────────────────────────────┘
+手机飞书 ──WebSocket──→ feishu/server.ts ────┐
+                                             ├──→ Cursor CLI ──→ 本地 Cursor IDE
+手机钉钉 ──Stream─────→ dingtalk/server.ts ───┤          │
+                                             │          │
+手机企业微信 ─WebSocket→ wecom/server.ts ──────┘          │
+                                                         │
+        ┌────────────────────────────────────────────────┘
         │
         ├─→ 项目路由 (projects.json)
         ├─→ 会话管理 (--resume, 自动恢复上下文)
@@ -35,6 +37,7 @@
 **1. 消息接收**
 - 飞书：WebSocket 长连接模式，本地服务主动连接飞书服务器
 - 钉钉：Stream 长连接模式，本地服务主动连接钉钉服务器
+- 企业微信：WebSocket 长连接模式，本地服务主动连接企业微信服务器
 - 无需公网 IP，无需端口映射
 
 **2. 消息处理**
@@ -78,7 +81,7 @@
 
 ```
 cursor-remote-control/
-├── shared/                      # 共享模块（dingtalk 与 feishu 共用）
+├── shared/                      # 共享模块（三个平台共用）
 │   ├── memory.ts                # 记忆管理器 v2（SQLite + 向量 + FTS5）
 │   ├── scheduler.ts             # 定时任务调度
 │   ├── heartbeat.ts             # 心跳系统
@@ -98,16 +101,23 @@ cursor-remote-control/
 │   ├── service.sh               # 钉钉服务管理脚本
 │   └── README.md                # 钉钉详细文档
 │
+├── wecom/                       # 企业微信服务（独立）
+│   ├── server.ts                # 企业微信主服务
+│   ├── wecom-helper.ts          # 企业微信工具函数
+│   ├── service.sh               # 企业微信服务管理脚本
+│   └── README.md                # 企业微信详细文档
+│
 ├── projects.json                # 项目路由配置（共享）
 ├── cron-jobs-feishu.json        # 飞书定时任务
 ├── cron-jobs-dingtalk.json      # 钉钉定时任务
+├── cron-jobs-wecom.json         # 企业微信定时任务
 ├── manage-services.sh           # 统一服务管理脚本
 └── docs/                        # 通用文档
 ```
 
 ## 功能特性
 
-- 🚀 **双渠道支持**: 飞书和钉钉独立部署，可同时运行
+- 🚀 **三渠道支持**: 飞书、钉钉、企业微信独立部署，可同时运行
 - 💾 **记忆系统**: SQLite 向量数据库 + FTS5 全文搜索
 - ⏰ **定时任务**: AI 创建的 Cron 任务，自动执行并推送通知
 - 📰 **热点新闻推送**: 定时抓取多平台热榜并推送（微博/知乎/百度等）
@@ -132,6 +142,8 @@ cursor-remote-control/
 | CLI | Cursor Agent CLI (`~/.local/bin/agent`) |
 
 ### 选择你的渠道
+
+> 💡 **三个渠道可以同时运行**，互不干扰，共享项目配置和记忆系统。
 
 #### 🟦 安装飞书服务
 
@@ -191,9 +203,21 @@ bash service.sh install
 
 详细配置见 [dingtalk/README.md](dingtalk/README.md)
 
-#### 同时使用两个渠道
+#### 🟩 安装企业微信服务
 
-飞书和钉钉服务可以同时运行，互不干扰：
+```bash
+cd wecom
+cp .env.example .env
+# 编辑 .env 填入企业微信机器人凭据（BotID 和 Secret）
+bun install
+bash service.sh install
+```
+
+详细配置见 [wecom/README.md](wecom/README.md)
+
+#### 同时使用多个渠道
+
+三个服务可以同时运行，互不干扰：
 
 ```bash
 # 安装飞书
@@ -201,6 +225,9 @@ cd feishu && bash service.sh install && cd ..
 
 # 安装钉钉
 cd dingtalk && bash service.sh install && cd ..
+
+# 安装企业微信
+cd wecom && bash service.sh install && cd ..
 
 # 使用统一管理脚本
 bash manage-services.sh status
@@ -224,6 +251,12 @@ cd dingtalk
 bash service.sh status
 bash service.sh restart
 bash service.sh logs
+
+# 企业微信服务
+cd wecom
+bash service.sh status
+bash service.sh restart
+bash service.sh logs
 ```
 
 ### 方式二：统一管理脚本
@@ -233,6 +266,7 @@ bash manage-services.sh status           # 查看所有服务状态
 bash manage-services.sh restart          # 重启所有服务
 bash manage-services.sh logs feishu      # 查看飞书日志
 bash manage-services.sh logs dingtalk    # 查看钉钉日志
+bash manage-services.sh logs wecom       # 查看企业微信日志
 ```
 
 ---
@@ -241,7 +275,7 @@ bash manage-services.sh logs dingtalk    # 查看钉钉日志
 
 ### 基本对话
 
-在飞书或钉钉中 @你的机器人发送消息：
+在飞书、钉钉或企业微信中 @你的机器人发送消息：
 
 ```
 @机器人 你好
@@ -251,7 +285,7 @@ bash manage-services.sh logs dingtalk    # 查看钉钉日志
 
 ### 常用指令
 
-两个渠道都支持以下指令：
+三个渠道都支持以下指令：
 
 | 指令 | 中文别名 | 说明 |
 |------|----------|------|
@@ -281,7 +315,7 @@ cp projects.json.example projects.json
 # 编辑 projects.json，配置你的工作区
 ```
 
-配置示例（飞书和钉钉共享）：
+配置示例（三个平台共享）：
 
 ```json
 {
@@ -294,7 +328,7 @@ cp projects.json.example projects.json
 }
 ```
 
-使用方式（飞书和钉钉通用）：
+使用方式（三个平台通用）：
 - `docs: 帮我整理文档` → 路由到文档工作区
 - `切换到 mycode` → 持久切换到代码项目
 
@@ -302,7 +336,7 @@ cp projects.json.example projects.json
 
 ### 热点新闻定时推送 🆕
 
-在飞书或钉钉对话中说：
+在飞书、钉钉或企业微信对话中说：
 
 > **每天 9 点推送热点**
 
@@ -320,7 +354,7 @@ cp projects.json.example projects.json
 
 ### 飞连 VPN 远程控制
 
-通过飞书/钉钉消息远程开关飞连 VPN（支持锁屏状态）。
+通过飞书、钉钉或企业微信消息远程开关飞连 VPN（支持锁屏状态）。
 
 **快速使用**：
 - `/飞连` — 切换 VPN 状态
@@ -350,6 +384,7 @@ cp projects.json.example projects.json
    ```bash
    cd feishu && bash service.sh restart
    cd dingtalk && bash service.sh restart
+   cd wecom && bash service.sh restart
    ```
 
 **限制**：
@@ -395,7 +430,7 @@ bun run send-file.ts /path/to/file.apk <接收人ID>
 | `cron-jobs-*.json.example` | 空的定时任务模板 | ✅ 提交到仓库 |
 | `cron-jobs-*.json` | AI 创建的定时任务 | ❌ 已忽略 |
 | `config/news-sources.json` | 新闻数据源配置 | ✅ 提交到仓库 |
-| `feishu/.env` / `dingtalk/.env` | 实际凭据 | ❌ 已忽略 |
+| `feishu/.env` / `dingtalk/.env` / `wecom/.env` | 实际凭据 | ❌ 已忽略 |
 
 **首次安装**：从 `.example` 文件复制创建配置  
 **Git pull 更新**：你的本地配置不会被覆盖
@@ -448,6 +483,14 @@ VOLC_EMBEDDING_MODEL=doubao-embedding-vision-250615
 | 查看状态 | `cd dingtalk && bash service.sh status` |
 | 查看日志 | `cd dingtalk && bash service.sh logs` |
 
+### 企业微信服务
+
+| 问题 | 解决方案 |
+|------|----------|
+| 企业微信无响应 | `cd wecom && bash service.sh restart` |
+| 查看状态 | `cd wecom && bash service.sh status` |
+| 查看日志 | `cd wecom && bash service.sh logs` |
+
 ### 通用问题
 
 | 问题 | 原因 | 解决方案 |
@@ -467,8 +510,8 @@ A: 不需要。运行 `agent login` 登录后会自动使用登录凭据。
 **Q: 为什么提示配额用完？**  
 A: 默认 `opus-4.6-thinking` 消耗配额大，建议改用 `auto` 或 `sonnet-4`。
 
-**Q: 飞书和钉钉可以同时运行吗？**  
-A: 可以！两个服务独立运行，互不干扰，共享 `projects.json` 配置。
+**Q: 飞书、钉钉、企业微信可以同时运行吗？**  
+A: 可以！三个服务独立运行，互不干扰，共享 `projects.json` 配置和记忆系统。
 
 ---
 
@@ -476,6 +519,7 @@ A: 可以！两个服务独立运行，互不干扰，共享 `projects.json` 配
 
 - **飞书服务**: [feishu/README.md](feishu/README.md) - 完整的飞书配置、功能说明和使用指南
 - **钉钉服务**: [dingtalk/README.md](dingtalk/README.md) - 完整的钉钉配置、功能说明和使用指南
+- **企业微信服务**: [wecom/README.md](wecom/README.md) - 完整的企业微信配置、功能说明和使用指南
 - **热点新闻推送**: [docs/news-push-usage.md](docs/news-push-usage.md) - 新闻推送功能使用文档
 - **个人配置**: [飞书-Cursor-快速参考](docs/飞书-Cursor-快速参考.md) - 项目快捷路由配置
 
@@ -483,14 +527,15 @@ A: 可以！两个服务独立运行，互不干扰，共享 `projects.json` 配
 
 ## 技术栈
 
-| 层 | 飞书 | 钉钉 |
-|---|------|------|
-| 运行时 | Bun 1.x + TypeScript | Bun 1.x + TypeScript |
-| SDK | @larksuiteoapi/node-sdk | dingtalk-stream |
-| 连接方式 | WebSocket 长连接 | Stream 长连接 |
-| 数据库 | SQLite（向量索引 + FTS5） | SQLite（向量索引 + FTS5） |
-| 语音 | 火山引擎 → whisper-cpp | 火山引擎 → whisper-cpp |
-| 部署 | macOS launchd | macOS launchd |
+| 层 | 飞书 | 钉钉 | 企业微信 |
+|---|------|------|---------|
+| 运行时 | Bun 1.x + TypeScript | Bun 1.x + TypeScript | Bun 1.x + TypeScript |
+| SDK | @larksuiteoapi/node-sdk | dingtalk-stream | @wecom/aibot-node-sdk |
+| 连接方式 | WebSocket 长连接 | Stream 长连接 | WebSocket 长连接 |
+| 流式回复 | 轮询刷新 | ❌ 不支持 | 主动推送 ⭐ |
+| 数据库 | SQLite（向量索引 + FTS5） | SQLite（向量索引 + FTS5） | SQLite（向量索引 + FTS5） |
+| 语音 | 火山引擎 → whisper-cpp | 火山引擎 → whisper-cpp | 火山引擎 → whisper-cpp |
+| 部署 | macOS launchd | macOS launchd | macOS launchd |
 
 **共享模块**（`shared/` 目录）：
 - 项目路由配置 (`projects.json`)
@@ -507,12 +552,13 @@ A: 可以！两个服务独立运行，互不干扰，共享 `projects.json` 配
 
 ### 主要变更
 
-- ✨ **新增钉钉渠道支持**（原项目仅支持飞书）
-- 🏗️ **独立双服务架构**（飞书和钉钉可同时运行，互不干扰）
+- ✨ **新增钉钉和企业微信渠道支持**（原项目仅支持飞书）
+- 🏗️ **独立三服务架构**（飞书、钉钉、企业微信可同时运行，互不干扰）
 - 🔧 **统一服务管理**（`manage-services.sh` 统一管理多个服务）
 - 📦 **配置文件分离**（每个服务独立 `.env` 和 `cron-jobs.json`）
 - 🎯 **增强的项目路由**（共享 `projects.json`，支持持久切换）
 - 🔐 **安全增强**（平台隔离，独立环境变量）
+- ⚡ **企业微信优势**（主动推送流式回复，延迟更低）
 
 感谢 [@nongjun](https://github.com/nongjun) 的开源贡献。
 

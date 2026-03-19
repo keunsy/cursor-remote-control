@@ -26,16 +26,18 @@
 
 ### 新增
 
-- **钉钉渠道支持**：完整支持钉钉 Stream 长连接，与飞书并列运行
-- **双服务架构**：飞书与钉钉独立部署，可同时运行、互不干扰
+- **钉钉渠道支持**：完整支持钉钉 Stream 长连接
+- **企业微信渠道支持**：完整支持企业微信 WebSocket 长连接
+- **三服务架构**：飞书、钉钉、企业微信独立部署，可同时运行、互不干扰
 - **统一服务管理**：根目录 `manage-services.sh` 统一查看/重启/查看日志
 - **配置文件分离**：每个服务独立 `.env`、独立 `cron-jobs-*.json`
-- **共享项目路由**：根目录 `projects.json` 被飞书和钉钉共同使用
+- **共享项目路由**：根目录 `projects.json` 被三个平台共同使用
+- **企业微信支持**：WebSocket 长连接，主动推送流式回复，延迟更低
 
 ### 变更
 
-- **目录结构**：飞书代码迁入 `feishu/`，钉钉代码迁入 `dingtalk/`
-- **定时任务**：飞书使用 `cron-jobs-feishu.json`，钉钉使用 `cron-jobs-dingtalk.json`
+- **目录结构**：飞书代码迁入 `feishu/`，钉钉代码迁入 `dingtalk/`，企业微信代码迁入 `wecom/`
+- **定时任务**：飞书使用 `cron-jobs-feishu.json`，钉钉使用 `cron-jobs-dingtalk.json`，企业微信使用 `cron-jobs-wecom.json`
 - **环境变量**：各服务独立 `.env`，平台隔离更清晰
 
 ### 致谢

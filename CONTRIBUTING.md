@@ -25,6 +25,8 @@
    cd feishu && bash service.sh logs | tail -50
    # 或
    cd dingtalk && bash service.sh logs | tail -50
+   # 或
+   cd wecom && bash service.sh logs | tail -50
    ```
 5. **配置信息**（脱敏后）：
    - `projects.json` 内容
@@ -77,6 +79,9 @@
    
    # 安装钉钉依赖
    cd ../dingtalk && bun install
+   
+   # 安装企业微信依赖
+   cd ../wecom && bun install
    ```
 
 5. **配置开发环境**
@@ -98,7 +103,7 @@
    
    # 手动测试
    cd feishu && bun run server.ts
-   # 在飞书中发送测试消息
+   # 在飞书、钉钉或企业微信中发送测试消息
    ```
 
 8. **提交更改**
@@ -412,6 +417,7 @@ test('完整消息流程', async () => {
 - **README.md** - 功能概述、快速开始
 - **feishu/README.md** - 飞书服务详细说明
 - **dingtalk/README.md** - 钉钉服务详细说明
+- **wecom/README.md** - 企业微信服务详细说明
 - **docs/ARCHITECTURE.md** - 架构设计
 - **docs/DEVELOPMENT.md** - 开发指南
 - **docs/TROUBLESHOOTING.md** - 故障排查
