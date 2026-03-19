@@ -1,5 +1,5 @@
 {
-  "name": "feishu-cursor-claw",
+  "name": "cursor-feishu",
   "version": "0.1.0",
   "description": "Turn Feishu/Lark into a remote control for Cursor AI — your personal AI strategic partner via IM",
   "type": "module",

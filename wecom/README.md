@@ -178,7 +178,7 @@ bash service.sh uninstall  # 卸载自启动
 
 | 服务 | 标签 | 日志路径 | SDK |
 |------|------|---------|-----|
-| 飞书 | com.feishu-cursor-claw | /tmp/feishu-cursor.log | @larksuiteoapi/node-sdk |
+| 飞书 | com.cursor-feishu | /tmp/feishu-cursor.log | @larksuiteoapi/node-sdk |
 | 钉钉 | com.dingtalk-cursor-claw | /tmp/dingtalk-cursor.log | dingtalk-stream |
 | 企业微信 | com.wecom-cursor-claw | /tmp/wecom-cursor.log | @wecom/aibot-node-sdk |
 

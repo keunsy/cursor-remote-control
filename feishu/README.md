@@ -1,4 +1,4 @@
-# feishu-cursor-claw
+# 飞书远程控制
 
 > Turn Feishu/Lark into a remote control for Cursor AI — text, voice, and images to code changes (and beyond).
 

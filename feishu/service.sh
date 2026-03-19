@@ -1,5 +1,5 @@
 #!/bin/bash
-# feishu-cursor-claw 服务管理脚本
+# 飞书远程控制服务管理脚本
 # 用法: bash service.sh [install|uninstall|start|stop|restart|status|logs]
 #
 # 功能：
@@ -8,7 +8,7 @@
 # ✅ 开机自启动（launchd RunAtLoad + KeepAlive）
 set -e
 
-LABEL="com.feishu-cursor-claw"
+LABEL="com.cursor-feishu"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 BOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUN_BIN="$(which bun 2>/dev/null || echo "$HOME/.bun/bin/bun")"
@@ -162,7 +162,7 @@ case "${1:-}" in
     status)    cmd_status ;;
     logs)      cmd_logs ;;
     *)
-        echo "feishu-cursor-claw 服务管理"
+        echo "飞书远程控制服务管理"
         echo ""
         echo "用法: bash service.sh <命令>"
         echo ""
