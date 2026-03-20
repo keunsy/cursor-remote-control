@@ -1394,18 +1394,25 @@ async function handleMessage(msg: any) {
 		// 持久切换到项目：直接切换项目并确认
 		if (routeIntent.type === 'switch' && routeIntent.project) {
 			const projectInfo = projectsConfig.projects[routeIntent.project];
-			if (projectInfo) {
-				// 更新当前项目
-				session.currentProject = routeIntent.project;
-
-				const msg = `**✅ 已切换到项目：${routeIntent.project}**\n\n📁 ${projectInfo.description}\n\n路径（长按复制）：\n\`\`\`\n${projectInfo.path}\n\`\`\`\n\n后续消息将在此项目中执行，直到你切换到其他项目。`;
-				await sendMarkdown(sessionWebhook, msg, '✅ 项目已切换', 'green');
-				console.log(`[路由] 持久切换到项目: ${routeIntent.project}`);
+			if (!projectInfo) {
+				// 项目不存在
+				const names = Object.keys(projectsConfig.projects);
+				await sendMarkdown(sessionWebhook, `未找到项目「${routeIntent.project}」。\n\n可用项目（长按复制）：\n\`\`\`\n${names.join('\n')}\n\`\`\`\n\n请检查 \`projects.json\` 或使用上述项目名。`, '未找到项目', 'orange');
 				return;
 			}
-			// 识别到切换意图但项目不存在，明确提示
-			const names = Object.keys(projectsConfig.projects);
-			await sendMarkdown(sessionWebhook, `未找到项目「${routeIntent.project}」。\n\n可用项目（长按复制）：\n\`\`\`\n${names.join('\n')}\n\`\`\`\n\n请检查 \`projects.json\` 或使用上述项目名。`, '未找到项目', 'orange');
+			
+			// 检查项目路径是否存在
+			if (!existsSync(projectInfo.path)) {
+				await sendMarkdown(sessionWebhook, `**❌ 切换失败**\n\n项目路径不存在：\`${projectInfo.path}\`\n\n请检查 \`projects.json\` 配置。`, '❌ 切换失败', 'red');
+				return;
+			}
+			
+			// 更新当前项目
+			session.currentProject = routeIntent.project;
+
+			const msg = `**✅ 已切换到项目：${routeIntent.project}**\n\n📁 ${projectInfo.description}\n\n路径（长按复制）：\n\`\`\`\n${projectInfo.path}\n\`\`\`\n\n后续消息将在此项目中执行，直到你切换到其他项目。`;
+			await sendMarkdown(sessionWebhook, msg, '✅ 项目已切换', 'green');
+			console.log(`[路由] 持久切换到项目: ${routeIntent.project}`);
 			return;
 		}
 

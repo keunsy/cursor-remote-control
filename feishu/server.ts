@@ -2354,13 +2354,14 @@ async function handleInner(
 	
 	// 路由解析（传入 intent 避免重复检测）
 	// 如果有强制项目（卡片按钮点击），则直接使用
-	let workspace: string, prompt: string, label: string, intent: RouteIntent;
+	let workspace: string, prompt: string, label: string, intent: RouteIntent, routeChanged: boolean | undefined;
 	
 	if (forceProject && projectsConfig.projects[forceProject]) {
 		workspace = projectsConfig.projects[forceProject].path;
 		prompt = text;
 		label = forceProject;
 		intent = { type: 'temp', project: forceProject, cleanedText: text };
+		routeChanged = false;
 		console.log(`[路由] 强制路由到项目: ${forceProject}`);
 	} else {
 		const routeResult = route(text, currentProject, routeIntent);
@@ -2368,11 +2369,49 @@ async function handleInner(
 		prompt = routeResult.prompt;
 		label = routeResult.label;
 		intent = routeResult.intent;
+		routeChanged = routeResult.routeChanged;
 		
 		// 临时路由提示
 		if (intent.type === 'temp') {
 			console.log(`[路由] 临时路由到项目: ${label}`);
 		}
+	}
+	
+	// 处理项目持久切换（"切换到 XXX 项目"）
+	if (routeChanged && intent.type === 'switch' && intent.project) {
+		const projectInfo = projectsConfig.projects[intent.project];
+		if (!projectInfo) {
+			const names = Object.keys(projectsConfig.projects);
+			await replyCard(messageId, `❌ **未找到项目「${intent.project}」**\n\n可用项目：\n${names.map(n => `- \`${n}\``).join('\n')}\n\n请检查 \`projects.json\` 或使用上述项目名。`, { title: '未找到项目', color: 'orange' });
+			return;
+		}
+		
+		// 检查项目路径是否存在
+		if (!existsSync(projectInfo.path)) {
+			await replyCard(messageId, `❌ **切换失败**\n\n项目路径不存在：\`${projectInfo.path}\`\n\n请检查 \`projects.json\` 配置。`, { title: '切换失败', color: 'red' });
+			return;
+		}
+		
+		// 更新当前项目（持久化到 sessionsStore）
+		const wsData = sessionsStore.get(defaultWorkspace) || { active: null, history: [] };
+		if (!wsData.currentProject || wsData.currentProject !== intent.project) {
+			wsData.currentProject = intent.project;
+			sessionsStore.set(defaultWorkspace, wsData);
+			saveSessions();
+		}
+		
+		await replyCard(messageId, `✅ **已切换到项目：${intent.project}**\n\n📁 ${projectInfo.description}\n\n路径：\n\`\`\`\n${projectInfo.path}\n\`\`\`\n\n后续消息将在此项目中执行，直到你切换到其他项目。`, { title: '项目已切换', color: 'green' });
+		console.log(`[路由] 持久切换到项目: ${intent.project}`);
+		return;
+	}
+	
+	// Bug #15 修复：路径切换不支持持久化，改为提示用户使用项目名
+	if (routeChanged && intent.type === 'switch' && intent.path) {
+		const pathLabel = intent.path.split('/').pop() || intent.path;
+		const projectNames = Object.keys(projectsConfig.projects).map(n => `\`${n}\``).join('、');
+		await replyCard(messageId, `⚠️ **路径切换不支持持久化**\n\n您尝试切换到：\`${intent.path}\`\n\n**建议方案**：\n\n1️⃣ **使用项目名切换**（推荐）\n   发送：\`切换到 项目名\`\n   可用项目：${projectNames}\n\n2️⃣ **使用路径前缀**（临时路由）\n   发送：\`#${intent.path} 你的消息\`\n   示例：\`#${intent.path} 帮我分析代码\`\n\n3️⃣ **添加到 projects.json**（永久配置）\n   编辑项目配置文件添加新项目\n\n> 路径切换无法保存到会话中，建议使用项目名进行持久切换。`, { title: '不支持路径持久化', color: 'orange' });
+		console.log(`[路由] 路径切换被拒绝（不支持持久化）: ${intent.path}`);
+		return;
 	}
 	
 	// 检查路由后的 prompt 是否还是命令（处理 "项目名:/命令" 格式）

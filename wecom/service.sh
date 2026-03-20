@@ -58,9 +58,10 @@ function install_service() {
     # 创建 plist
     create_plist
     
-    # 加载服务
-    launchctl unload "$PLIST_PATH" 2>/dev/null || true
-    launchctl load "$PLIST_PATH"
+    # 使用现代 launchctl 命令加载服务
+    launchctl bootstrap "gui/$(id -u)" "$PLIST_PATH" 2>/dev/null || true
+    # 确保服务立即启动
+    launchctl kickstart -k "gui/$(id -u)/${SERVICE_NAME}" 2>/dev/null || true
     
     echo "✅ 服务已安装并启动"
     echo "   标签: ${SERVICE_NAME}"
@@ -74,7 +75,9 @@ function uninstall_service() {
     echo "🗑️  正在卸载企业微信服务..."
     
     if [ -f "$PLIST_PATH" ]; then
-        launchctl unload "$PLIST_PATH" 2>/dev/null || true
+        # 使用现代 launchctl 命令卸载服务
+        launchctl bootout "gui/$(id -u)/${SERVICE_NAME}" 2>/dev/null || true
+        launchctl disable "gui/$(id -u)/${SERVICE_NAME}" 2>/dev/null || true
         rm -f "$PLIST_PATH"
         echo "✅ 服务已卸载"
     else

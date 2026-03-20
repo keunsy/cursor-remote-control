@@ -64,6 +64,8 @@ cmd_install() {
     echo "📦 安装开机自启动..."
     generate_plist
     launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || true
+    # 确保服务立即启动
+    launchctl kickstart -k "gui/$(id -u)/$LABEL" 2>/dev/null || true
     echo "  ✅ 服务已安装并启动"
     echo "  📝 日志: tail -f $LOG_FILE"
 }

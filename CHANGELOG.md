@@ -8,6 +8,20 @@
 
 ## [Unreleased]
 
+### 改进 - 2026-03-20
+
+- **服务管理脚本合并** - 统一 `manage-services.sh` 和 `service-management.sh`
+  - 合并为增强版 `manage-services.sh`，支持双模式（简单模式 + launchd 系统服务）
+  - 新增命令：`install`（安装系统服务）、`uninstall`（卸载）、`clean`（清理重复进程）、`logs <service>`（查看日志）
+  - 智能检测当前运行模式，`start/stop/restart` 自动适配
+  - 向后兼容，现有文档中的命令无需修改
+
+- **[关键] /stop 命令修复** - 修复手动终止任务后仍返回结果的问题
+  - 问题：用户执行 `/stop` 后，任务继续返回结果
+  - 原因：使用 SIGTERM 信号，进程未立即响应；Promise 未被 reject，继续处理输出
+  - 修复：添加 `abort()` 方法，使用 SIGKILL 强制终止，立即 reject Promise 并设置标记阻止后续处理
+  - 影响：三个平台（dingtalk/feishu/wecom）的 server.ts 识别 `MANUALLY_STOPPED` 错误并静默处理
+
 ### 重构 - 2026-03-19
 
 - **记忆系统统一化** - 将三个平台的 `memory-tool.ts` 统一到 `shared/memory-tool.ts`

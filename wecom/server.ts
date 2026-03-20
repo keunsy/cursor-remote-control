@@ -180,6 +180,17 @@ try {
 	};
 }
 
+// Bug 修复：添加 projects.json 热更新监听（与钉钉/飞书对齐）
+watchFile(PROJECTS_PATH, { interval: 5000 }, () => {
+	try {
+		const newConfig = JSON.parse(readFileSync(PROJECTS_PATH, 'utf-8'));
+		Object.assign(projectsConfig, newConfig);
+		console.log(`[热更新] projects.json 已重新加载`);
+	} catch (err) {
+		console.error('[热更新] projects.json 加载失败:', err);
+	}
+});
+
 // ── 记忆管理器 ───────────────────────────────────
 const defaultWorkspace = projectsConfig.projects[projectsConfig.default_project]?.path || ROOT;
 const memoryWorkspaceKey = (projectsConfig as any).memory_workspace || projectsConfig.default_project;
@@ -1215,6 +1226,7 @@ process.on('SIGINT', async () => {
 
 	// Bug #20 修复：停止文件监听器
 	unwatchFile(ENV_PATH);
+	unwatchFile(PROJECTS_PATH);
 	console.log('[退出] 文件监听器已停止');
 
 	// 停止心跳和定时任务
