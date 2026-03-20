@@ -8,8 +8,8 @@ import { formatNewsCard } from './news-sources/formatter';
 import type { NewsSourcesConfig } from './news-sources/types';
 
 export interface FetchNewsOptions extends Partial<FetchOptions> {
-  /** 输出平台：feishu 或 dingtalk */
-  platform?: 'feishu' | 'dingtalk';
+  /** 输出平台：feishu、dingtalk 或 wecom */
+  platform?: 'feishu' | 'dingtalk' | 'wecom';
   /** 测试用：覆盖配置，不读取文件 */
   configOverride?: NewsSourcesConfig;
   /** 测试用：直接注入数据源，跳过 config 加载与源创建 */

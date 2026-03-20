@@ -17,6 +17,7 @@ import {
 	readdirSync,
 	appendFileSync,
 	statSync,
+	unlinkSync,
 } from "node:fs";
 import { resolve, relative, extname } from "node:path";
 
@@ -108,9 +109,105 @@ export class MemoryManager {
 		mkdirSync(this.sessionsDir, { recursive: true });
 
 		const dbPath = resolve(config.workspaceDir, ".memory.sqlite");
-		this.db = new Database(dbPath);
-		this.db.exec("PRAGMA journal_mode = WAL");
+		this.db = this.initDatabase(dbPath);
 		this.initSchema();
+	}
+
+	/**
+	 * 初始化数据库，带完整性检查和自动修复
+	 */
+	private initDatabase(dbPath: string): Database {
+		const maxRetries = 3;
+		let lastError: Error | undefined;
+
+		for (let attempt = 1; attempt <= maxRetries; attempt++) {
+			try {
+				// 如果数据库文件已存在，先检查完整性
+				if (existsSync(dbPath)) {
+					try {
+						const testDb = new Database(dbPath);
+						const result = testDb.prepare("PRAGMA integrity_check").get() as { integrity_check: string };
+						testDb.close();
+
+						if (result.integrity_check !== "ok") {
+							console.warn(`[记忆] 数据库完整性检查失败: ${result.integrity_check}，尝试修复...`);
+							this.backupAndRemoveCorruptedDb(dbPath);
+						}
+					} catch (e) {
+						console.warn(`[记忆] 数据库完整性检查异常: ${e}，尝试修复...`);
+						this.backupAndRemoveCorruptedDb(dbPath);
+					}
+				}
+
+				// 创建或打开数据库
+				const db = new Database(dbPath);
+				db.exec("PRAGMA journal_mode = WAL");
+
+				// 验证基本操作
+				db.prepare("SELECT 1").get();
+
+				if (attempt > 1) {
+					console.log(`[记忆] 数据库初始化成功（第 ${attempt} 次尝试）`);
+				}
+
+				return db;
+			} catch (e) {
+				lastError = e as Error;
+				console.warn(`[记忆] 数据库初始化失败（第 ${attempt}/${maxRetries} 次尝试）: ${e}`);
+
+				if (attempt < maxRetries) {
+					// 删除损坏的文件并重试
+					this.backupAndRemoveCorruptedDb(dbPath);
+					// 短暂延迟后重试
+					Bun.sleepSync(500 * attempt);
+				}
+			}
+		}
+
+		throw new Error(`[记忆] 数据库初始化失败（已重试 ${maxRetries} 次）: ${lastError?.message}`);
+	}
+
+	/**
+	 * 备份并删除损坏的数据库文件
+	 */
+	private backupAndRemoveCorruptedDb(dbPath: string): void {
+		try {
+			const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+			const backupDir = resolve(this.config.workspaceDir, "backups", `corrupted-${timestamp}`);
+			mkdirSync(backupDir, { recursive: true });
+
+			// 备份所有相关文件
+			for (const suffix of ["", "-shm", "-wal"]) {
+				const file = `${dbPath}${suffix}`;
+				if (existsSync(file)) {
+					const backupFile = resolve(backupDir, `.memory.sqlite${suffix}`);
+					try {
+						const content = readFileSync(file);
+						writeFileSync(backupFile, content);
+						unlinkSync(file);
+					} catch (e) {
+						console.warn(`[记忆] 备份文件失败 ${file}: ${e}`);
+						// 即使备份失败也尝试删除
+						try {
+							unlinkSync(file);
+						} catch {}
+					}
+				}
+			}
+
+			console.log(`[记忆] 已备份损坏数据库到: ${backupDir}`);
+		} catch (e) {
+			console.error(`[记忆] 备份失败: ${e}，直接删除损坏文件`);
+			// 备份失败时，直接删除损坏文件
+			try {
+				for (const suffix of ["", "-shm", "-wal"]) {
+					const file = `${dbPath}${suffix}`;
+					if (existsSync(file)) {
+						unlinkSync(file);
+					}
+				}
+			} catch {}
+		}
 	}
 
 	private initSchema(): void {

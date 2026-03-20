@@ -17,6 +17,11 @@ import { execFileSync } from 'node:child_process';
 import { Scheduler, type CronJob } from '../shared/scheduler.js';
 import { MemoryManager } from '../shared/memory.js';
 import { HeartbeatRunner } from '../shared/heartbeat.js';
+import { FeilianController, type OperationResult } from '../shared/feilian-control.js';
+import { fetchNews } from '../shared/news-fetcher.js';
+import { getHealthStatus } from '../shared/news-sources/monitoring.js';
+import { humanizeCronInChinese } from 'cron-chinese';
+import { CommandHandler, type PlatformAdapter, type CommandContext } from '../shared/command-handler.js';
 import {
 	getSession, setActiveSession, archiveAndResetSession,
 	getSessionHistory, getActiveSessionId, switchToSession, getLockKey, busySessions,
@@ -69,53 +74,6 @@ function isQuotaError(error: Error): boolean {
 }
 
 // ── 可选模型列表与匹配 ───────────────────────────
-const CURSOR_MODELS = [
-	{ id: 'opus-4.6-thinking', label: 'Opus 4.6', desc: '最强深度推理' },
-	{ id: 'opus-4.5-thinking', label: 'Opus 4.5', desc: '强力推理' },
-	{ id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex', desc: 'OpenAI 编码旗舰' },
-	{ id: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro', desc: 'Google 最新旗舰' },
-	{ id: 'gemini-3-pro', label: 'Gemini 3 Pro', desc: 'Google 旗舰' },
-	{ id: 'gemini-3-flash', label: 'Gemini 3 Flash', desc: 'Google 极速' },
-	{ id: 'auto', label: 'Auto', desc: '自动选择最优' },
-];
-
-function fuzzyMatchModel(input: string): { exact?: typeof CURSOR_MODELS[number]; candidates: typeof CURSOR_MODELS } {
-	const q = input.toLowerCase().replace(/[\s_-]+/g, '');
-	
-	const exact = CURSOR_MODELS.find(m => m.id === input.toLowerCase());
-	if (exact) return { exact, candidates: [] };
-	
-	const num = Number.parseInt(input, 10);
-	if (!Number.isNaN(num) && num >= 1 && num <= CURSOR_MODELS.length) {
-		return { exact: CURSOR_MODELS[num - 1], candidates: [] };
-	}
-	
-	const candidates = CURSOR_MODELS.filter(m => {
-		const mid = m.id.replace(/[\s_-]+/g, '');
-		const mlab = m.label.toLowerCase().replace(/[\s_-]+/g, '');
-		return mid.includes(q) || mlab.includes(q) || q.includes(mid);
-	});
-	
-	if (candidates.length === 1) return { exact: candidates[0], candidates: [] };
-	return { candidates };
-}
-
-function buildModelListCard(currentModel: string, errorHint?: string): string {
-	const lines: string[] = [];
-	if (errorHint) lines.push(`${errorHint}\n`);
-	for (let i = 0; i < CURSOR_MODELS.length; i++) {
-		const m = CURSOR_MODELS[i];
-		if (!m) continue;
-		const isCurrent = m.id === currentModel;
-		lines.push(isCurrent
-			? `**${i + 1}. ${m.id}** · ${m.desc} ✅`
-			: `${i + 1}. \`${m.id}\` · ${m.desc}`);
-	}
-	lines.push('');
-	lines.push('> 发送 `/模型 编号` 或 `/模型 名称` 切换');
-	return lines.join('\n');
-}
-
 function formatRelativeTime(ms: number): string {
 	const diff = Date.now() - ms;
 	if (diff < 60_000) return "刚刚";
@@ -135,6 +93,13 @@ interface EnvConfig {
 	VOLC_STT_ACCESS_TOKEN: string;
 	VOLC_EMBEDDING_API_KEY: string;
 	VOLC_EMBEDDING_MODEL: string;
+}
+
+interface AgentEnv extends NodeJS.ProcessEnv {
+	CURSOR_API_KEY: string;
+	CURSOR_PLATFORM?: string;
+	CURSOR_WEBHOOK?: string;
+	CURSOR_CRON_FILE?: string;
 }
 
 function loadEnv(): EnvConfig {
@@ -167,14 +132,15 @@ function loadEnv(): EnvConfig {
 	};
 }
 
-let config = loadEnv();
+const config = loadEnv();
 
-// .env 热更新
+// .env 热更新（Bug #24 修复：保持 config 对象引用不变，只更新属性）
 watchFile(ENV_PATH, { interval: 2000 }, () => {
 	try {
 		const prev = config.CURSOR_API_KEY;
 		const prevModel = config.CURSOR_MODEL;
-		config = loadEnv();
+		const newConfig = loadEnv();
+		Object.assign(config, newConfig);
 		if (config.CURSOR_API_KEY !== prev) {
 			const keyPreview = config.CURSOR_API_KEY ? `...${config.CURSOR_API_KEY.slice(-8)}` : '(未设置)';
 			console.log(`[热更新] API Key 已更新 ${keyPreview}`);
@@ -274,7 +240,7 @@ const heartbeat = new HeartbeatRunner({
 });
 
 // ── Agent 进程跟踪（用于 /终止 命令）─────────────
-const activeAgents = new Map<string, any>();
+const activeAgents = new Map<string, { pid: number | undefined; kill: () => void; workspace: string }>();
 
 // ── Cursor Agent 调用 ─────────────────────────────
 const PROGRESS_INTERVAL = 2_000;
@@ -295,6 +261,8 @@ async function runAgent(
 	message: string,
 	agentId?: string,
 	context?: {
+		platform?: string;
+		webhook?: string;
 		onSessionId?: (sessionId: string) => void;
 		onProgress?: (progress: AgentProgress) => void;
 		onStart?: () => void;
@@ -324,18 +292,25 @@ async function runAgent(
 			if (agentId) args.push('--resume', agentId);
 			args.push('--', message);
 
-			const env = config.CURSOR_API_KEY
-				? { ...process.env, CURSOR_API_KEY: config.CURSOR_API_KEY }
-				: process.env;
+			const env: AgentEnv = {
+				...process.env,
+				CURSOR_API_KEY: config.CURSOR_API_KEY || process.env.CURSOR_API_KEY || '',
+			};
+			if (context?.platform) env.CURSOR_PLATFORM = context.platform;
+			if (context?.webhook) env.CURSOR_WEBHOOK = context.webhook;
 			env.CURSOR_CRON_FILE = resolve(ROOT, 'cron-jobs-wecom.json');
 
-			const proc = spawn('agent', args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+		const proc = spawn('agent', args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
 
-			const lockKey = getLockKey(workspace);
-			const startTime = Date.now();
-			
-			// 注册到 activeAgents（用于 /终止 命令）
-			activeAgents.set(lockKey, proc);
+		let lockKey = getLockKey(workspace);
+		const startTime = Date.now();
+		
+		// 注册到 activeAgents（用于 /终止 命令）- 统一格式以便三平台共用 CommandHandler
+		activeAgents.set(lockKey, {
+			pid: proc.pid,
+			kill: () => { try { proc.kill("SIGTERM"); } catch {} },
+			workspace, // 用于 /stop 命令按项目名查找
+		});
 
 			let stderr = '';
 			let resultText = '';
@@ -348,12 +323,12 @@ async function runAgent(
 			let lastProgressTime = 0;
 			let sessionLockAcquired = false;
 
-			function cleanup() {
-				done = true;
-				busySessions.delete(lockKey);
-				activeAgents.delete(lockKey);
-				if (progressTimer) clearInterval(progressTimer);
-			}
+		/** 清理进程资源（activeAgents、timers），busySessions 由外层 finally 清理 */
+		function cleanup() {
+			done = true;
+			activeAgents.delete(lockKey);
+			if (progressTimer) clearInterval(progressTimer);
+		}
 
 			// 定时器：每2秒发送进度更新
 			const progressTimer = setInterval(() => {
@@ -464,6 +439,68 @@ async function runAgent(
 			}
 		}
 		throw error;
+	}
+}
+
+// ── 定时任务文件位置修正 ─────────────────────────
+async function fixCronJobsLocation(workspace: string, webhook: string) {
+	// 检查工作区是否有 cron-jobs.json（错误位置）
+	const wrongPath = resolve(workspace, 'cron-jobs.json');
+	const correctPath = resolve(ROOT, 'cron-jobs-wecom.json');
+
+	if (!existsSync(wrongPath)) return;
+
+	try {
+		console.log(`[修正] 发现错误位置的任务文件: ${wrongPath}`);
+
+		// 读取错误位置的任务
+		const wrongData = JSON.parse(readFileSync(wrongPath, 'utf-8'));
+
+		// 读取正确位置的现有任务（如果存在）
+		let correctData: any;
+		try {
+			correctData = JSON.parse(readFileSync(correctPath, 'utf-8'));
+		} catch {
+			correctData = { version: 1, jobs: [] };
+		}
+
+		// 修正每个任务的字段
+		let fixedCount = 0;
+		for (const job of wrongData.jobs || []) {
+			// 跳过明确属于其他平台的任务
+			if (job.platform && job.platform !== 'wecom') {
+				console.log(`[修正] 跳过 ${job.platform} 平台的任务: ${job.name}`);
+				continue;
+			}
+
+			// 添加缺失的 platform 和 webhook 字段
+			if (!job.platform) {
+				job.platform = 'wecom';
+				fixedCount++;
+			}
+			if (!job.webhook) {
+				job.webhook = webhook;
+				fixedCount++;
+			}
+
+			// 检查是否已存在（避免重复）
+			const exists = correctData.jobs.some((j: any) => j.id === job.id);
+			if (!exists) {
+				correctData.jobs.push(job);
+			}
+		}
+
+		// 保存到正确位置
+		writeFileSync(correctPath, JSON.stringify(correctData, null, 2));
+		console.log(`[修正] ✅ 已移动 ${wrongData.jobs?.length || 0} 个任务到 ${correctPath}`);
+		console.log(`[修正] ✅ 修复了 ${fixedCount} 个缺失字段`);
+
+		// 删除错误位置的文件
+		unlinkSync(wrongPath);
+		console.log(`[修正] ✅ 已删除 ${wrongPath}`);
+
+	} catch (err) {
+		console.error('[修正] 失败:', err);
 	}
 }
 
@@ -581,858 +618,180 @@ wsClient.on('message.text', async (frame: WsFrame) => {
 		// 记录最近活跃会话（用于定时任务/心跳主动推送）
 		lastActiveSession = { chatid, chattype, userid: userid || undefined };
 
-		// 获取会话
-		const session = getSession(chatid, userid, defaultWorkspace);
-		
-		// === 命令系统 ===
-		
-		// === 命令系统（参考飞书完整实现）===
-		
-		// /apikey、/密钥 → 更换 Cursor API Key
-		if (/^\/?(?:apikey|api\s*key|密钥|换key|更换密钥)\s*$/i.test(text.trim())) {
-			const keyPreview = config.CURSOR_API_KEY ? `\`...${config.CURSOR_API_KEY.slice(-8)}\`` : "**未设置**";
+	// 获取会话
+	const session = getSession(chatid, userid, defaultWorkspace);
+	
+	// === 命令系统（使用统一的 CommandHandler）===
+	
+	// 创建企业微信平台适配器
+	const wecomAdapter: PlatformAdapter = {
+		reply: async (content: string, options?: { title?: string; color?: string }) => {
 			await wsClient.reply(frame, {
 				msgtype: 'markdown',
-				markdown: {
-					content: `当前 Key：${keyPreview}\n\n更换方式：\`/密钥 key_xxx...\` 或 \`/apikey key_xxx...\`\n\n[生成新 Key →](https://cursor.com/dashboard)`,
-				},
+				markdown: { content },
 			});
-			return;
-		}
-		const apikeyMatch = text.match(/^\/?(?:api\s*key|密钥|换key|更换密钥)[\s:：=]*(.+)/i);
-		if (apikeyMatch) {
-			if (chattype === 'group') {
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: "⚠️ **安全提醒：请勿在群聊中发送 API Key！**\n\n请在与机器人的 **私聊** 中发送 `/apikey` 指令。",
-					},
-				});
-				return;
-			}
-			const rawKey = apikeyMatch[1].trim().replace(/^["'`]+|["'`]+$/g, "");
-			if (!rawKey || rawKey.length < 20) {
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: "❌ Key 格式不对，太短了。请发送完整的 Cursor API Key。\n\n支持格式：\n- `/apikey key_xxxx...`\n- `/密钥 key_xxxx...`",
-					},
-				});
-				return;
-			}
-			try {
-				const envContent = readFileSync(ENV_PATH, "utf-8");
-				const updated = envContent.match(/^CURSOR_API_KEY=/m)
-					? envContent.replace(/^CURSOR_API_KEY=.*$/m, `CURSOR_API_KEY=${rawKey}`)
-					: `${envContent.trimEnd()}\nCURSOR_API_KEY=${rawKey}\n`;
-				writeFileSync(ENV_PATH, updated);
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: `**API Key 已更换**\n\n新 Key: \`...${rawKey.slice(-8)}\`\n\n已写入 .env 并自动生效。`,
-					},
-				});
-				console.log(`[指令] API Key 已更换 (...${rawKey.slice(-8)})`);
-			} catch (err) {
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: `❌ 写入失败: ${err instanceof Error ? err.message : err}`,
-					},
-				});
-			}
-			return;
-		}
-		
-		// /help、/帮助
-		if (/^\/(help|帮助|指令)\s*$/i.test(text.trim())) {
-			const helpText = [
-				'**基础指令**',
-				'- `/帮助` `/help` — 显示本帮助',
-				'- `/状态` `/status` — 查看服务状态',
-				'- `/项目` `/project` — 列出所有项目',
-				'- `/新对话` `/new` — 重置当前会话',
-				'- `/终止 [项目名]` `/stop` — 终止正在执行的任务',
-				'',
-				'**会话管理**',
-				'- `/会话` `/sessions` — 查看最近会话列表',
-				'- `/会话 编号` — 切换到指定会话',
-				'',
-				'**模型与密钥**',
-				'- `/模型` `/model` — 查看/切换 AI 模型',
-				'- `/密钥` `/apikey` — 查看/更换 API Key（仅私聊）',
-				'  用法：`/密钥 key_xxx...`',
-				'',
-				'**记忆系统**',
-				'- `/记忆` `/memory` — 查看记忆状态',
-				'- `/记忆 关键词` — 语义搜索记忆',
-				'- `/记录 内容` — 写入今日日记',
-				'- `/整理记忆` `/reindex` — 重建记忆索引',
-				'',
-				'**定时任务**',
-				'- `/任务` `/cron` — 查看/暂停/恢复/删除定时任务',
-				'',
-				'**心跳系统**',
-				'- `/心跳` `/heartbeat` — 查看心跳状态',
-				'- `/心跳 开启/关闭/执行`',
-				'- `/心跳 间隔 分钟数`',
-				'',
-				'**项目路由**',
-				'· 对话切换：说「切到 remote」等可持久切换',
-				'· 前缀指定：`项目名:消息` 或 `#项目名 消息`',
-				`· 可用项目：${Object.keys(projectsConfig.projects).map(k => `\`${k}\``).join('、')}`,
-			].join('\n');
-			
-			// 使用 reply 方法回复（通过 WebSocket 通道）
-			try {
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: `📖 **使用帮助**\n\n${helpText}`,
-					},
-				});
-				console.log('[命令] /help 回复已发送');
-			} catch (error) {
-				console.error('[命令] /help 回复失败', error);
-			}
-			return;
-		}
-		
-		// /status、/状态
-		if (/^\/(status|状态)\s*$/i.test(text.trim())) {
-			const botIdPreview = config.WECOM_BOT_ID ? `\`...${config.WECOM_BOT_ID.slice(-8)}\`` : '**未设置**';
-			const projects = Object.entries(projectsConfig.projects).map(([k, v]) => `  \`${k}\` → ${v.path}`).join('\n');
-			const memStatus = memory
-				? (() => {
-					const stats = memory.getStats();
-					return `${stats.chunks} 块（${stats.files} 文件, ${stats.cachedEmbeddings} 嵌入缓存）`;
-				})()
-				: '未初始化';
-			
-			const keyPreview = config.CURSOR_API_KEY ? `\`...${config.CURSOR_API_KEY.slice(-8)}\`` : "**未设置**";
-			
-			const sessions = [...sessionsStore.entries()]
-				.filter(([, s]) => s.active)
-				.map(([ws, s]) => {
-					const name = Object.entries(projectsConfig.projects).find(([, v]) => v.path === ws)?.[0] || ws;
-					const entry = s.history.find((h) => h.id === s.active);
-					const info = entry ? ` · ${entry.summary.slice(0, 30)}` : "";
-					return `  \`${name}\` → ${s.active!.slice(0, 12)}...${info}`;
-				}).join("\n") || "  (无活跃会话)";
-			
-			const statusText = [
-				`**BotID：** ${botIdPreview}`,
-				`**Key：** ${keyPreview}`,
-				`**模型：** \`${config.CURSOR_MODEL}\``,
-				`**记忆：** ${memStatus}`,
-				`**调度：** ${(() => { const s = scheduler.getStats(); return s.total > 0 ? `${s.enabled}/${s.total} 任务${s.nextRunIn ? `（下次: ${s.nextRunIn}）` : ""}` : '无任务'; })()}`,
-				`**心跳：** ${heartbeat.getStatus().enabled ? `每 ${Math.round(heartbeat.getStatus().everyMs / 60000)} 分钟` : '未启用'}`,
-				`**活跃任务：** ${activeAgents.size} 个运行中`,
-				`**工作区：** ${memoryWorkspace}`,
-				'',
-				'**项目路由：**',
-				projects,
-				'',
-				'**活跃会话：**',
-				sessions,
-			].join('\n');
-			
-			try {
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: `📊 **服务状态**\n\n${statusText}`,
-					},
-				});
-				console.log('[命令] /status 回复已发送');
-			} catch (error) {
-				console.error('[命令] /status 回复失败', error);
-			}
-			return;
-		}
-		
-		// /new、/新对话
-		if (/^\/(new|新对话|新会话)\s*$/i.test(text.trim())) {
-			// Bug #23 修复: 从 sessionsStore 读取当前项目
-			const currentProject = getCurrentProject(defaultWorkspace) || projectsConfig.default_project;
-			const workspace = projectsConfig.projects[currentProject]?.path || defaultWorkspace;
-			archiveAndResetSession(workspace);
-			
-			const historyCount = getSessionHistory(workspace).length;
-			const hint = historyCount > 0 ? `\n\n历史会话已保留（共 ${historyCount} 个），发送 \`/会话\` 可查看和切换。` : "";
-			
-			try {
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: `🆕 **新会话已开始**\n\n下一条消息将创建全新对话。${hint}`,
-					},
-				});
-				console.log('[命令] /new 回复已发送');
-			} catch (error) {
-				console.error('[命令] /new 回复失败', error);
-			}
-			return;
-		}
-		
-		// /model、/模型 → 切换模型
-		const modelMatch = text.match(/^\/(model|模型|切换模型)[\s:：=]*(.*)/i);
-		if (modelMatch) {
-			const input = modelMatch[2].trim();
-			
-			if (!input) {
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: buildModelListCard(config.CURSOR_MODEL),
-					},
-				});
-				return;
-			}
-			
-			const { exact, candidates } = fuzzyMatchModel(input);
-			
-			if (exact) {
-				if (exact.id === config.CURSOR_MODEL) {
-					await wsClient.reply(frame, {
-						msgtype: 'markdown',
-						markdown: {
-							content: `当前已是 **${exact.id}**（${exact.desc}），无需切换。`,
-						},
-					});
-				return;
-			}
-			// Bug #19 修复：添加文件操作错误处理
-			try {
-				const envContent = readFileSync(ENV_PATH, "utf-8");
-				const updated = envContent.match(/^CURSOR_MODEL=/m)
-					? envContent.replace(/^CURSOR_MODEL=.*$/m, `CURSOR_MODEL=${exact.id}`)
-					: `${envContent.trimEnd()}\nCURSOR_MODEL=${exact.id}\n`;
-				writeFileSync(ENV_PATH, updated);
-				const prev = config.CURSOR_MODEL;
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: `${prev} → **${exact.id}**（${exact.desc}）\n\n已写入 .env，2 秒内自动生效。`,
-					},
-				});
-				console.log(`[指令] 模型切换: ${prev} → ${exact.id}`);
-			} catch (err) {
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: `❌ 写入 .env 失败: ${err instanceof Error ? err.message : err}`,
-					},
-				});
-				console.error(`[指令] 模型切换失败:`, err);
-			}
-			return;
-			}
-			
-			if (candidates.length > 1) {
-				const list = candidates.map((m) => `- \`${m.id}\`（${m.desc}）`).join("\n");
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: `「${input}」匹配到多个模型：\n\n${list}\n\n请输入更精确的名称或编号。`,
-					},
-				});
-				return;
-			}
-			
-			if (input.length < 2 || /^\d+$/.test(input)) {
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: buildModelListCard(config.CURSOR_MODEL, `「${input}」无匹配，请从列表中选择`),
-					},
-			});
-			return;
-		}
-		
-		// Bug #19 修复：添加文件操作错误处理
-		try {
-			const envContent = readFileSync(ENV_PATH, "utf-8");
-			const updated = envContent.match(/^CURSOR_MODEL=/m)
-				? envContent.replace(/^CURSOR_MODEL=.*$/m, `CURSOR_MODEL=${input}`)
-				: `${envContent.trimEnd()}\nCURSOR_MODEL=${input}\n`;
-			writeFileSync(ENV_PATH, updated);
-			const prev = config.CURSOR_MODEL;
-			await wsClient.reply(frame, {
-				msgtype: 'markdown',
-				markdown: {
-					content: `${prev} → **${input}**\n\n⚠️ 此模型不在常用列表中，若名称有误可能导致执行失败。`,
-				},
-			});
-			console.log(`[指令] 模型切换(自定义): ${prev} → ${input}`);
-		} catch (err) {
-			await wsClient.reply(frame, {
-				msgtype: 'markdown',
-				markdown: {
-					content: `❌ 写入 .env 失败: ${err instanceof Error ? err.message : err}`,
-				},
-			});
-			console.error(`[指令] 模型切换(自定义)失败:`, err);
-		}
+		},
+	replyStream: async (content: string, finish: boolean) => {
+		const streamId = generateReqId('stream');
+		await wsClient.replyStream(frame, streamId, content, finish);
+	},
+	sendFile: async (filePath: string, fileName?: string) => {
+		const buffer = readFileSync(filePath);
+		const result = await wsClient.uploadMedia(buffer, {
+			type: 'file',
+			filename: fileName || filePath.split('/').pop() || 'file',
+		});
+		await wsClient.replyMedia(frame, 'file', result.media_id);
+	},
+	};
+	
+	// 创建命令上下文
+	const commandContext: CommandContext = {
+		platform: 'wecom',
+		projectsConfig,
+		defaultWorkspace,
+		memoryWorkspace,
+		config,
+		scheduler,
+		memory: memory || null,
+		heartbeat,
+		activeAgents,
+		busySessions,
+		sessionsStore,
+		getCurrentProject: (ws: string) => getCurrentProject(ws) || null,
+		getLockKey,
+		archiveAndResetSession,
+		getSessionHistory,
+		getActiveSessionId: (ws: string) => getActiveSessionId(ws) || null,
+		switchToSession,
+		rootDir: ROOT,
+	};
+	
+	// 创建命令处理器
+	const commandHandler = new CommandHandler(wecomAdapter, commandContext);
+	
+	// 尝试路由到命令处理器
+	const handled = await commandHandler.route(text, (newSessionId: string) => {
+		session.agentId = newSessionId;
+	});
+	
+	if (handled) {
+		console.log('[命令] 已通过统一处理器处理');
 		return;
-		}
-		
-		// /会话、/sessions → 会话管理
-		const sessionsMatch = text.match(/^\/(会话|sessions?)[\s:：=]*(.*)/i);
-		if (sessionsMatch) {
-			const input = sessionsMatch[2].trim();
-			// Bug #23 修复: 从 sessionsStore 读取当前项目
-			const currentProject = getCurrentProject(defaultWorkspace) || projectsConfig.default_project;
-			const workspace = projectsConfig.projects[currentProject]?.path || defaultWorkspace;
-			
-			if (!input) {
-				const history = getSessionHistory(workspace, 10);
-				const active = getActiveSessionId(workspace);
-				if (history.length === 0) {
-					await wsClient.reply(frame, {
-						msgtype: 'markdown',
-						markdown: {
-							content: '暂无会话历史。\n\n发送消息即可创建新会话。',
-						},
-					});
-					return;
-				}
-				const lines = history.map((h, i) => {
-					const isCurrent = h.id === active;
-					const time = formatRelativeTime(h.lastActiveAt);
-					return isCurrent
-						? `**${i + 1}. ${h.summary}** ✅\n   \`${h.id.slice(0, 12)}...\` · ${time}`
-						: `${i + 1}. ${h.summary}\n   \`${h.id.slice(0, 12)}...\` · ${time}`;
-				});
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: `**最近会话（共 ${history.length} 个）**\n\n${lines.join('\n\n')}\n\n> 发送 \`/会话 编号\` 切换`,
-					},
-				});
-				return;
-			}
-			
-			const num = Number.parseInt(input, 10);
-			if (Number.isNaN(num) || num < 1) {
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: `❌ 编号格式错误\n\n请发送 \`/会话\` 查看列表，然后 \`/会话 编号\` 切换。`,
-					},
-				});
-				return;
-			}
-			
-			const history = getSessionHistory(workspace, 20);
-			if (num > history.length) {
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: `❌ 编号超出范围（共 ${history.length} 个会话）\n\n发送 \`/会话\` 查看列表。`,
-					},
-				});
-				return;
-			}
-			
-			const targetSession = history[num - 1];
-			if (!targetSession) {
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: `❌ 会话不存在。`,
-					},
-				});
-				return;
-			}
-			
-			const ok = switchToSession(workspace, targetSession.id);
-			if (ok) {
-				session.agentId = targetSession.id;
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: `✅ **已切换到会话 ${num}**\n\n${targetSession.summary}\n\n\`${targetSession.id.slice(0, 12)}...\`\n\n下一条消息将在此会话中继续对话。`,
-					},
-				});
-				console.log(`[会话] 切换到: ${targetSession.id}`);
-			} else {
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: `❌ 切换失败，会话不存在。`,
-					},
-				});
-			}
-			return;
-		}
-		
-		// /项目、/project → 列出所有项目
-		if (/^\/(项目|project)\s*$/i.test(text.trim())) {
-			// Bug #23 修复: 从 sessionsStore 读取当前项目
-			const currentProject = getCurrentProject(defaultWorkspace);
-			const projects = Object.entries(projectsConfig.projects).map(([k, v]) => 
-				`- **${k}**${k === currentProject ? ' ✅' : ''}\n  \`${v.path}\`\n  ${v.description || ''}`
-			).join('\n\n');
+	}
+	
+	// === 以下是平台特定命令（需要群聊保护或特殊逻辑）===
+	
+	// /apikey、/密钥 → 群聊保护（企业微信特定：需要在群聊中阻止）
+	const apikeyMatch = text.match(/^\/?(?:api\s*key|密钥|换key|更换密钥)[\s:：=]*(.+)/i);
+	if (apikeyMatch) {
+		if (chattype === 'group') {
 			await wsClient.reply(frame, {
 				msgtype: 'markdown',
 				markdown: {
-					content: `**可用项目（共 ${Object.keys(projectsConfig.projects).length} 个）**\n\n${projects}\n\n> 发送「切换到 项目名」可持久切换`,
+					content: "⚠️ **安全提醒：请勿在群聊中发送 API Key！**\n\n请在与机器人的 **私聊** 中发送 `/apikey` 指令。",
 				},
 			});
 			return;
 		}
+		// 私聊模式：委托给统一处理器（不需要更新 session，传递空回调保持一致性）
+		const handled = await commandHandler.route(text, () => {});
+		if (handled) return;
+	}
 		
-		// /stop、/终止 → 终止当前任务
-		if (/^\/(stop|终止|停止)(?:\s+(.+))?$/i.test(text.trim())) {
-			const match = text.trim().match(/^\/(stop|终止|停止)(?:\s+(.+))?$/i);
-			const projectHint = match?.[2]?.trim();
-			
-			const getProjectNameByLockKey = (lockKey: string): string | null => {
-				const wsPath = lockKey.startsWith('session:') 
-					? null
-					: lockKey.replace(/^ws:/, '');
-				
-				if (wsPath) {
-					for (const [name, info] of Object.entries(projectsConfig.projects)) {
-						if (info.path === wsPath) return name;
-					}
-				}
-				return null;
-			};
-			
-			if (projectHint && projectsConfig.projects[projectHint]) {
-				const wsPath = projectsConfig.projects[projectHint].path;
-				const lk = getLockKey(wsPath);
-				const agent = activeAgents.get(lk);
-				if (agent) {
-					agent.kill();
-					activeAgents.delete(lk);
-					busySessions.delete(lk);  // Bug #11 修复：清理会话锁定
-					console.log(`[指令] 终止 agent pid=${agent.pid} project=${projectHint} session=${lk}`);
-					await wsClient.reply(frame, {
-						msgtype: 'markdown',
-						markdown: {
-							content: `已终止项目 **${projectHint}** 的任务。\n\n发送新消息将继续在当前会话中对话。`,
-						},
-					});
-				} else {
-					await wsClient.reply(frame, {
-						msgtype: 'markdown',
-						markdown: {
-							content: `项目 **${projectHint}** 没有正在运行的任务。`,
-						},
-					});
-				}
-				return;
-			}
-			
-			const runningAgents = Array.from(activeAgents.entries());
-			
-			if (runningAgents.length === 0) {
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: '当前没有正在运行的任务。',
-					},
-				});
-		} else if (runningAgents.length === 1) {
-			const first = runningAgents[0];
-			if (!first) return;
-			const [lockKey, agent] = first;
-			const projectName = getProjectNameByLockKey(lockKey);
-			agent.kill();
-			activeAgents.delete(lockKey);
-			busySessions.delete(lockKey);  // Bug #11 修复：清理会话锁定
-			console.log(`[指令] 终止 agent pid=${agent.pid} session=${lockKey}`);
-			
-			const msg = projectName 
-				? `已终止项目 **${projectName}** 的任务。\n\n发送新消息将继续在当前会话中对话。`
-				: `已终止任务（PID: ${agent.pid}）。\n\n发送新消息将继续在当前会话中对话。`;
-			await wsClient.reply(frame, {
-				msgtype: 'markdown',
-				markdown: {
-					content: msg,
-				},
-			});
-			} else {
-				const list = runningAgents
-					.map(([lk, agent]) => {
-						const projectName = getProjectNameByLockKey(lk);
-						return projectName 
-							? `- 项目: **${projectName}** (PID: ${agent.pid})`
-							: `- 任务 PID: ${agent.pid} (${lk})`;
-					})
-					.join('\n');
-				
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: `当前有 **${runningAgents.length}** 个任务正在运行：\n\n${list}\n\n请使用 \`/stop 项目名\` 指定要停止的任务。`,
-					},
-				});
-			}
-			return;
-		}
-		
-		// /记忆、/memory → 记忆系统操作
-		const memoryMatch = text.match(/^\/(记忆|memory|搜索记忆|recall)[\s:：=]*(.*)/i);
-		if (memoryMatch) {
-			if (!memory) {
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: "记忆系统未初始化（缺少向量嵌入 API Key）。\n\n请在 `.env` 中设置 `VOLC_EMBEDDING_API_KEY`。",
-					},
-				});
-				return;
-			}
-			const query = memoryMatch[2].trim();
-			if (!query) {
-				const stats = memory.getStats();
-				const fileList = stats.filePaths.length > 0
-					? stats.filePaths.slice(0, 25).map((p) => `- \`${p}\``).join("\n") + (stats.filePaths.length > 25 ? `\n- …及其他 ${stats.filePaths.length - 25} 个文件` : "")
-					: "（尚未索引，请发送 `/整理记忆`）";
-				const statusText = [
-					`**记忆索引：** ${stats.chunks} 块（${stats.files} 文件, ${stats.cachedEmbeddings} 嵌入缓存）`,
-					`**索引范围：** 工作区全部文本文件`,
-					`**嵌入模型：** ${config.VOLC_EMBEDDING_MODEL || '未配置'}`,
-					"",
-					"**用法：**",
-					"- `/记忆 关键词` — 语义搜索记忆",
-					"- `/记录 内容` — 写入今日日记",
-					"- `/整理记忆` — 重建全工作区索引",
-					"",
-					`**已索引文件：**\n${fileList}`,
-				].join("\n");
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: `🧠 **记忆系统**\n\n${statusText}`,
-					},
-				});
-				return;
-			}
+		// 检测相对时间新闻推送（X分钟后推送热点、X小时后推送新闻）
+		const relativeNewsMatch = text.match(/(\d+)\s*(分钟|小时)(?:[后以]后|后)\s*(?:推送|发送)?\s*(?:前|top)?\s*(\d+)?\s*条?\s*(?:今日)?\s*(热点|新闻|热榜)/i);
+		if (relativeNewsMatch) {
+			const [, numStr, unit, topNStr, _] = relativeNewsMatch;
+			const num = parseInt(numStr, 10);
+			const topN = topNStr ? Math.min(50, Math.max(1, parseInt(topNStr, 10))) : 15;
+			const minutes = unit === '小时' ? num * 60 : num;
+			const runAtMs = Date.now() + minutes * 60 * 1000;
+			const runAt = new Date(runAtMs);
+			const timeDesc = `${num}${unit}后（${runAt.toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Shanghai' })}）`;
+
+			const message = JSON.stringify({ type: "fetch-news", options: { topN } });
 			try {
-				const results = await memory.search(query, 5);
-				if (results.length === 0) {
-					await wsClient.reply(frame, {
-						msgtype: 'markdown',
-						markdown: {
-							content: `未找到与「${query}」相关的记忆。\n\n索引范围：工作区全部文本文件（发 \`/整理记忆\` 可刷新）`,
-						},
-					});
-					return;
-				}
-				const lines = results.map((r, i) =>
-					`**${i + 1}.** \`${r.path}#L${r.startLine}\`（相关度 ${(r.score * 100).toFixed(0)}%）\n${r.text.slice(0, 300)}`,
-				);
+				await scheduler.add({
+					name: "热点新闻推送",
+					enabled: true,
+					deleteAfterRun: true, // 相对时间任务执行一次后删除
+					schedule: { kind: "at", at: runAt.toISOString() },
+					message,
+					platform: "wecom",
+					webhook: chatid,
+				});
 				await wsClient.reply(frame, {
 					msgtype: 'markdown',
 					markdown: {
-						content: `🔍 **搜索「${query}」**\n\n${lines.join("\n\n---\n\n")}`,
+						content: `✅ 已创建定时任务\n\n⏰ 执行时间：${timeDesc}\n📰 推送内容：今日热点新闻（前 ${topN} 条）\n📱 到时会通过**企业微信**提醒你\n\n发送 \`/任务\` 可查看所有任务`,
 					},
 				});
-			} catch (e) {
+				console.log(`[定时] 创建新闻推送任务: ${timeDesc}`);
+			} catch (error) {
+				console.error('[定时] 创建任务失败', error);
 				await wsClient.reply(frame, {
 					msgtype: 'markdown',
 					markdown: {
-						content: `搜索失败: ${e instanceof Error ? e.message : e}`,
+						content: `❌ 创建定时任务失败\n\n${error instanceof Error ? error.message : String(error)}`,
 					},
 				});
 			}
 			return;
 		}
 
-		// /记录 → 快速写入今日日记
-		const logMatch = text.match(/^\/(记录|log|note)[\s:：=]+(.+)/is);
-		if (logMatch) {
-			if (!memory) {
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: "记忆系统未初始化。",
-					},
-				});
-				return;
+		// 检测新闻推送定时请求（每天/每日 早上/上午 9点 推送热点、明天上午10点推送新闻）
+		const newsScheduleMatch = text.match(/(每天|每日|明天)\s*(早上|上午|下午)?\s*([0-9一二三四五六七八九十]+)\s*[点时]?\s*(?:给我)?\s*(?:推送|发送)?\s*(?:下|今日)?\s*(热点|新闻|热榜)/i);
+		if (newsScheduleMatch) {
+			const [, when, ap, hourStr, _] = newsScheduleMatch;
+			const numMap: Record<string, number> = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+			const toNum = (s: string) => (numMap[s] ?? parseInt(s, 10)) || 9;
+			let topN = 15;
+			const topMatch = text.match(/(?:推送|前)\s*(\d+)\s*条/i);
+			if (topMatch) topN = Math.min(50, Math.max(1, parseInt(topMatch[1], 10)));
+			let schedule: { kind: "cron"; expr: string; tz?: string } | { kind: "at"; at: string };
+			let timeDesc: string;
+			if (when === "每天" || when === "每日") {
+				const hour = toNum(hourStr);
+				const hour24 = ap === "下午" ? (hour % 12) + 12 : hour;
+				schedule = { kind: "cron", expr: `0 ${hour24} * * *`, tz: "Asia/Shanghai" };
+				timeDesc = `每天 ${hour24}:00`;
+			} else {
+				let hour = toNum(hourStr);
+				if (ap === "下午") hour = (hour % 12) + 12;
+				const d = new Date();
+				d.setDate(d.getDate() + 1);
+				d.setHours(hour, 0, 0, 0);
+				schedule = { kind: "at", at: d.toISOString() };
+				timeDesc = `明天 ${hour}:00`;
 			}
-			const content = logMatch[2].trim();
-			const path = memory.appendDailyLog(content);
-			await wsClient.reply(frame, {
-				msgtype: 'markdown',
-				markdown: {
-					content: `📝 **已记录**\n\n已记录到今日日记。\n\n\`${path}\``,
-				},
-			});
-			return;
-		}
-
-		// /整理记忆 → 重建全工作区记忆索引
-		if (/^\/(整理记忆|reindex|索引)\s*$/i.test(text.trim())) {
-			if (!memory) {
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: "记忆系统未初始化。",
-					},
-				});
-				return;
-			}
-			
-			const streamId = `reindex-${Date.now()}`;
-			await wsClient.replyStream(frame, streamId, "⏳ 正在扫描并索引工作区全部文本文件...", false);
-			
+			const message = JSON.stringify({ type: "fetch-news", options: { topN } });
 			try {
-				const count = await memory.index();
-				const stats = memory.getStats();
-				const msg = [
-					`索引完成: **${count}** 个记忆块（来自 **${stats.files}** 个文件）`,
-					`嵌入缓存: ${stats.cachedEmbeddings} 条`,
-					`嵌入模型: \`${config.VOLC_EMBEDDING_MODEL || '未配置'}\``,
-					"",
-					"**已索引文件：**",
-					...stats.filePaths.slice(0, 25).map((p) => `- \`${p}\``),
-					...(stats.filePaths.length > 25 ? [`- …及其他 ${stats.filePaths.length - 25} 个文件`] : []),
-				].join("\n");
-				await wsClient.replyStream(frame, streamId, `✅ **全工作区索引完成**\n\n${msg}`, true);
-			} catch (e) {
-				await wsClient.replyStream(frame, streamId, `❌ 索引失败: ${e instanceof Error ? e.message : e}`, true);
-			}
-			return;
-		}
-		
-		// /任务、/cron → 定时任务管理
-		const taskMatch = text.match(/^\/(任务|cron|定时|task|schedule|定时任务)[\s:：]*(.*)/i);
-		if (taskMatch) {
-			const subCmd = taskMatch[2].trim().toLowerCase();
-			
-			if (!subCmd || subCmd === "list" || subCmd === "列表") {
-				const cronFilePath = resolve(ROOT, 'cron-jobs-wecom.json');
-				let jobs: any[] = [];
-				try {
-					if (existsSync(cronFilePath)) {
-						const data = JSON.parse(readFileSync(cronFilePath, 'utf-8'));
-						// 显示所有企业微信平台的任务（包括已暂停的）
-						// 未设置 platform 的旧任务也显示（向后兼容）
-						jobs = (data.jobs || []).filter((j: any) => !j.platform || j.platform === 'wecom');
-					}
-				} catch (e) {
-					console.warn(`[任务] 读取文件失败: ${e}`);
-				}
-				
-				if (jobs.length === 0) {
-					await wsClient.reply(frame, {
-						msgtype: 'markdown',
-						markdown: {
-							content: "暂无定时任务。\n\n在对话中告诉 AI「每天早上9点提醒我XX」即可自动创建。",
-						},
-					});
-					return;
-				}
-				
-				const lines = jobs.map((j: any, i: number) => {
-					const status = j.enabled ? "✅" : "⏸";
-					let schedDesc = "";
-					if (j.schedule.kind === "at") {
-						const atTime = new Date(j.schedule.at);
-						schedDesc = `一次性 ${atTime.toLocaleString("zh-CN", { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}`;
-					} else if (j.schedule.kind === "every") {
-						schedDesc = `每 ${Math.round(j.schedule.everyMs / 60000)} 分钟`;
-					} else {
-						schedDesc = `cron: ${j.schedule.expr}`;
-					}
-					const lastRun = j.state?.lastRunAtMs ? new Date(j.state.lastRunAtMs).toLocaleString("zh-CN") : "从未执行";
-					return `${status} **${i + 1}. ${j.name}**\n   调度: ${schedDesc}\n   上次: ${lastRun}\n   ID: \`${j.id.slice(0, 16)}...\``;
+				await scheduler.add({
+					name: "热点新闻推送",
+					enabled: true,
+					deleteAfterRun: false,
+					schedule,
+					message,
+					platform: "wecom",
+					webhook: chatid,
 				});
-				lines.push("", `📊 共 ${jobs.length} 个任务`);
 				await wsClient.reply(frame, {
 					msgtype: 'markdown',
 					markdown: {
-						content: `📋 **定时任务**\n\n${lines.join("\n")}`,
+						content: `✅ 已创建定时任务\n\n⏰ 执行时间：${timeDesc}\n📰 推送内容：今日热点新闻（前 ${topN} 条）\n📱 到时会通过**企业微信**提醒你\n\n发送 \`/任务\` 可查看所有任务`,
 					},
 				});
-				return;
-			}
-
-			// /任务 暂停 ID
-			const pauseMatch = subCmd.match(/^(暂停|pause|disable)\s+(\S+)/i);
-			if (pauseMatch) {
-				const idPrefix = pauseMatch[2];
-				const job = (await scheduler.list(true)).find((j) => j.id.startsWith(idPrefix));
-				if (!job) {
-					await wsClient.reply(frame, {
-						msgtype: 'markdown',
-						markdown: {
-							content: `未找到 ID 为 \`${idPrefix}\` 的任务`,
-						},
-					});
-					return;
-				}
-				await scheduler.update(job.id, { enabled: false });
+				console.log(`[定时] 创建新闻推送任务: ${timeDesc}`);
+			} catch (error) {
+				console.error('[定时] 创建任务失败', error);
 				await wsClient.reply(frame, {
 					msgtype: 'markdown',
 					markdown: {
-						content: `⏸ **已暂停**\n\n已暂停: **${job.name}**`,
+						content: `❌ 创建定时任务失败\n\n${error instanceof Error ? error.message : String(error)}`,
 					},
 				});
-				return;
 			}
-
-			// /任务 恢复 ID
-			const resumeMatch = subCmd.match(/^(恢复|resume|enable)\s+(\S+)/i);
-			if (resumeMatch) {
-				const idPrefix = resumeMatch[2];
-				const job = (await scheduler.list(true)).find((j) => j.id.startsWith(idPrefix));
-				if (!job) {
-					await wsClient.reply(frame, {
-						msgtype: 'markdown',
-						markdown: {
-							content: `未找到 ID 为 \`${idPrefix}\` 的任务`,
-						},
-					});
-					return;
-				}
-				await scheduler.update(job.id, { enabled: true });
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: `✅ **已恢复**\n\n已恢复: **${job.name}**`,
-					},
-				});
-				return;
-			}
-
-			// /任务 删除 ID
-			const deleteMatch = subCmd.match(/^(删除|delete|remove)\s+(\S+)/i);
-			if (deleteMatch) {
-				const idPrefix = deleteMatch[2];
-				const job = (await scheduler.list(true)).find((j) => j.id.startsWith(idPrefix));
-				if (!job) {
-					await wsClient.reply(frame, {
-						msgtype: 'markdown',
-						markdown: {
-							content: `未找到 ID 为 \`${idPrefix}\` 的任务`,
-						},
-					});
-					return;
-				}
-				await scheduler.remove(job.id);
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: `🗑️ **已删除**\n\n已删除: **${job.name}**`,
-					},
-				});
-				return;
-			}
-
-			// 未知子命令
-			await wsClient.reply(frame, {
-				msgtype: 'markdown',
-				markdown: {
-					content: `❌ 未知操作\n\n可用操作：\n- \`/任务\` — 查看列表\n- \`/任务 暂停 ID\`\n- \`/任务 恢复 ID\`\n- \`/任务 删除 ID\``,
-				},
-			});
-			return;
-		}
-		
-		// /心跳、/heartbeat → 心跳系统管理
-		const heartbeatMatch = text.match(/^\/(心跳|heartbeat|hb)[\s:：]*(.*)/i);
-		if (heartbeatMatch) {
-			const subCmd = heartbeatMatch[2].trim().toLowerCase();
-			const status = heartbeat.getStatus();
-			
-			if (!subCmd || subCmd === "status" || subCmd === "状态") {
-				const statusText = [
-					`**当前状态：** ${status.enabled ? "✅ 已启用" : "⏸ 已暂停"}`,
-					`**检查间隔：** ${Math.round(status.everyMs / 60000)} 分钟`,
-					`**上次检查：** ${status.lastRunAt ? new Date(status.lastRunAt).toLocaleString("zh-CN") : "从未执行"}`,
-					`**下次检查：** ${status.nextRunAt ? new Date(status.nextRunAt).toLocaleString("zh-CN") : "未调度"}`,
-					"",
-					"**用法：**",
-					"- `/心跳 开启` — 启用心跳",
-					"- `/心跳 关闭` — 暂停心跳",
-					"- `/心跳 执行` — 立即执行一次",
-					"- `/心跳 间隔 30` — 设置间隔（分钟）",
-				].join("\n");
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: `💓 **心跳系统**\n\n${statusText}`,
-					},
-				});
-				return;
-			}
-
-			if (subCmd.match(/^(开启|enable|start|on)/)) {
-				heartbeat.updateConfig({ enabled: true });
-				const newStatus = heartbeat.getStatus();
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: `✅ **心跳已启用**\n\n间隔: ${Math.round(newStatus.everyMs / 60000)} 分钟\n\n${newStatus.nextRunAt ? `下次检查: ${new Date(newStatus.nextRunAt).toLocaleString("zh-CN")}` : ''}`,
-					},
-				});
-				return;
-			}
-
-			if (subCmd.match(/^(关闭|disable|stop|off)/)) {
-				heartbeat.updateConfig({ enabled: false });
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: `⏸ **心跳已暂停**`,
-					},
-				});
-				return;
-			}
-
-			if (subCmd.match(/^(执行|exec|run|now)/)) {
-				const streamId = `heartbeat-exec-${Date.now()}`;
-				await wsClient.replyStream(frame, streamId, "⏳ **正在执行心跳检查**\n\n执行中...", false);
-				
-				try {
-					const result = await heartbeat.runOnce();
-					const msg = result.status === 'ran' 
-						? `✅ **心跳检查完成**\n\n${result.hasContent ? '有内容需要关注' : '一切正常'}` 
-						: `⏸ **心跳跳过**\n\n原因: ${result.reason}`;
-					await wsClient.replyStream(frame, streamId, msg, true);
-				} catch (err) {
-					await wsClient.replyStream(frame, streamId, `❌ **执行失败**\n\n${err instanceof Error ? err.message : err}`, true);
-				}
-				return;
-			}
-
-			const intervalMatch = subCmd.match(/^(间隔|interval)[\s:：=]+(\d+)/i);
-			if (intervalMatch) {
-				const minutes = parseInt(intervalMatch[2], 10);
-				if (minutes < 1 || minutes > 1440) {
-					await wsClient.reply(frame, {
-						msgtype: 'markdown',
-						markdown: {
-							content: `❌ 间隔必须在 1-1440 分钟之间（当前 ${minutes}）`,
-						},
-					});
-					return;
-				}
-				heartbeat.updateConfig({ everyMs: minutes * 60_000 });
-				const newStatus = heartbeat.getStatus();
-				await wsClient.reply(frame, {
-					msgtype: 'markdown',
-					markdown: {
-						content: `✅ **间隔已更新**\n\n新间隔: ${minutes} 分钟\n\n${newStatus.enabled ? (newStatus.nextRunAt ? `下次检查: ${new Date(newStatus.nextRunAt).toLocaleString("zh-CN")}` : '') : '（当前处于暂停状态）'}`,
-					},
-				});
-				return;
-			}
-
-			// 未知子命令
-			await wsClient.reply(frame, {
-				msgtype: 'markdown',
-				markdown: {
-					content: `❌ 未知操作\n\n可用操作：\n- \`/心跳\` — 查看状态\n- \`/心跳 开启/关闭\`\n- \`/心跳 执行\`\n- \`/心跳 间隔 分钟数\``,
-				},
-			});
 			return;
 		}
 		
@@ -1482,22 +841,45 @@ wsClient.on('message.text', async (frame: WsFrame) => {
 			return;
 		}
 		
-		// Bug #15 修复：路径切换不支持持久化，改为提示用户使用项目名
-		if (routeChanged && intent.type === 'switch' && intent.path) {
-			const pathLabel = intent.path.split('/').pop() || intent.path;
-			const projectNames = Object.keys(projectsConfig.projects).map(n => `\`${n}\``).join('、');
-			await wsClient.reply(frame, {
-				msgtype: 'markdown',
-				markdown: {
-					content: `⚠️ **路径切换不支持持久化**\n\n您尝试切换到：\`${intent.path}\`\n\n**建议方案**：\n\n1️⃣ **使用项目名切换**（推荐）\n   发送：\`切换到 项目名\`\n   可用项目：${projectNames}\n\n2️⃣ **使用路径前缀**（临时路由）\n   发送：\`#${intent.path} 你的消息\`\n   示例：\`#${intent.path} 帮我分析代码\`\n\n3️⃣ **添加到 projects.json**（永久配置）\n   编辑项目配置文件添加新项目\n\n> 路径切换无法保存到会话中，建议使用项目名进行持久切换。`,
-				},
-			});
-			console.log(`[路由] 路径切换被拒绝（不支持持久化）: ${intent.path}`);
+	// Bug #15 修复：路径切换不支持持久化，改为提示用户使用项目名
+	if (routeChanged && intent.type === 'switch' && intent.path) {
+		const pathLabel = intent.path.split('/').pop() || intent.path;
+		const projectNames = Object.keys(projectsConfig.projects).map(n => `\`${n}\``).join('、');
+		await wsClient.reply(frame, {
+			msgtype: 'markdown',
+			markdown: {
+				content: `⚠️ **路径切换不支持持久化**\n\n您尝试切换到：\`${intent.path}\`\n\n**建议方案**：\n\n1️⃣ **使用项目名切换**（推荐）\n   发送：\`切换到 项目名\`\n   可用项目：${projectNames}\n\n2️⃣ **使用路径前缀**（临时路由）\n   发送：\`#${intent.path} 你的消息\`\n   示例：\`#${intent.path} 帮我分析代码\`\n\n3️⃣ **添加到 projects.json**（永久配置）\n   编辑项目配置文件添加新项目\n\n> 路径切换无法保存到会话中，建议使用项目名进行持久切换。`,
+			},
+		});
+		console.log(`[路由] 路径切换被拒绝（不支持持久化）: ${intent.path}`);
+		return;
+	}
+	
+	// 检查路由后的 message 是否还是命令（处理 "项目名:/命令" 格式）
+	if (message !== text) {
+		const routedHandled = await commandHandler.route(message, (newSessionId: string) => {
+			session.agentId = newSessionId;
+		});
+		if (routedHandled) {
+			console.log('[命令] 路由后的命令已通过统一处理器处理');
 			return;
 		}
-		
-		// 并发控制（最多等待 5 分钟）
-		const lockKey = getLockKey(workspace);
+	}
+	
+	// 未知指令 → 友好提示
+	if (message.startsWith('/')) {
+		const cmd = message.split(/[\s:：]/)[0];
+		await wsClient.reply(frame, {
+			msgtype: 'markdown',
+			markdown: {
+				content: `未知指令 \`${cmd}\`\n\n发送 \`/帮助\` 查看所有可用指令。`,
+			},
+		});
+		return;
+	}
+	
+	// 并发控制（最多等待 5 分钟）
+	let lockKey = getLockKey(workspace);
 		if (busySessions.has(lockKey)) {
 			await wsClient.reply(frame, {
 				msgtype: 'text',
@@ -1566,9 +948,27 @@ wsClient.on('message.text', async (frame: WsFrame) => {
 			};
 			
 			const { result, quotaWarning } = await runAgent(workspace, message, session.agentId, {
+				platform: 'wecom',
+				webhook: chatid,
 				onSessionId: (sid) => {
 					session.agentId = sid;
 					setActiveSession(workspace, sid, message.slice(0, 40));
+					// Bug 修复: sessionId 创建后，需更新 activeAgents 和 busySessions 的 key
+					const oldLockKey = lockKey;
+					const newLockKey = `session:${sid}`;
+					if (oldLockKey !== newLockKey) {
+						const agent = activeAgents.get(oldLockKey);
+						if (agent) {
+							activeAgents.delete(oldLockKey);
+							activeAgents.set(newLockKey, agent);
+						}
+						if (busySessions.has(oldLockKey)) {
+							busySessions.delete(oldLockKey);
+							busySessions.add(newLockKey);
+						}
+						lockKey = newLockKey; // 更新闭包变量，让 cleanup、busySessions 使用新 key
+						console.log(`[lockKey] 更新: ${oldLockKey} → ${newLockKey}`);
+					}
 				},
 				onProgress,
 				onStart,
@@ -1581,18 +981,24 @@ wsClient.on('message.text', async (frame: WsFrame) => {
 				cleanOutput = `${quotaWarning}\n\n---\n\n${cleanOutput}`;
 			}
 			
-			// 记录 AI 回复
-			if (memory) {
-				memory.appendSessionLog(workspace, "assistant", cleanOutput.slice(0, 3000), config.CURSOR_MODEL);
-			}
-			
-			// 发送最终结果
-			const finalMessage = cleanOutput ? cleanOutput : '✅ 任务已完成（无输出）';
-			const title = quotaWarning ? `⚠️ 完成 · ${elapsed}（已降级）` : `✅ 完成 · ${elapsed}`;
-			
-			await wsClient.replyStream(frame, streamId, `**${title}**\n\n---\n\n${finalMessage}`, true);
-			
-			console.log(`[完成] model=${quotaWarning ? 'auto' : config.CURSOR_MODEL} elapsed=${elapsed} (${result.length} chars)`);
+		// 记录 AI 回复
+		if (memory) {
+			memory.appendSessionLog(workspace, "assistant", cleanOutput.slice(0, 3000), config.CURSOR_MODEL);
+		}
+
+		// Agent 可能修改了 cron-jobs，检查并修正位置
+		await fixCronJobsLocation(workspace, chatid);
+
+		// 重新加载调度器
+		scheduler.reload().catch(() => {});
+		
+		// 发送最终结果
+		const finalMessage = cleanOutput ? cleanOutput : '✅ 任务已完成（无输出）';
+		const title = quotaWarning ? `⚠️ 完成 · ${elapsed}（已降级）` : `✅ 完成 · ${elapsed}`;
+		
+		await wsClient.replyStream(frame, streamId, `**${title}**\n\n---\n\n${finalMessage}`, true);
+		
+		console.log(`[完成] model=${quotaWarning ? 'auto' : config.CURSOR_MODEL} elapsed=${elapsed} (${result.length} chars)`);
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : String(error);
 			console.error(`[失败] ${msg.slice(0, 200)}`);
@@ -1619,6 +1025,35 @@ const scheduler = new Scheduler({
 	storePath: cronStorePath,
 	defaultWorkspace,
 	onExecute: async (job: CronJob) => {
+		// 新闻推送任务：动态抓取并格式化
+		const msg = job.message;
+		const isNews =
+			msg === "fetch-news" ||
+			msg === '{"type":"fetch-news"}' ||
+			(typeof msg === "string" && msg.startsWith('{"type":"fetch-news"'));
+		if (isNews) {
+			try {
+				let topN = 15;
+				if (typeof msg === "string" && msg.startsWith("{")) {
+					try {
+						const parsed = JSON.parse(msg) as { type?: string; options?: { topN?: number } };
+						topN = parsed.options?.topN ?? 15;
+					} catch {}
+				}
+				console.log(`[scheduler] fetching news, topN=${topN}`);
+				const { messages } = await fetchNews({ topN, platform: "wecom" });
+				console.log(`[scheduler] news fetched, ${messages.length} batch(es)`);
+				if (messages.length > 1) {
+					return { status: "ok" as const, result: JSON.stringify({ chunks: messages }) };
+				}
+				return { status: "ok" as const, result: messages[0] ?? "" };
+			} catch (err) {
+				console.error(`[scheduler] news fetch failed:`, err);
+				const fallback = `⚠️ 热点抓取失败\n\n${err instanceof Error ? err.message : String(err)}\n\n稍后会自动重试`;
+				return { status: "error" as const, error: String(err), result: fallback };
+			}
+		}
+		// 普通提醒任务
 		console.log(`[定时] 触发任务: ${job.name}`);
 		return { status: 'ok' as const, result: job.message };
 	},
@@ -1644,13 +1079,37 @@ const scheduler = new Scheduler({
 		}
 		
 		try {
+			// 检查是否为新闻推送任务（分批消息）
+			let chunks: string[];
+			try {
+				const parsed = JSON.parse(result) as { chunks?: string[] };
+				chunks = parsed.chunks || [result];
+			} catch {
+				chunks = [result];
+			}
+
+			// 发送消息（支持分批）
+		for (let i = 0; i < chunks.length; i++) {
+			const chunk = chunks[i];
+			if (!chunk) continue;
+			
+			const title = chunks.length > 1 
+				? `⏰ **${job.name}** (${i + 1}/${chunks.length})`
+				: `⏰ **定时任务：${job.name}**`;
+			
 			await wsClient.sendMessage(chatid, {
 				msgtype: 'markdown',
 				markdown: {
-					content: `⏰ **定时任务：${job.name}**\n\n${result.slice(0, 3000)}`,
+					content: `${title}\n\n${chunk.slice(0, 3000)}`,
 				},
 			});
-			console.log(`[定时] 任务结果已推送到 chatid=${chatid.slice(0, 8)}...`);
+				
+				// 分批发送时添加短暂延迟，避免消息发送过快
+				if (i < chunks.length - 1) {
+					await new Promise(r => setTimeout(r, 500));
+				}
+			}
+			console.log(`[定时] 任务结果已推送到 chatid=${chatid.slice(0, 8)}... (${chunks.length} 条消息)`);
 		} catch (err) {
 			console.error('[定时] 推送失败:', err);
 		}
@@ -1723,7 +1182,7 @@ process.on('SIGINT', async () => {
 		console.log(`[退出] 正在终止 ${activeAgents.size} 个运行中的任务...`);
 		for (const [lockKey, agent] of activeAgents.entries()) {
 			try {
-				agent.kill('SIGTERM');
+				agent.kill();
 				console.log(`[退出] 已终止任务: ${lockKey}`);
 			} catch (err) {
 				console.error(`[退出] 终止任务失败 ${lockKey}:`, err);

@@ -136,13 +136,13 @@ function formatSection(
   return section;
 }
 
-/** 格式化为飞书/钉钉消息（返回 Markdown 分片） */
+/** 格式化为飞书/钉钉/企业微信消息（返回 Markdown 分片） */
 export function formatNewsCard(
   items: NewsItem[],
-  platform: 'feishu' | 'dingtalk',
+  platform: 'feishu' | 'dingtalk' | 'wecom',
   config: FormattingConfig
 ): string[] {
-  const maxSize = platform === 'feishu' ? FEISHU_MAX : DINGTALK_MAX;
+  const maxSize = platform === 'feishu' ? FEISHU_MAX : (platform === 'wecom' ? DINGTALK_MAX : DINGTALK_MAX);
   const estimateSize = platform === 'feishu' ? estimateFeishuCardSize : (s: string) => byteLength(s);
 
   if (items.length === 0) {

@@ -25,6 +25,16 @@ const child = spawn("caffeinate", ["-i", bunBin, "run", startTs], {
   env: process.env,
 });
 
+child.on("error", (err) => {
+  console.error("[KeepAwake] caffeinate 启动失败:", err);
+  console.log("[KeepAwake] 降级使用普通模式启动");
+  spawn(bunBin, ["run", startTs], {
+    cwd: import.meta.dirname,
+    stdio: "inherit",
+    env: process.env,
+  });
+});
+
 child.on("exit", (code) => {
   console.log(`[KeepAwake] 进程退出，代码: ${code}`);
   process.exit(code || 0);

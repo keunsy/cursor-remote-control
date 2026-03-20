@@ -1,6 +1,6 @@
 import type { NewsSource, NewsItem, FetchOptions, SourceConfig } from './types';
 import { recordMetrics } from './monitoring';
-import translate from '@vitalets/google-translate-api';
+import { translate } from '@vitalets/google-translate-api';
 
 /** newsnow API 响应格式 */
 interface NewsnowApiItem {
