@@ -55,13 +55,31 @@ const ROOT = resolve(import.meta.dirname, '..');
 const MODEL_CONFIG_PATH = resolve(ROOT, 'config/model-config.json');
 
 /**
- * 读取全局模型配置（强制要求配置文件存在）
+ * 默认模型配置（当配置文件不存在时使用）
+ */
+const DEFAULT_CONFIG: GlobalModelConfig = {
+	defaultModel: 'auto',
+	blacklistResetCron: '0 0 1 * *',
+	models: [
+		{
+			id: 'auto',
+			name: 'Auto',
+			description: '自动选择',
+			aliases: ['auto'],
+			recommended: true,
+			protected: true,
+		},
+	],
+};
+
+/**
+ * 读取全局模型配置（如果不存在则使用默认配置）
  */
 function loadGlobalConfig(): GlobalModelConfig {
 	if (!existsSync(MODEL_CONFIG_PATH)) {
-		console.error(`[致命错误] 配置文件不存在: ${MODEL_CONFIG_PATH}`);
-		console.error('请参考 config/model-config.example.json 创建配置文件');
-		process.exit(1);
+		console.warn(`[警告] 配置文件不存在: ${MODEL_CONFIG_PATH}`);
+		console.warn('使用默认配置（auto 模型），建议创建配置文件：config/model-config.json');
+		return DEFAULT_CONFIG;
 	}
 
 	try {
