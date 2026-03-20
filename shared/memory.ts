@@ -28,6 +28,8 @@ export interface MemoryConfig {
 	embeddingApiKey: string;
 	embeddingModel: string;
 	embeddingEndpoint: string;
+	temporalDecayHalfLife?: number; // 时间衰减半衰期（天），默认30
+	mmrLambda?: number; // MMR 平衡参数，默认0.5（0=纯多样性，1=纯相关性）
 }
 
 interface ChunkRow {
@@ -76,6 +78,74 @@ function cosineSim(a: number[], b: number[]): number {
 	return dot / (Math.sqrt(magA) * Math.sqrt(magB) + 1e-8);
 }
 
+// 时间衰减：旧记忆权重降低（OpenClaw 风格）
+function applyTemporalDecay(score: number, filePath: string, halfLife = 30): number {
+	// 从路径提取日期（memory/YYYY-MM-DD.md）
+	const dateMatch = filePath.match(/(\d{4}-\d{2}-\d{2})/);
+	if (!dateMatch) return score; // 非日期文件不衰减
+	
+	const fileDate = new Date(dateMatch[1]);
+	const daysSince = (Date.now() - fileDate.getTime()) / (24 * 3600 * 1000);
+	
+	if (daysSince < 0) return score; // 未来日期不衰减
+	
+	// 指数衰减公式：score * e^(-ln(2) * days / halfLife)
+	return score * Math.exp(-Math.LN2 * daysSince / halfLife);
+}
+
+// Jaccard 文本相似度（用于 MMR）
+function textSimilarity(a: string, b: string): number {
+	const wordsA = new Set(a.toLowerCase().split(/\s+/).filter(w => w.length > 1));
+	const wordsB = new Set(b.toLowerCase().split(/\s+/).filter(w => w.length > 1));
+	
+	if (wordsA.size === 0 || wordsB.size === 0) return 0;
+	
+	const intersection = new Set([...wordsA].filter(w => wordsB.has(w)));
+	const union = new Set([...wordsA, ...wordsB]);
+	
+	return intersection.size / union.size;
+}
+
+// MMR 重排序：平衡相关性和多样性（OpenClaw 风格）
+function mmrRerank(candidates: SearchResult[], topK: number, lambda = 0.5): SearchResult[] {
+	if (candidates.length <= topK) return candidates;
+	
+	const selected: SearchResult[] = [];
+	const remaining = [...candidates];
+	
+	while (selected.length < topK && remaining.length > 0) {
+		let bestIdx = 0;
+		let bestScore = -Infinity;
+		
+		for (let i = 0; i < remaining.length; i++) {
+			const candidate = remaining[i];
+			
+			// 相关性得分（已计算好的混合得分）
+			const relevance = candidate.score;
+			
+			// 多样性惩罚：与已选结果的最大相似度
+			let maxSim = 0;
+			for (const sel of selected) {
+				const sim = textSimilarity(candidate.text, sel.text);
+				if (sim > maxSim) maxSim = sim;
+			}
+			
+			// MMR 得分 = lambda * 相关性 - (1-lambda) * 最大相似度
+			const mmrScore = lambda * relevance - (1 - lambda) * maxSim;
+			
+			if (mmrScore > bestScore) {
+				bestScore = mmrScore;
+				bestIdx = i;
+			}
+		}
+		
+		selected.push(remaining[bestIdx]);
+		remaining.splice(bestIdx, 1);
+	}
+	
+	return selected;
+}
+
 function textHash(text: string): string {
 	return Bun.hash(text).toString(16);
 }
@@ -102,6 +172,18 @@ export class MemoryManager {
 	private hasFts5 = false;
 
 	constructor(config: MemoryConfig) {
+		// 验证配置参数
+		if (config.temporalDecayHalfLife !== undefined) {
+			if (config.temporalDecayHalfLife <= 0 || (!isFinite(config.temporalDecayHalfLife) && config.temporalDecayHalfLife !== Infinity)) {
+				throw new Error(`Invalid temporalDecayHalfLife: ${config.temporalDecayHalfLife}. Must be > 0 or Infinity.`);
+			}
+		}
+		if (config.mmrLambda !== undefined) {
+			if (config.mmrLambda < 0 || config.mmrLambda > 1) {
+				throw new Error(`Invalid mmrLambda: ${config.mmrLambda}. Must be between 0 and 1.`);
+			}
+		}
+		
 		this.config = config;
 		this.memoryDir = resolve(config.workspaceDir, ".cursor/memory");
 		this.sessionsDir = resolve(config.workspaceDir, ".cursor/sessions");
@@ -624,7 +706,12 @@ export class MemoryManager {
 				keywordScore = hits / queryTokens.length;
 			}
 
-			const score = queryEmb ? 0.7 * vectorScore + 0.3 * keywordScore : keywordScore;
+			// 混合得分（向量70% + 关键词30%）
+			let score = queryEmb ? 0.7 * vectorScore + 0.3 * keywordScore : keywordScore;
+			
+			// 应用时间衰减（旧记忆权重降低）
+			const halfLife = this.config.temporalDecayHalfLife ?? 30;
+			score = applyTemporalDecay(score, row.path, halfLife);
 
 			return {
 				path: row.path,
@@ -635,10 +722,14 @@ export class MemoryManager {
 			};
 		});
 
-		return scored
+		// 过滤低分 + 排序
+		const candidates = scored
 			.filter((r) => r.score >= minScore)
-			.sort((a, b) => b.score - a.score)
-			.slice(0, topK);
+			.sort((a, b) => b.score - a.score);
+		
+		// MMR 重排序（平衡相关性和多样性）
+		const lambda = this.config.mmrLambda ?? 0.5;
+		return mmrRerank(candidates, topK, lambda);
 	}
 
 	// ── 记忆上下文注入 ─────────────────────────────

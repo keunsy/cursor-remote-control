@@ -27,6 +27,7 @@ import { CommandHandler, type PlatformAdapter, type CommandContext } from "../sh
 import { tryRecordMessagePersistent } from "./feishu/dedup.js";
 import { sendMediaFeishu } from "./feishu/media.js";
 import { humanizeCronInChinese } from 'cron-chinese';
+import { getAvailableModelChain, shouldFallback, isQuotaExhausted, addToBlacklist, getModelChain, DEFAULT_MODEL, type ModelConfig } from "../shared/models-config.js";
 
 const HOME = process.env.HOME;
 if (!HOME) throw new Error("$HOME is not set");
@@ -59,6 +60,8 @@ interface EnvConfig {
 	VOLC_STT_ACCESS_TOKEN: string;
 	VOLC_EMBEDDING_API_KEY: string;
 	VOLC_EMBEDDING_MODEL: string;
+	MEMORY_TEMPORAL_DECAY_HALF_LIFE?: string;
+	MEMORY_MMR_LAMBDA?: string;
 }
 
 interface AgentEnv extends NodeJS.ProcessEnv {
@@ -91,7 +94,7 @@ function loadEnv(): EnvConfig {
 		CURSOR_API_KEY: env.CURSOR_API_KEY || "",
 		FEISHU_APP_ID: env.FEISHU_APP_ID || "",
 		FEISHU_APP_SECRET: env.FEISHU_APP_SECRET || "",
-		CURSOR_MODEL: env.CURSOR_MODEL || "opus-4.6-thinking",
+		CURSOR_MODEL: env.CURSOR_MODEL || DEFAULT_MODEL, // 使用全局默认模型
 		VOLC_STT_APP_ID: env.VOLC_STT_APP_ID || "",
 		VOLC_STT_ACCESS_TOKEN: env.VOLC_STT_ACCESS_TOKEN || "",
 		VOLC_EMBEDDING_API_KEY: env.VOLC_EMBEDDING_API_KEY || "",
@@ -251,6 +254,9 @@ try {
 		embeddingApiKey: config.VOLC_EMBEDDING_API_KEY,
 		embeddingModel: config.VOLC_EMBEDDING_MODEL,
 		embeddingEndpoint: "https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal",
+		// OpenClaw 风格记忆优化配置（可选）
+		temporalDecayHalfLife: config.MEMORY_TEMPORAL_DECAY_HALF_LIFE ? Number(config.MEMORY_TEMPORAL_DECAY_HALF_LIFE) : 30,
+		mmrLambda: config.MEMORY_MMR_LAMBDA ? Number(config.MEMORY_MMR_LAMBDA) : 0.5,
 	});
 	setTimeout(() => {
 		memory!.index().then((n) => {
@@ -1526,6 +1532,87 @@ function buildToolSummary(tools: string[]): string {
 	return lines.join('\n');
 }
 
+// ── 带 Fallback 的 Agent 执行包装器 ──────────────
+async function execAgentWithFallback(
+	lockKey: string,
+	workspace: string,
+	primaryModel: string,
+	prompt: string,
+	opts?: {
+		sessionId?: string;
+		onProgress?: (p: AgentProgress) => void;
+		context?: { platform?: string; chatId?: string };
+	},
+): Promise<{ result: string; sessionId?: string; usedFallback?: boolean; fallbackModel?: string; errorMsg?: string }> {
+	// 获取可用模型链（自动过滤黑名单）
+	const modelChain = getAvailableModelChain(primaryModel);
+	if (modelChain.length === 0) {
+		// 所有模型都在黑名单中
+		throw new Error(`所有模型都已配额用尽（包括 auto 模型）。\n\n请稍后再试，或在每月1号后重新使用。`);
+	}
+
+	// 按顺序尝试模型链
+	let lastError: Error | null = null;
+	const skippedModels: string[] = [];
+	
+	// 检查主模型是否被跳过
+	const fullChain = getModelChain(primaryModel);
+	if (fullChain.length > 0 && fullChain[0] && modelChain[0] && fullChain[0].id !== modelChain[0].id) {
+		skippedModels.push(primaryModel);
+	}
+	
+	for (let i = 0; i < modelChain.length; i++) {
+		const model = modelChain[i];
+		if (!model) continue;
+		
+		const isFallback = i > 0 || skippedModels.length > 0;
+		
+		try {
+			if (isFallback) {
+				console.log(`[Fallback ${i}/${modelChain.length - 1}] 尝试 ${model.id}（原模型：${primaryModel}）`);
+			}
+			
+			const out = await execAgent(lockKey, workspace, model.id, prompt, opts);
+			
+			// 成功执行
+			if (isFallback) {
+				const skippedInfo = skippedModels.length > 0 
+					? `已跳过：${skippedModels.map(m => `\`${m}\``).join(', ')}（配额用尽）\n\n`
+					: '';
+				return { 
+					...out, 
+					usedFallback: true, 
+					fallbackModel: model.id,
+					errorMsg: skippedInfo + (lastError?.message || ''),
+				};
+			}
+			
+			return out;
+		} catch (error) {
+			lastError = error as Error;
+			
+			// 检查是否为配额用尽错误，是则加入黑名单
+			if (isQuotaExhausted(lastError)) {
+				addToBlacklist(model.id);
+			}
+			
+			const shouldRetry = shouldFallback(lastError);
+			
+			if (!shouldRetry || i === modelChain.length - 1) {
+				// 不应重试，或已是最后一个模型
+				console.error(`[失败] 模型 ${model.id} 执行失败，无更多 fallback`, lastError.message);
+				throw error;
+			}
+			
+			// 记录失败，继续尝试下一个
+			console.warn(`[失败] 模型 ${model.id} 失败: ${lastError.message.slice(0, 200)}`);
+		}
+	}
+
+	// 所有模型都失败
+	throw new Error(`所有模型都失败了（尝试了 ${modelChain.map(m => m.id).join(' → ')}）\n最后错误: ${lastError?.message || '未知错误'}`);
+}
+
 // 核心：spawn agent CLI，解析 stream-json，返回结果
 function execAgent(
 	lockKey: string,
@@ -1790,11 +1877,18 @@ async function runAgent(
 			const isNewSession = !existingSessionId;
 
 			try {
-				const { result, sessionId } = await execAgent(lockKey, workspace, primaryModel, prompt, {
-					sessionId: existingSessionId,
-					onProgress: opts?.onProgress,
-					context: { platform: 'feishu', chatId: opts?.context?.chatId },
-				});
+				const { result, sessionId, usedFallback, fallbackModel, errorMsg } = await execAgentWithFallback(
+					lockKey, 
+					workspace, 
+					primaryModel, 
+					prompt, 
+					{
+						sessionId: existingSessionId,
+						onProgress: opts?.onProgress,
+						context: { platform: 'feishu', chatId: opts?.context?.chatId },
+					}
+				);
+				
 				if (sessionId) {
 					setActiveSession(workspace, sessionId);
 					if (isNewSession) {
@@ -1812,18 +1906,35 @@ async function runAgent(
 						}
 					}
 				}
+				
+				// 检查是否使用了 fallback
+				if (usedFallback && fallbackModel) {
+					return {
+						result,
+						quotaWarning: `⚠️ **模型降级**\n\n原模型 \`${primaryModel}\` 失败，已用 \`${fallbackModel}\` 完成。\n\n${errorMsg ? `错误：${errorMsg.slice(0, 100)}` : ''}`,
+					};
+				}
+				
 				return { result };
 			} catch (err) {
 				const e = err instanceof Error ? err : new Error(String(err));
 
+				// 会话过期重试逻辑（保持原有）
 				if (existingSessionId && !isBillingError(e.message)) {
 					console.warn(`[重试] 会话可能过期，重新创建: ${e.message.slice(0, 100)}`);
 					archiveAndResetSession(workspace);
 					try {
-					const { result, sessionId } = await execAgent(lockKey, workspace, primaryModel, prompt, {
-						onProgress: opts?.onProgress,
-						context: { platform: 'feishu', chatId: opts?.context?.chatId },
-					});
+						const { result, sessionId, usedFallback, fallbackModel, errorMsg } = await execAgentWithFallback(
+							lockKey, 
+							workspace, 
+							primaryModel, 
+							prompt, 
+							{
+								onProgress: opts?.onProgress,
+								context: { platform: 'feishu', chatId: opts?.context?.chatId },
+							}
+						);
+						
 						if (sessionId) {
 							setActiveSession(workspace, sessionId);
 							generateSessionTitle(workspace, sessionId, prompt, result);
@@ -1839,45 +1950,19 @@ async function runAgent(
 								}
 							}
 						}
+						
+						// 检查是否使用了 fallback
+						if (usedFallback && fallbackModel) {
+							return {
+								result,
+								quotaWarning: `⚠️ **模型降级**\n\n原模型 \`${primaryModel}\` 失败，已用 \`${fallbackModel}\` 完成。\n\n${errorMsg ? `错误：${errorMsg.slice(0, 100)}` : ''}`,
+							};
+						}
+						
 						return { result };
 					} catch (retryErr) {
 						const re = retryErr instanceof Error ? retryErr : new Error(String(retryErr));
-						if (!isBillingError(re.message)) throw re;
-					}
-				}
-
-				if (isBillingError(e.message)) {
-					console.error(`[降级] ${primaryModel} 欠费: ${e.message.slice(0, 200)}`);
-					const fallbackSessionId = getActiveSessionId(workspace);
-					try {
-					const { result, sessionId: newSid } = await execAgent(lockKey, workspace, "auto", prompt, {
-						sessionId: fallbackSessionId,
-						onProgress: opts?.onProgress,
-						context: { platform: 'feishu', chatId: opts?.context?.chatId },
-					});
-						if (newSid) {
-							setActiveSession(workspace, newSid);
-							if (!fallbackSessionId) {
-								generateSessionTitle(workspace, newSid, prompt, result);
-							}
-							// Bug 修复: 降级时也需要更新 lockKey
-							const newLockKey = `session:${newSid}`;
-							if (lockKey !== newLockKey) {
-								const agent = activeAgents.get(lockKey);
-								if (agent) {
-									activeAgents.delete(lockKey);
-									activeAgents.set(newLockKey, agent);
-									lockKey = newLockKey;
-									console.log(`[lockKey] 降级后更新: → ${newLockKey.slice(0, 30)}...`);
-								}
-							}
-						}
-						return {
-							result,
-							quotaWarning: `⚠️ **模型降级通知**\n\n${primaryModel} 欠费，本次已用 auto 完成。\n\n> ${e.message.slice(0, 100)}`,
-						};
-					} catch {
-						throw e;
+						throw re;
 					}
 				}
 

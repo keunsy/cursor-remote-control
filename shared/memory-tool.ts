@@ -84,6 +84,9 @@ const mm = new MemoryManager({
 	embeddingApiKey: apiKey,
 	embeddingModel: model,
 	embeddingEndpoint: "https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal",
+	// OpenClaw 风格记忆优化配置（可选）
+	temporalDecayHalfLife: env.MEMORY_TEMPORAL_DECAY_HALF_LIFE ? Number(env.MEMORY_TEMPORAL_DECAY_HALF_LIFE) : 30,
+	mmrLambda: env.MEMORY_MMR_LAMBDA ? Number(env.MEMORY_MMR_LAMBDA) : 0.5,
 });
 
 // ── CLI 命令处理 ──────────────────────────────────

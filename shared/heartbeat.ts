@@ -21,6 +21,11 @@ interface HeartbeatState {
 
 const DEFAULT_PROMPT = `[心跳检查] 读取 .cursor/HEARTBEAT.md（如果存在），严格按清单执行检查。
 不要凭空推断或重复旧任务。检查 .cursor/memory/ 获取近期上下文，需要时做后台维护。
+
+**重要**: 检查最近会话，将重要信息写入记忆系统（防止上下文溢出丢失）：
+- 用户偏好和决策 → .cursor/MEMORY.md
+- 今日上下文和进展 → .cursor/memory/YYYY-MM-DD.md
+
 如果清单已过时，主动更新 .cursor/HEARTBEAT.md。如果无需关注，只回复 HEARTBEAT_OK。`;
 
 const HEARTBEAT_OK_RE = /heartbeat_ok/im;

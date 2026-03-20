@@ -29,6 +29,7 @@ import {
 	loadSessionsFromDisk, saveSessions, sessionsStore,
 	getCurrentProject, setCurrentProject,
 } from './wecom-helper.js';
+import { getAvailableModelChain, shouldFallback, isQuotaExhausted, addToBlacklist, getModelChain, DEFAULT_MODEL, type ModelConfig } from '../shared/models-config.js';
 
 const HOME = process.env.HOME!;
 const ROOT = resolve(import.meta.dirname, '..');
@@ -93,6 +94,8 @@ interface EnvConfig {
 	VOLC_STT_ACCESS_TOKEN: string;
 	VOLC_EMBEDDING_API_KEY: string;
 	VOLC_EMBEDDING_MODEL: string;
+	MEMORY_TEMPORAL_DECAY_HALF_LIFE?: string;
+	MEMORY_MMR_LAMBDA?: string;
 }
 
 interface AgentEnv extends NodeJS.ProcessEnv {
@@ -124,7 +127,7 @@ function loadEnv(): EnvConfig {
 		CURSOR_API_KEY: env.CURSOR_API_KEY || '',
 		WECOM_BOT_ID: env.WECOM_BOT_ID || '',
 		WECOM_BOT_SECRET: env.WECOM_BOT_SECRET || '',
-		CURSOR_MODEL: env.CURSOR_MODEL || 'auto',
+		CURSOR_MODEL: env.CURSOR_MODEL || DEFAULT_MODEL, // 使用全局默认模型
 		VOLC_STT_APP_ID: env.VOLC_STT_APP_ID || '',
 		VOLC_STT_ACCESS_TOKEN: env.VOLC_STT_ACCESS_TOKEN || '',
 		VOLC_EMBEDDING_API_KEY: env.VOLC_EMBEDDING_API_KEY || '',
@@ -187,6 +190,9 @@ try {
 		embeddingApiKey: config.VOLC_EMBEDDING_API_KEY,
 		embeddingModel: config.VOLC_EMBEDDING_MODEL,
 		embeddingEndpoint: "https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal",
+		// OpenClaw 风格记忆优化配置（可选）
+		temporalDecayHalfLife: config.MEMORY_TEMPORAL_DECAY_HALF_LIFE ? Number(config.MEMORY_TEMPORAL_DECAY_HALF_LIFE) : 30,
+		mmrLambda: config.MEMORY_MMR_LAMBDA ? Number(config.MEMORY_MMR_LAMBDA) : 0.5,
 	});
 	setTimeout(() => {
 		memory!.index().then((n) => {
@@ -418,28 +424,70 @@ async function runAgent(
 		});
 	}
 
-	try {
-		const out = await runWithModel(primaryModel);
-		notifySession(out);
-		return { result: out.result };
-	} catch (error) {
-		if (isQuotaError(error as Error)) {
-			console.log(`[降级] ${primaryModel} 余额不足，切换到 auto`);
-			try {
-				const out = await runWithModel('auto');
-				notifySession(out);
-				return {
-					result: out.result,
-					quotaWarning: `⚠️ **模型降级**\n\n${primaryModel} 余额不足，已用 auto 完成。`,
-				};
-			} catch (retryError) {
-				throw new Error(
-					`原模型余额不足且降级失败: ${retryError instanceof Error ? retryError.message : String(retryError)}`
-				);
-			}
-		}
-		throw error;
+	// 获取可用模型链（自动过滤黑名单）
+	const modelChain = getAvailableModelChain(primaryModel);
+	if (modelChain.length === 0) {
+		// 所有模型都在黑名单中
+		throw new Error(`所有模型都已配额用尽（包括 auto 模型）。\n\n请稍后再试，或在每月1号后重新使用。`);
 	}
+
+	// 按顺序尝试模型链
+	let lastError: Error | null = null;
+	const skippedModels: string[] = [];
+	
+	// 检查主模型是否被跳过
+	const fullChain = getModelChain(primaryModel);
+	if (fullChain.length > 0 && fullChain[0] && modelChain[0] && fullChain[0].id !== modelChain[0].id) {
+		skippedModels.push(primaryModel);
+	}
+	
+	for (let i = 0; i < modelChain.length; i++) {
+		const model = modelChain[i];
+		if (!model) continue;
+		
+		const isFallback = i > 0 || skippedModels.length > 0;
+		
+		try {
+			if (isFallback) {
+				console.log(`[Fallback ${i}/${modelChain.length - 1}] 尝试 ${model.id}（原模型：${primaryModel}）`);
+			}
+			
+			const out = await runWithModel(model.id);
+			notifySession(out);
+			
+			// 成功执行，检查是否使用了 fallback
+			if (isFallback) {
+				const skippedInfo = skippedModels.length > 0 
+					? `已跳过：${skippedModels.map(m => `\`${m}\``).join(', ')}（配额用尽）\n\n`
+					: '';
+				const fallbackMsg = `⚠️ **模型降级**\n\n${skippedInfo}原模型 \`${primaryModel}\` 失败，已用 \`${model.id}\` 完成。`;
+				return { result: out.result, quotaWarning: fallbackMsg };
+			}
+			
+			return { result: out.result };
+		} catch (error) {
+			lastError = error as Error;
+			
+			// 检查是否为配额用尽错误，是则加入黑名单
+			if (isQuotaExhausted(lastError)) {
+				addToBlacklist(model.id);
+			}
+			
+			const shouldRetry = shouldFallback(lastError);
+			
+			if (!shouldRetry || i === modelChain.length - 1) {
+				// 不应重试，或已是最后一个模型
+				console.error(`[失败] 模型 ${model.id} 执行失败，无更多 fallback`, lastError.message);
+				throw error;
+			}
+			
+			// 记录失败，继续尝试下一个
+			console.warn(`[失败] 模型 ${model.id} 失败: ${lastError.message.slice(0, 200)}`);
+		}
+	}
+
+	// 所有模型都失败
+	throw new Error(`所有模型都失败了（尝试了 ${modelChain.map(m => m.id).join(' → ')}）\n最后错误: ${lastError?.message || '未知错误'}`);
 }
 
 // ── 定时任务文件位置修正 ─────────────────────────
