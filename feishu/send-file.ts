@@ -31,7 +31,8 @@ function parseEnv() {
 async function main() {
   const args = process.argv.slice(2);
   
-  if (args.length < 1) {
+  const firstArg = args[0];
+  if (args.length < 1 || firstArg === undefined) {
     console.error(`
 使用方式：
   bun run send-file.ts <文件路径> [接收人ID]
@@ -49,7 +50,7 @@ async function main() {
     process.exit(1);
   }
   
-  const filePath = resolve(args[0]);
+  const filePath = resolve(firstArg);
   const receiverId = args[1]; // 可选：接收人的 open_id 或 chat_id
   
   // 检查文件是否存在

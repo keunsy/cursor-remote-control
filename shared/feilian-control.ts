@@ -37,6 +37,7 @@ export class FeilianController {
       for (const match of allMatches) {
         const interfaceName = `utun${match[1]}`;
         const interfaceContent = match[2];
+        if (interfaceContent === undefined) continue;
 
         // 提取 IPv4 地址
         const ipMatch = interfaceContent.match(/inet\s+(\d+\.\d+\.\d+\.\d+)/);

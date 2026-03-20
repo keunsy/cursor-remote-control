@@ -25,6 +25,8 @@ import { HeartbeatRunner } from '../shared/heartbeat.js';
 import { FeilianController, type OperationResult } from '../shared/feilian-control.js';
 import { humanizeCronInChinese } from 'cron-chinese';
 import { CommandHandler, type PlatformAdapter, type CommandContext } from '../shared/command-handler.js';
+import { AgentExecutor } from '../shared/agent-executor.js';
+import { ReconnectManager } from '../shared/reconnect-manager.js';
 import { getAvailableModelChain, getModelChain, shouldFallback, isQuotaExhausted, addToBlacklist, DEFAULT_MODEL, type ModelConfig } from '../shared/models-config.js';
 import { uploadFileDingtalk, sendFileDingtalk } from './send-file-dingtalk.js';
 
@@ -118,12 +120,15 @@ function loadEnv(): EnvConfig {
 	for (const line of raw.split('\n')) {
 		const trimmed = line.trim();
 		if (!trimmed || trimmed.startsWith('#')) continue;
-		const [key, ...vals] = trimmed.split('=');
-		let val = vals.join('=').trim();
+		const eqIdx = trimmed.indexOf('=');
+		if (eqIdx < 0) continue;
+		const key = trimmed.slice(0, eqIdx).trim();
+		if (!key) continue;
+		let val = trimmed.slice(eqIdx + 1).trim();
 		if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
 			val = val.slice(1, -1);
 		}
-		env[key.trim()] = val;
+		env[key] = val;
 	}
 	return {
 		CURSOR_API_KEY: env.CURSOR_API_KEY || '',
@@ -132,6 +137,8 @@ function loadEnv(): EnvConfig {
 		CURSOR_MODEL: env.CURSOR_MODEL || DEFAULT_MODEL, // 使用全局默认模型
 		VOLC_STT_APP_ID: env.VOLC_STT_APP_ID || '',
 		VOLC_STT_ACCESS_TOKEN: env.VOLC_STT_ACCESS_TOKEN || '',
+		VOLC_EMBEDDING_API_KEY: env.VOLC_EMBEDDING_API_KEY || '',
+		VOLC_EMBEDDING_MODEL: env.VOLC_EMBEDDING_MODEL || 'doubao-embedding-vision-250615',
 	};
 }
 
@@ -616,21 +623,21 @@ const busySessions = new Set<string>();
 const activeAgents = new Map<string, { pid: number | undefined; kill: () => void; workspace: string }>();
 const childPids = new Set<number>();
 
+// 统一 Agent 执行器（超时保护、并发限制、僵尸清理）
+const agentExecutor = new AgentExecutor({
+	timeout: 60 * 60 * 1000, // 60 分钟（统一超时）
+	maxConcurrent: 10, // 提高并发限制
+});
+
 // 优雅退出
 process.on('SIGINT', async () => {
 	console.log('\n[退出] 正在清理资源...');
 
-	// 终止所有运行中的 Agent 进程
-	if (activeAgents.size > 0) {
-		console.log(`[退出] 正在终止 ${activeAgents.size} 个运行中的任务...`);
-		for (const [lockKey, agent] of activeAgents.entries()) {
-			try {
-				agent.kill();
-				console.log(`[退出] 已终止任务: ${lockKey}`);
-			} catch (err) {
-				console.error(`[退出] 终止任务失败 ${lockKey}:`, err);
-			}
-		}
+	// 终止所有运行中的 Agent 进程（使用统一执行器）
+	const active = agentExecutor.getActiveAgents();
+	if (active.length > 0) {
+		console.log(`[退出] 正在终止 ${active.length} 个运行中的任务...`);
+		agentExecutor.killAll();
 		activeAgents.clear();
 		busySessions.clear();
 	}
@@ -727,9 +734,9 @@ function buildToolSummary(tools: string[]): string {
 	for (const tool of tools) {
 		const match = tool.match(/^([🔧📖✏️⚡🔍📂🔎🌐🗑️📓🔌🤖]+)\s+(.+)/);
 		if (!match) continue;
-		
 		const emoji = match[1];
 		const detail = match[2];
+		if (emoji === undefined || detail === undefined) continue;
 		
 		if (!groups.has(emoji)) {
 			groups.set(emoji, { emoji, items: [] });
@@ -767,7 +774,7 @@ async function runAgent(
 		onSessionId?: (sessionId: string) => void;
 	}
 ): Promise<RunAgentResult> {
-	const primaryModel = config.CURSOR_MODEL || 'opus-4.6-thinking';
+	const primaryModel = config.CURSOR_MODEL || DEFAULT_MODEL;
 
 	// 安全调用 session ID 回调，失败时不中断主流程
 	const notifySession = (out: { sessionId?: string }) => {
@@ -781,123 +788,35 @@ async function runAgent(
 	};
 
 	async function runWithModel(model: string): Promise<{ result: string; sessionId?: string }> {
-		return new Promise((res, reject) => {
-			const args = [
-				'-p', '--force', '--trust', '--approve-mcps',
-				'--workspace', workspace,
-				'--model', model,
-				'--output-format', 'stream-json',
-				'--stream-partial-output',
-			];
-			if (agentId) args.push('--resume', agentId);
-			args.push('--', message);
-
-			const env: AgentEnv = config.CURSOR_API_KEY
-				? { ...process.env, CURSOR_API_KEY: config.CURSOR_API_KEY }
-				: { ...process.env };
-			if (context?.platform) env.CURSOR_PLATFORM = context.platform;
-			if (context?.webhook) env.CURSOR_WEBHOOK = context.webhook;
-			env.CURSOR_CRON_FILE = resolve(ROOT, 'cron-jobs-dingtalk.json');
-
 		console.log(`[CLI] 启动 agent 进程，model=${model}, resume=${!!agentId}`);
-		const proc = spawn('agent', args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
-
-		let lockKey = getLockKey(workspace);
-		if (proc.pid) {
-			childPids.add(proc.pid);
-			activeAgents.set(lockKey, { 
-				pid: proc.pid, 
-				kill: () => proc.kill('SIGTERM'),
-				workspace, // 用于 /stop 命令按项目名查找
+		
+		try {
+			const result = await agentExecutor.execute({
+				workspace,
+				model,
+				prompt: message,
+				sessionId: agentId,
+				platform: context?.platform as 'dingtalk' | undefined,
+				webhook: context?.webhook,
+				apiKey: config.CURSOR_API_KEY,
 			});
+			
+			// 构建工具调用摘要（添加到回复开头）
+			let finalOutput = result.result;
+			if (result.toolSummary && result.toolSummary.length > 0) {
+				const summary = buildToolSummary(result.toolSummary);
+				if (summary) {
+					finalOutput = summary + '\n\n---\n\n' + result.result;
+				}
+			}
+			
+			return {
+				result: finalOutput,
+				sessionId: result.sessionId,
+			};
+		} catch (err) {
+			throw err;
 		}
-
-			let stderr = '';
-			let resultText = '';
-			let sessionId: string | undefined = agentId;
-			let assistantBuf = '';
-			let lastSegment = '';
-			let toolSummary: string[] = [];
-			let lineBuf = '';
-			let done = false;
-
-		/** 清理进程资源（activeAgents、childPids），busySessions 由外层 finally 清理 */
-		function cleanup() {
-			done = true;
-			activeAgents.delete(lockKey);
-			if (proc.pid) childPids.delete(proc.pid);
-		}
-
-			proc.stdout.on('data', (chunk) => {
-				lineBuf += chunk.toString();
-				const lines = lineBuf.split('\n');
-				lineBuf = lines.pop() || '';
-				for (const line of lines) {
-					if (!line.trim()) continue;
-					try {
-						const ev = JSON.parse(line);
-						if (ev.session_id && !sessionId) {
-							sessionId = ev.session_id;
-						}
-
-						if (ev.type === 'result' && ev.result != null) {
-							resultText = ev.result;
-						}
-						if (ev.type === 'assistant' && ev.message?.content) {
-							for (const c of ev.message.content) {
-								if (c.type === 'text' && c.text) {
-									assistantBuf += c.text;
-									lastSegment += c.text;
-								}
-							}
-						}
-						if (ev.type === 'tool_call' && ev.tool_call) {
-							if (ev.subtype === 'started') {
-								const desc = describeToolCall(ev.tool_call);
-								toolSummary.push(desc);
-							}
-						}
-					} catch (_) {}
-				}
-			});
-
-			proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
-
-			proc.on('close', (code) => {
-				if (done) return;
-				cleanup();
-				
-				if (lineBuf.trim()) {
-					try {
-						const ev = JSON.parse(lineBuf);
-						if (ev.session_id && !sessionId) sessionId = ev.session_id;
-						if (ev.type === 'result' && ev.result != null) resultText = ev.result;
-					} catch (_) {}
-				}
-
-				const rawResultText = typeof resultText === 'string' ? resultText.trim() : '';
-				const finalSegment = lastSegment.trim();
-				const rawOutput = rawResultText || finalSegment || assistantBuf.trim() || stderr.trim() || '(无输出)';
-
-				// 构建工具调用摘要（添加到回复开头）
-				let finalOutput = rawOutput;
-				if (toolSummary.length > 0) {
-					const summary = buildToolSummary(toolSummary);
-					if (summary) {
-						finalOutput = summary + '\n\n---\n\n' + rawOutput;
-					}
-				}
-
-				console.log(`[runAgent完成] rawResultText.length=${rawResultText.length} finalSegment.length=${finalSegment.length} assistantBuf.length=${assistantBuf.trim().length} tools=${toolSummary.length}`);
-
-				if (code === 0) res({ result: finalOutput, sessionId });
-				else reject(new Error(`Agent exited with code ${code}\n${stderr}`));
-			});
-
-			proc.on('error', (err) => {
-				if (!done) { cleanup(); reject(err); }
-			});
-		});
 	}
 
 	// 获取可用模型链（自动过滤黑名单）
@@ -911,10 +830,12 @@ async function runAgent(
 	let lastError: Error | null = null;
 	const skippedModels: string[] = [];
 	
-	// 检查主模型是否被跳过
+	// 检查主模型是否被跳过（黑名单）
 	const fullChain = getModelChain(primaryModel);
-	if (fullChain.length > 0 && fullChain[0] && modelChain[0] && fullChain[0].id !== modelChain[0].id) {
+	const wasBlacklisted = fullChain.length > 0 && fullChain[0] && modelChain[0] && fullChain[0].id !== modelChain[0].id;
+	if (wasBlacklisted) {
 		skippedModels.push(primaryModel);
+		console.log(`[智能跳过] ${primaryModel} 在黑名单中，静默切换到 ${modelChain[0]?.id}`);
 	}
 	
 	for (let i = 0; i < modelChain.length; i++) {
@@ -924,7 +845,7 @@ async function runAgent(
 		const isFallback = i > 0 || skippedModels.length > 0;
 		
 		try {
-			if (isFallback) {
+			if (isFallback && !wasBlacklisted) {
 				console.log(`[Fallback ${i}/${modelChain.length - 1}] 尝试 ${model.id}（原模型：${primaryModel}）`);
 			}
 			
@@ -933,10 +854,19 @@ async function runAgent(
 			
 			// 成功执行，检查是否使用了 fallback
 			if (isFallback) {
-				const skippedInfo = skippedModels.length > 0 
-					? `已跳过：${skippedModels.map(m => `\`${m}\``).join(', ')}（配额用尽）\n\n`
-					: '';
-				const fallbackMsg = `⚠️ **模型降级**\n\n${skippedInfo}原模型 \`${primaryModel}\` 失败，已用 \`${model.id}\` 完成。`;
+				// 如果是因为黑名单跳过的，静默切换，不提示
+				if (wasBlacklisted && i === 0) {
+					return { result: out.result };
+				}
+				
+				// 如果是运行中失败导致的 fallback，显示提示
+				let reason = '';
+				if (skippedModels.length > 0 && !wasBlacklisted) {
+					reason = `\`${skippedModels.join('`, `')}\` 配额用尽`;
+				} else {
+					reason = `\`${primaryModel}\` 失败`;
+				}
+				const fallbackMsg = `⚠️ **模型降级**\n\n${reason}，已改用 \`${model.id}\` 完成。`;
 				return { result: out.result, quotaWarning: fallbackMsg };
 			}
 			
@@ -987,31 +917,41 @@ function detectRouteIntent(text: string): RouteIntent {
 	const raw = (text || '').trim().replace(/\s+/g, ' ');
 	const { projects } = projectsConfig;
 	const projectNames = Object.keys(projects);
-	const projectPattern = projectNames.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+	const sortedNames = projectNames.sort((a, b) => b.length - a.length);
+	const projectPattern = sortedNames.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
 	
 	// 0. 路径快捷语法：#/path 或 @/path
 	const pathSymbolMatch = raw.match(/^[#@]((?:~?\/|~).+?)\s+(.+)$/);
 	if (pathSymbolMatch) {
 		const rawPath = pathSymbolMatch[1];
+		const rest = pathSymbolMatch[2];
+		if (rawPath === undefined || rest === undefined) {
+			return { type: 'none', cleanedText: text };
+		}
 		const absolutePath = rawPath.startsWith('~') 
 			? rawPath.replace(/^~/, process.env.HOME || '~')
 			: rawPath;
 		return {
 			type: 'temp',
 			path: absolutePath,
-			cleanedText: pathSymbolMatch[2].trim(),
+			cleanedText: rest.trim(),
 		};
 	}
 	
 	// 1. 简化符号：#项目名 或 @项目名
 	const symbolMatch = raw.match(new RegExp(`^[#@](${projectPattern})\\s+(.+)`, 'i'));
 	if (symbolMatch) {
-		const project = symbolMatch[1].toLowerCase();
+		const symProj = symbolMatch[1];
+		const symRest = symbolMatch[2];
+		if (symProj === undefined || symRest === undefined) {
+			return { type: 'none', cleanedText: text };
+		}
+		const project = symProj.toLowerCase();
 		if (projects[project]) {
 			return {
 				type: 'temp',
 				project,
-				cleanedText: symbolMatch[2].trim(),
+				cleanedText: symRest.trim(),
 			};
 		}
 	}
@@ -1019,9 +959,13 @@ function detectRouteIntent(text: string): RouteIntent {
 	// 2a. 切换到任意路径（必须以 / 或 ~ 开头，避免误匹配 "切换到 remote"）
 	const pathSwitchMatch = raw.match(/^(?:切换到|切到|切换|进入|打开)(?:路径)?\s+([~\/].+?)\s*$/i);
 	if (pathSwitchMatch) {
-		const absolutePath = pathSwitchMatch[1].startsWith('~')
-			? pathSwitchMatch[1].replace(/^~/, process.env.HOME || '~')
-			: pathSwitchMatch[1];
+		const p1 = pathSwitchMatch[1];
+		if (p1 === undefined) {
+			return { type: 'none', cleanedText: text };
+		}
+		const absolutePath = p1.startsWith('~')
+			? p1.replace(/^~/, process.env.HOME || '~')
+			: p1;
 		return {
 			type: 'switch',
 			path: absolutePath,
@@ -1037,7 +981,9 @@ function detectRouteIntent(text: string): RouteIntent {
 	for (const pattern of switchPatterns) {
 		const match = raw.match(pattern);
 		if (match) {
-			const project = match[1].toLowerCase();
+			const m1 = match[1];
+			if (m1 === undefined) continue;
+			const project = m1.toLowerCase();
 			if (projects[project]) {
 				return { type: 'switch', project, cleanedText: '' };
 			}
@@ -1053,7 +999,9 @@ function detectRouteIntent(text: string): RouteIntent {
 	for (const pattern of tempPatterns) {
 		const match = raw.match(pattern);
 		if (match) {
-			const project = match[1].toLowerCase();
+			const m1 = match[1];
+			if (m1 === undefined) continue;
+			const project = m1.toLowerCase();
 			if (projects[project]) {
 				// 不移除项目名，保留完整语境
 				return { type: 'temp', project, cleanedText: text };
@@ -1074,13 +1022,25 @@ function resolveWorkspace(
 	
 	// 1. 传统路由：/项目名 消息
 	const slashMatch = text.match(/^\/(\w+)\s+(.+)$/s);
-	if (slashMatch && projects[slashMatch[1].toLowerCase()]) {
+	const slashProj = slashMatch?.[1];
+	const slashMsg = slashMatch?.[2];
+	if (slashProj && slashMsg && projects[slashProj.toLowerCase()]) {
+		const key = slashProj.toLowerCase();
+		const projEntry = projects[key];
+		if (!projEntry) {
+			return {
+				workspace: projects[default_project]?.path || ROOT,
+				message: text.trim(),
+				label: default_project,
+				intent: intent || { type: 'none', cleanedText: text.trim() },
+			};
+		}
 		return {
-			workspace: projects[slashMatch[1].toLowerCase()].path,
-			message: slashMatch[2].trim(),
-			label: slashMatch[1].toLowerCase(),
+			workspace: projEntry.path,
+			message: slashMsg.trim(),
+			label: key,
 			routeChanged: true,
-			intent: intent || { type: 'none', cleanedText: slashMatch[2].trim() },
+			intent: intent || { type: 'none', cleanedText: slashMsg.trim() },
 		};
 	}
 	
@@ -1101,8 +1061,17 @@ function resolveWorkspace(
 	
 	// 2b. 项目名路由
 	if (routeIntent.type !== 'none' && routeIntent.project) {
+		const rp = projects[routeIntent.project];
+		if (!rp) {
+			return {
+				workspace: projects[default_project]?.path || ROOT,
+				message: text.trim(),
+				label: default_project,
+				intent: routeIntent,
+			};
+		}
 		return {
-			workspace: projects[routeIntent.project].path,
+			workspace: rp.path,
 			message: routeIntent.cleanedText || text,
 			label: routeIntent.project,
 			routeChanged: routeIntent.type === 'switch',
@@ -1220,7 +1189,7 @@ function isDuplicate(messageId: string): boolean {
 	// 防止内存泄漏：超过上限时删除最旧的
 	if (seenMessages.size > MAX_SEEN_SIZE) {
 		const oldest = Array.from(seenMessages.entries()).sort((a, b) => a[1] - b[1])[0];
-		seenMessages.delete(oldest[0]);
+		if (oldest) seenMessages.delete(oldest[0]);
 	}
 
 	return false;
@@ -1380,6 +1349,7 @@ async function handleMessage(msg: any) {
 		getActiveSessionId: (ws: string) => getActiveSessionId(ws) || null,
 		switchToSession,
 		rootDir: ROOT,
+		agentExecutor, // 统一 Agent 执行器
 	};
 	
 	// 创建命令处理器
@@ -1442,7 +1412,10 @@ async function handleMessage(msg: any) {
 		// 检测相对时间新闻推送（X分钟后推送热点、X小时后推送新闻）
 		const relativeNewsMatch = text.match(/(\d+)\s*(分钟|小时)(?:[后以]后|后)\s*(?:推送|发送)?\s*(?:前|top)?\s*(\d+)?\s*条?\s*(?:今日)?\s*(热点|新闻|热榜)/i);
 		if (relativeNewsMatch) {
-			const [, numStr, unit, topNStr, _] = relativeNewsMatch;
+			const numStr = relativeNewsMatch[1];
+			const unit = relativeNewsMatch[2];
+			const topNStr = relativeNewsMatch[3];
+			if (numStr && unit) {
 			const num = parseInt(numStr, 10);
 			const topN = topNStr ? Math.min(50, Math.max(1, parseInt(topNStr, 10))) : 15;
 			const minutes = unit === '小时' ? num * 60 : num;
@@ -1467,17 +1440,21 @@ async function handleMessage(msg: any) {
 				'green'
 			);
 			return;
+			}
 		}
 
 		// 检测新闻推送定时请求（每天/每日 早上/上午 9点 推送热点、明天上午10点推送新闻）
 		const newsScheduleMatch = text.match(/(每天|每日|明天)\s*(早上|上午|下午)?\s*([0-9一二三四五六七八九十]+)\s*[点时]?\s*(?:给我)?\s*(?:推送|发送)?\s*(?:下|今日)?\s*(热点|新闻|热榜)/i);
 		if (newsScheduleMatch) {
-			const [, when, ap, hourStr] = newsScheduleMatch;
+			const when = newsScheduleMatch[1];
+			const ap = newsScheduleMatch[2];
+			const hourStr = newsScheduleMatch[3];
+			if (when && hourStr) {
 			const numMap: Record<string, number> = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
 			const toNum = (s: string) => (numMap[s] ?? parseInt(s, 10)) || 9;
 			let topN = 15;
 			const topMatch = text.match(/(?:推送|前)\s*(\d+)\s*条/i);
-			if (topMatch) topN = Math.min(50, Math.max(1, parseInt(topMatch[1], 10)));
+			if (topMatch?.[1]) topN = Math.min(50, Math.max(1, parseInt(topMatch[1], 10)));
 			let schedule: { kind: 'cron'; expr: string; tz?: string } | { kind: 'at'; at: string };
 			let timeDesc: string;
 			if (when === '每天' || when === '每日') {
@@ -1511,36 +1488,45 @@ async function handleMessage(msg: any) {
 				'green'
 			);
 			return;
+			}
 		}
 		
 		// 检测「每个工作日 HH点/HH:MM/HH点MM/HH点 MM分 提醒」请求，服务器端直接创建
 		const weekdayScheduleMatch = text.match(/每个工作日\s*(\d{1,2})(?:[.:：](\d{1,2})|点\s*(\d{1,2})\s*分?|点)?\s*(?:提醒|通知)?(?:我)?\s*(.+)$/i);
 		if (weekdayScheduleMatch) {
-			const [, hourStr, minStr1, minStr2, taskMessage] = weekdayScheduleMatch;
-			const hour = Math.min(23, Math.max(0, parseInt(hourStr!, 10) || 14));
+			const hourStr = weekdayScheduleMatch[1];
+			const minStr1 = weekdayScheduleMatch[2];
+			const minStr2 = weekdayScheduleMatch[3];
+			const taskMessage = weekdayScheduleMatch[4];
+			if (hourStr && taskMessage !== undefined) {
+			const hour = Math.min(23, Math.max(0, parseInt(hourStr, 10) || 14));
 			// 分钟可能来自 `:45` (minStr1) 或 `点45` (minStr2)
 			const minStr = minStr1 || minStr2;
 			const minute = minStr != null && minStr !== '' ? Math.min(59, Math.max(0, parseInt(minStr, 10) || 0)) : 0;
-			const task = await scheduler.add({
+			await scheduler.add({
 				name: '工作日提醒',
 				enabled: true,
 				deleteAfterRun: false,
 				schedule: { kind: 'cron', expr: `${minute} ${hour} * * 1-5`, tz: 'Asia/Shanghai' },
-				message: taskMessage!.trim(),
+				message: taskMessage.trim(),
 				platform: 'dingtalk',
 				webhook: sessionWebhook,
 			});
 			const timeDesc = `${hour}:${String(minute).padStart(2, '0')}`;
-			await sendMarkdown(sessionWebhook, `✅ 已设置好，**每个工作日 ${timeDesc}** 通过钉钉提醒你：\n\n${taskMessage!.trim()}\n\n发送 \`/cron\` 可查看所有任务。`, '⏰ 定时任务已创建');
+			await sendMarkdown(sessionWebhook, `✅ 已设置好，**每个工作日 ${timeDesc}** 通过钉钉提醒你：\n\n${taskMessage.trim()}\n\n发送 \`/cron\` 可查看所有任务。`, '⏰ 定时任务已创建');
 			console.log(`[任务] 服务器端创建: 每个工作日 ${timeDesc} 提醒`);
 			return;
+			}
 		}
 
 		// 检测简单定时任务请求，服务器端直接创建（不依赖 Agent）
 		const simpleScheduleMatch = text.match(/^(\d+)(分钟|小时)后\s*(?:提醒|通知)?(?:我)?\s*(.+)$/i);
 		if (simpleScheduleMatch) {
-			const [, num, unit, taskMessage] = simpleScheduleMatch;
-			const minutes = unit === '小时' ? parseInt(num) * 60 : parseInt(num);
+			const num = simpleScheduleMatch[1];
+			const unit = simpleScheduleMatch[2];
+			const taskMessage = simpleScheduleMatch[3];
+			if (num && unit && taskMessage !== undefined) {
+			const minutes = unit === '小时' ? parseInt(num, 10) * 60 : parseInt(num, 10);
 			const runAtMs = Date.now() + minutes * 60 * 1000;
 			const runAt = new Date(runAtMs);
 			
@@ -1554,7 +1540,10 @@ async function handleMessage(msg: any) {
 			if (isNewsRequest) {
 				// 提取条数（默认 15 条）
 				const topNMatch = taskMessage.match(/(\d+)\s*条/);
-				const topN = topNMatch ? Math.min(50, Math.max(1, parseInt(topNMatch[1], 10))) : 15;
+				const topN =
+					topNMatch?.[1] != null
+						? Math.min(50, Math.max(1, parseInt(topNMatch[1], 10)))
+						: 15;
 				finalMessage = JSON.stringify({ type: 'fetch-news', options: { topN } });
 				taskName = '热点新闻推送';
 				console.log(`[定时] → 创建新闻推送任务，topN=${topN}`);
@@ -1579,6 +1568,7 @@ async function handleMessage(msg: any) {
 			await sendMarkdown(sessionWebhook, `✅ 已设置好，大约在 **${timeStr}** 通过钉钉提醒你：\n\n${content}\n\n发送 \`/cron\` 可查看所有任务。`, '⏰ 定时任务已创建');
 			console.log(`[任务] 服务器端创建: ${task.name} @ ${timeStr}`);
 			return;
+			}
 		}
 		
 		// 解析项目路由（传入 intent 避免重复检测）
@@ -1720,10 +1710,12 @@ async function handleMessage(msg: any) {
 				const chunks = splitMarkdown(cleanOutput, 4000);
 				const completionColor = quotaWarning ? 'orange' : 'green';
 				for (let i = 0; i < chunks.length; i++) {
+					const piece = chunks[i];
+					if (piece === undefined) continue;
 					const chunkTitle = chunks.length > 1
 						? (i === chunks.length - 1 ? title : `Cursor AI (${i + 1}/${chunks.length})`)
 						: title;
-					await sendMarkdown(sessionWebhook, chunks[i], chunkTitle, completionColor);
+					await sendMarkdown(sessionWebhook, piece, chunkTitle, completionColor);
 					if (i < chunks.length - 1) {
 						await new Promise(resolve => setTimeout(resolve, 500));
 					}
@@ -1738,6 +1730,13 @@ async function handleMessage(msg: any) {
 		
 	} catch (error) {
 		const msg = error instanceof Error ? error.message : String(error);
+		
+		// 手动终止的任务不需要发送错误消息（用户已经收到"已终止"的回复）
+		if (msg === 'MANUALLY_STOPPED') {
+			console.log(`[手动终止] workspace=${workspace} lockKey=${lockKey}`);
+			return;
+		}
+		
 		console.error(`[失败] ${msg.slice(0, 200)}`);
 
 		if (!sessionWebhook) {
@@ -1885,8 +1884,10 @@ const scheduler = new Scheduler({
 
 		if (chunks) {
 			for (let i = 0; i < chunks.length; i++) {
+				const piece = chunks[i];
+				if (piece === undefined) continue;
 				const title = chunks.length > 1 ? `📰 今日热点 (${i + 1}/${chunks.length})` : "📰 今日热点";
-				await sendMarkdown(webhook, chunks[i], title, 'blue');
+				await sendMarkdown(webhook, piece, title, 'blue');
 				if (i < chunks.length - 1) {
 					await new Promise(r => setTimeout(r, 500));
 				}
@@ -1971,9 +1972,31 @@ client.registerCallbackListener(TOPIC_ROBOT, async (res) => {
 	}
 });
 
-await refreshAccessToken();
-await client.connect();
-console.log('钉钉 Stream 连接已建立，等待消息...');
+// 使用重连管理器启动钉钉连接
+const reconnectManager = new ReconnectManager({
+	maxRetries: 10,
+	backoffDelays: [1, 2, 5, 10, 30, 60], // 秒
+});
+
+await reconnectManager.connectWithRetry(
+	async () => {
+		await refreshAccessToken();
+		await client.connect();
+	},
+	{
+		onSuccess: () => {
+			console.log('✅ 钉钉 Stream 连接已建立，等待消息...');
+		},
+		onFailure: (err) => {
+			console.error('❌ 钉钉连接失败，已重试 10 次:', err.message);
+			console.error('请检查网络连接和钉钉凭据（CLIENT_ID / CLIENT_SECRET）');
+			process.exit(1);
+		},
+		onRetry: (attempt, delay, error) => {
+			console.warn(`[钉钉] 第 ${attempt} 次连接失败，${delay}秒后重试...`);
+		},
+	}
+);
 
 // ── 启动定时任务调度器 ────────────────────────────
 console.log('[scheduler] starting...');
@@ -1994,28 +2017,40 @@ setTimeout(async () => {
 		const content = readFileSync(bootPath, "utf-8").trim();
 		if (!content) return;
 
-		console.log("[启动] 检测到 .cursor/BOOT.md，执行启动自检...");
+	console.log("[启动] 检测到 .cursor/BOOT.md，执行启动自检...");
 
-		const bootPrompt = [
-			"你正在执行启动自检。严格按以下清单执行：",
-			"",
-			content,
-			"",
-			"如果无事可做，回复 'HEARTBEAT_OK'。",
-		].join("\n");
+	const bootPrompt = [
+		"你正在执行启动自检。严格按以下清单执行：",
+		"",
+		content,
+		"",
+		"**输出要求**：",
+		"- 如果一切正常，只回复 'HEARTBEAT_OK'",
+		"- 如果发现问题，必须在问题前加上 ⚠️ 或 ❌ 标识",
+		"- 需要关注的配置项用 🔔 标识",
+		"- 格式示例：",
+		"  ✅ 记忆系统：正常",
+		"  ⚠️ 定时任务：发现 2 个配置错误",
+		"  ❌ .env 配置：缺少 VOLC_EMBEDDING_API_KEY",
+	].join("\n");
 
-		const { result, quotaWarning } = await runAgent(memoryWorkspace, bootPrompt);
-		const trimmed = result.trim();
-		const finalResult = quotaWarning ? `${quotaWarning}\n\n---\n\n${trimmed}` : trimmed;
+	const { result, quotaWarning } = await runAgent(memoryWorkspace, bootPrompt);
+	const trimmed = result.trim();
+	const finalResult = quotaWarning ? `${quotaWarning}\n\n---\n\n${trimmed}` : trimmed;
 
-		// 如果有需要推送的内容且有活跃 webhook
-		if (finalResult && !/^(无输出|HEARTBEAT_OK)$/i.test(trimmed)) {
-			const webhook = getWebhook();
-			if (webhook) {
-				await sendMarkdown(webhook, finalResult, '🚀 启动自检', 'wathet');
-				console.log("[启动] 自检结果已推送到钉钉");
-			}
+	// 如果有需要推送的内容且有活跃 webhook
+	if (finalResult && !/^(无输出|HEARTBEAT_OK)$/i.test(trimmed)) {
+		const webhook = getWebhook();
+		if (webhook) {
+			// 根据结果内容判断严重程度
+			const hasError = /[❌⚠️🔔]/.test(trimmed);
+			const title = hasError ? '⚠️ 启动自检 - 发现问题' : '✅ 启动自检';
+			const color = hasError ? 'red' : 'wathet';
+			
+			await sendMarkdown(webhook, finalResult, title, color);
+			console.log("[启动] 自检结果已推送到钉钉");
 		}
+	}
 
 		console.log("[启动] .cursor/BOOT.md 自检完成");
 	} catch (e) {

@@ -16,6 +16,9 @@ logs/
 # 缓存
 .cache/
 
+# Bun 等误生成的打包文件：与 shared/*.ts 同名时会优先被 import '.../foo.js' 加载，导致运行逻辑落后于源码
+shared/command-handler.js
+
 # 构建产物
 dist/
 build/
@@ -108,8 +111,9 @@ TEST-*.md
 !/docs/MEMORY-SYSTEM.md
 !/docs/test-plan-*.md
 
-# 私人新闻源配置（每人不同，不提交）
+# 私人配置文件（每人不同，不提交）
 config/news-sources.json
+config/model-config.json
 
 # 平台会话数据（运行时生成）
 dingtalk/.sessions.json

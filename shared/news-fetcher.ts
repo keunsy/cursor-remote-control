@@ -69,7 +69,8 @@ export async function fetchNews(
     if (result.status === 'fulfilled') {
       itemsList.push(result.value);
     } else {
-      const errMsg = `${sources[idx].name}: ${result.reason}`;
+      const src = sources[idx];
+      const errMsg = `${src?.name ?? `source[${idx}]`}: ${result.reason}`;
       errors.push(errMsg);
       console.error(`[news-fetcher] source failed: ${errMsg}`);
     }

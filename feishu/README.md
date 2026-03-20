@@ -190,7 +190,7 @@ Copy `.env.example` to `.env` and fill in your values:
 
 **Important Notes**:
 - Run `agent login` once to authenticate. After login, you don't need `CURSOR_API_KEY`.
-- If using `opus-4.6-thinking`, your team may hit quota limits. Use `auto` or `sonnet-4` instead.
+- If using `opus-4.6-thinking`, your team may hit quota limits. Use `auto` or `opus-4.6` instead.
 - Configuration files (`projects.json`, `cron-jobs-*.json`, `.env`) are in `.gitignore` — they won't be committed to git.
 
 ### Configuration File Management
@@ -736,7 +736,7 @@ nohup bun run server.ts > /tmp/feishu-cursor.log 2>&1 &  # 后台运行
 
 ### 其他
 
-- **换 Key / 换模型**：飞书发 `/密钥 key_xxx...` 或 `/模型 sonnet-4`，无需重启
+- **换 Key / 换模型**：飞书发 `/密钥 key_xxx...` 或 `/模型 opus`，无需重启
 - **查看日志**：`bash service.sh logs` 或 `tail -f /tmp/feishu-cursor.log`
 - **API Key 失效**：飞书卡片会自动提示修复步骤 + Dashboard 链接
 
@@ -746,7 +746,7 @@ nohup bun run server.ts > /tmp/feishu-cursor.log 2>&1 &  # 后台运行
 |------|------|----------|
 | 飞书无响应 | 服务未启动或崩溃 | `bash service.sh status` 检查；`bash service.sh restart` 重启 |
 | `API Key 无效` | .env 中有占位符 key | 运行 `agent login` 登录，然后注释掉 .env 中的 `CURSOR_API_KEY` |
-| `团队配额已用完` | 使用 opus-4.6-thinking 模型 | 改用 `auto` 或 `sonnet-4` 模型（编辑 .env 中的 `CURSOR_MODEL`） |
+| `团队配额已用完` | 使用 opus-4.6-thinking 模型 | 改用 `auto` 或 `opus-4.6` 模型（编辑 .env 中的 `CURSOR_MODEL`） |
 | `permission denied /Users/user` | projects.json 用户名错误 | 把 projects.json 中的 `/Users/user` 改为你的实际用户名 |
 | `agent: command not found` | Agent CLI 未安装 | 运行 `curl https://cursor.com/install -fsS \| bash` |
 | `bun: command not found` | Bun 未安装 | 运行 `curl -fsSL https://bun.sh/install \| bash` |
@@ -760,7 +760,7 @@ nohup bun run server.ts > /tmp/feishu-cursor.log 2>&1 &  # 后台运行
 A: 不需要。运行 `agent login` 登录后，Agent CLI 会自动使用登录凭据。只有在特殊情况下（如使用独立 API Key）才需要配置 `CURSOR_API_KEY`。
 
 **Q: 为什么提示配额用完？**  
-A: 默认模型 `opus-4.6-thinking` 是最高级模型，消耗配额大。建议改用 `auto` 或 `sonnet-4`。
+A: 如果配额用尽，可切换模型：`/模型 opus`（推荐）或 `/模型 auto`（省配额）。
 
 **Q: projects.json 怎么配置？**
 A: 从 `projects.json.example` 复制创建，把 `/Users/你的用户名/` 改为实际路径，或删除不需要的项目配置。

@@ -82,7 +82,9 @@ function applyEnvOverrides(config: NewsSourcesConfig): NewsSourcesConfig {
     const parts = suffix.split('_');
     if (parts.length < 2) continue;
 
-    const sourceId = parts[0].toLowerCase();
+    const head = parts[0];
+    if (head === undefined) continue;
+    const sourceId = head.toLowerCase();
     const field = parts.slice(1).join('_').toUpperCase();
 
     const source = result.sources.find((s) => s.id.toLowerCase() === sourceId);

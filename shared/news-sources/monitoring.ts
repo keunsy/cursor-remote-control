@@ -68,8 +68,13 @@ export function getHealthStatus(): string {
 
   const bySource: Record<string, FetchMetric[]> = {};
   for (const m of metrics.slice(-HEALTH_WINDOW)) {
-    if (!bySource[m.sourceId]) bySource[m.sourceId] = [];
-    bySource[m.sourceId].push(m);
+    const sid = m.sourceId;
+    let arr = bySource[sid];
+    if (!arr) {
+      arr = [];
+      bySource[sid] = arr;
+    }
+    arr.push(m);
   }
 
   const lines = Object.entries(bySource).map(([sourceId, items]) => {
@@ -100,8 +105,13 @@ export function getSourceHealthStatuses(): SourceHealthStatus[] {
 
   const bySource: Record<string, FetchMetric[]> = {};
   for (const m of metrics.slice(-HEALTH_WINDOW)) {
-    if (!bySource[m.sourceId]) bySource[m.sourceId] = [];
-    bySource[m.sourceId].push(m);
+    const sid = m.sourceId;
+    let arr = bySource[sid];
+    if (!arr) {
+      arr = [];
+      bySource[sid] = arr;
+    }
+    arr.push(m);
   }
 
   return Object.entries(bySource).map(([sourceId, items]) => {

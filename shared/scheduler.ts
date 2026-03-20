@@ -64,8 +64,11 @@ function parseField(field: string, min: number, max: number): CronField {
 	for (const part of field.split(",")) {
 		const range = part.split("-");
 		if (range.length === 2) {
-			const lo = Number.parseInt(range[0], 10);
-			const hi = Number.parseInt(range[1], 10);
+			const loStr = range[0];
+			const hiStr = range[1];
+			if (loStr === undefined || hiStr === undefined) continue;
+			const lo = Number.parseInt(loStr, 10);
+			const hi = Number.parseInt(hiStr, 10);
 			if (!Number.isNaN(lo) && !Number.isNaN(hi)) {
 				for (let v = Math.max(lo, min); v <= Math.min(hi, max); v++) values.push(v);
 			}
@@ -87,8 +90,12 @@ function dateComponents(d: Date, tz?: string): [min: number, hr: number, dom: nu
 	try {
 		const s = d.toLocaleString("en-US", { timeZone: tz, hour12: false });
 		const [datePart, timePart] = s.split(", ");
+		if (!datePart || !timePart) throw new Error("bad locale date string");
 		const [monS, domS] = datePart.split("/");
 		const [hS, mS] = timePart.split(":");
+		if (monS === undefined || domS === undefined || hS === undefined || mS === undefined) {
+			throw new Error("bad date parts");
+		}
 		const dow = new Date(d.toLocaleString("en-US", { timeZone: tz })).getDay();
 		return [+mS, +hS % 24, +domS, +monS, dow];
 	} catch {
@@ -100,9 +107,20 @@ function dateComponents(d: Date, tz?: string): [min: number, hr: number, dom: nu
 function nextCronOccurrence(expr: string, fromMs: number, tz?: string): number | undefined {
 	const parts = expr.trim().split(/\s+/);
 	if (parts.length < 5) return undefined;
-	const fields = [
-		parseField(parts[0], 0, 59), parseField(parts[1], 0, 23),
-		parseField(parts[2], 1, 31), parseField(parts[3], 1, 12), parseField(parts[4], 0, 6),
+	const p0 = parts[0];
+	const p1 = parts[1];
+	const p2 = parts[2];
+	const p3 = parts[3];
+	const p4 = parts[4];
+	if (p0 === undefined || p1 === undefined || p2 === undefined || p3 === undefined || p4 === undefined) {
+		return undefined;
+	}
+	const fields: [CronField, CronField, CronField, CronField, CronField] = [
+		parseField(p0, 0, 59),
+		parseField(p1, 0, 23),
+		parseField(p2, 1, 31),
+		parseField(p3, 1, 12),
+		parseField(p4, 0, 6),
 	];
 	const start = new Date(fromMs);
 	start.setSeconds(0, 0);
@@ -112,7 +130,7 @@ function nextCronOccurrence(expr: string, fromMs: number, tz?: string): number |
 	for (let i = 0; i < SCAN_MINUTES; i++) {
 		const candidate = new Date(start.getTime() + i * 60_000);
 		const c = dateComponents(candidate, tz);
-		if (c.every((v, idx) => fieldMatches(fields[idx], v))) return candidate.getTime();
+		if (c.every((v, idx) => fieldMatches(fields[idx]!, v))) return candidate.getTime();
 	}
 	return undefined;
 }

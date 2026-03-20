@@ -24,10 +24,12 @@ import { FeilianController, type OperationResult } from "../shared/feilian-contr
 import { fetchNews } from "../shared/news-fetcher.js";
 import { getHealthStatus } from "../shared/news-sources/monitoring.js";
 import { CommandHandler, type PlatformAdapter, type CommandContext } from "../shared/command-handler.js";
+import { AgentExecutor } from "../shared/agent-executor.js";
+import { ReconnectManager } from "../shared/reconnect-manager.js";
 import { tryRecordMessagePersistent } from "./feishu/dedup.js";
 import { sendMediaFeishu } from "./feishu/media.js";
 import { humanizeCronInChinese } from 'cron-chinese';
-import { getAvailableModelChain, shouldFallback, isQuotaExhausted, addToBlacklist, getModelChain, DEFAULT_MODEL, type ModelConfig } from "../shared/models-config.js";
+import { getAvailableModelChain, shouldFallback, isQuotaExhausted, addToBlacklist, getModelChain, DEFAULT_MODEL } from "../shared/models-config.js";
 
 const HOME = process.env.HOME;
 if (!HOME) throw new Error("$HOME is not set");
@@ -338,8 +340,10 @@ const scheduler = new Scheduler({
 		
 		if (chunks) {
 			for (let i = 0; i < chunks.length; i++) {
+				const piece = chunks[i];
+				if (piece === undefined) continue;
 				const title = chunks.length > 1 ? `📰 今日热点 (${i + 1}/${chunks.length})` : "📰 今日热点";
-				await sendCard(validChatId, chunks[i], { title, color: "blue" });
+				await sendCard(validChatId, piece, { title, color: "blue" });
 			}
 			console.log(`[scheduler] feishu news sent: ${chunks.length} chunk(s)`);
 		} else {
@@ -511,19 +515,28 @@ async function replyLongMessage(messageId: string, chatId: string, text: string,
 		remaining = remaining.slice(cut);
 	}
 	for (let i = 0; i < chunks.length; i++) {
+		const piece = chunks[i];
+		if (piece === undefined) continue;
 		const h = chunks.length > 1 ? { title: `${header?.title || "回复"} (${i + 1}/${chunks.length})`, color: header?.color } : header;
-		if (i === 0) await replyCard(messageId, chunks[i], h);
-		else await sendCard(chatId, chunks[i], h);
+		if (i === 0) await replyCard(messageId, piece, h);
+		else await sendCard(chatId, piece, h);
 	}
 }
 
 // ── 媒体下载 ─────────────────────────────────────
 async function readResponseBuffer(response: unknown, depth = 0): Promise<Buffer> {
 	if (depth > 3) throw new Error("readResponseBuffer: 响应嵌套过深");
-	const resp = response as Record<string, unknown>;
-	if (resp instanceof Readable || typeof (resp as Readable).pipe === "function") {
+	if (response instanceof Readable) {
 		const chunks: Buffer[] = [];
-		for await (const chunk of resp as Readable) {
+		for await (const chunk of response) {
+			chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array));
+		}
+		return Buffer.concat(chunks);
+	}
+	const resp = response as Record<string, unknown>;
+	if (typeof (resp as { pipe?: unknown }).pipe === "function") {
+		const chunks: Buffer[] = [];
+		for await (const chunk of response as Readable) {
 			chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array));
 		}
 		return Buffer.concat(chunks);
@@ -653,9 +666,9 @@ function transcribeVolcengine(wavPath: string): Promise<string> {
 			const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw as ArrayBuffer);
 			if (buf.length < 4) return;
 
-			const msgType = (buf[1] >> 4) & 0xF;
-			const flags = buf[1] & 0xF;
-			const compress = buf[2] & 0xF;
+			const msgType = (buf.readUInt8(1) >> 4) & 0xF;
+			const flags = buf.readUInt8(1) & 0xF;
+			const compress = buf.readUInt8(2) & 0xF;
 
 			// 错误响应
 			if (msgType === 0xF) {
@@ -844,25 +857,34 @@ function detectRouteIntent(text: string): RouteIntent {
 	const pathSymbolMatch = raw.match(/^[#@]((?:~?\/|~).+?)\s+(.+)$/);
 	if (pathSymbolMatch) {
 		const rawPath = pathSymbolMatch[1];
+		const rest = pathSymbolMatch[2];
+		if (rawPath === undefined || rest === undefined) {
+			return { type: 'none' as const, cleanedText: text };
+		}
 		const absolutePath = rawPath.startsWith('~') 
 			? rawPath.replace(/^~/, process.env.HOME || '~')
 			: rawPath;
 		return {
 			type: 'temp',
 			path: absolutePath,
-			cleanedText: pathSymbolMatch[2].trim(),
+			cleanedText: rest.trim(),
 		};
 	}
 	
 	// 1. 简化符号：#项目名 或 @项目名
 	const symbolMatch = raw.match(new RegExp(`^[#@](${projectPattern})\\s+(.+)`, 'i'));
 	if (symbolMatch) {
-		const project = symbolMatch[1].toLowerCase();
+		const symProj = symbolMatch[1];
+		const symRest = symbolMatch[2];
+		if (symProj === undefined || symRest === undefined) {
+			return { type: 'none' as const, cleanedText: text };
+		}
+		const project = symProj.toLowerCase();
 		if (projects[project]) {
 			return {
 				type: 'temp',
 				project,
-				cleanedText: symbolMatch[2].trim(),
+				cleanedText: symRest.trim(),
 			};
 		}
 	}
@@ -870,9 +892,13 @@ function detectRouteIntent(text: string): RouteIntent {
 	// 2a. 切换到任意路径："切换到 /path" / "切换到路径 /path"（必须以 / 或 ~ 开头，避免误匹配 "切换到 remote"）
 	const pathSwitchMatch = raw.match(/^(?:切换到|切到|切换|进入|打开)(?:路径)?\s+([~\/].+?)\s*$/i);
 	if (pathSwitchMatch) {
-		const absolutePath = pathSwitchMatch[1].startsWith('~')
-			? pathSwitchMatch[1].replace(/^~/, process.env.HOME || '~')
-			: pathSwitchMatch[1];
+		const p1 = pathSwitchMatch[1];
+		if (p1 === undefined) {
+			return { type: 'none' as const, cleanedText: text };
+		}
+		const absolutePath = p1.startsWith('~')
+			? p1.replace(/^~/, process.env.HOME || '~')
+			: p1;
 		return {
 			type: 'switch',
 			path: absolutePath,
@@ -888,7 +914,9 @@ function detectRouteIntent(text: string): RouteIntent {
 	for (const pattern of switchPatterns) {
 		const match = raw.match(pattern);
 		if (match) {
-			const project = match[1].toLowerCase();
+			const m1 = match[1];
+			if (m1 === undefined) continue;
+			const project = m1.toLowerCase();
 			if (projects[project]) {
 				return { type: 'switch', project, cleanedText: '' };
 			}
@@ -904,7 +932,9 @@ function detectRouteIntent(text: string): RouteIntent {
 	for (const pattern of tempPatterns) {
 		const match = raw.match(pattern);
 		if (match) {
-			const project = match[1].toLowerCase();
+			const m1 = match[1];
+			if (m1 === undefined) continue;
+			const project = m1.toLowerCase();
 			if (projects[project]) {
 				// 不移除项目名，保留完整语境
 				return { type: 'temp', project, cleanedText: text };
@@ -936,7 +966,9 @@ function detectRouteIntent(text: string): RouteIntent {
 		for (const pattern of suggestPatterns) {
 			const match = raw.match(pattern);
 			if (match) {
-				const project = match[1].toLowerCase();
+				const m1 = match[1];
+				if (m1 === undefined) continue;
+				const project = m1.toLowerCase();
 				if (projects[project]) {
 					return { 
 						type: 'suggest',
@@ -962,13 +994,26 @@ function route(
 	
 	// 1. 传统路由：项目名:消息
 	const colonMatch = text.match(/^(\S+?)[:\uff1a]\s*(.+)/s);
-	if (colonMatch && projects[colonMatch[1].toLowerCase()]) {
+	const colonKey = colonMatch?.[1];
+	const colonRest = colonMatch?.[2];
+	if (colonKey && colonRest && projects[colonKey.toLowerCase()]) {
+		const key = colonKey.toLowerCase();
+		const projEntry = projects[key];
+		if (!projEntry) {
+			// 理论上与上一行条件一致；满足 strict 收窄
+			return {
+				workspace: projects[default_project]?.path || ROOT,
+				prompt: text.trim(),
+				label: default_project,
+				intent: intent || { type: "none", cleanedText: text.trim() },
+			};
+		}
 		return {
-			workspace: projects[colonMatch[1].toLowerCase()].path,
-			prompt: colonMatch[2].trim(),
-			label: colonMatch[1].toLowerCase(),
+			workspace: projEntry.path,
+			prompt: colonRest.trim(),
+			label: key,
 			routeChanged: true,
-			intent: intent || { type: 'none', cleanedText: colonMatch[2].trim() },
+			intent: intent || { type: 'none', cleanedText: colonRest.trim() },
 		};
 	}
 	
@@ -989,8 +1034,17 @@ function route(
 	
 	// 2b. 项目名路由（排除 suggest 类型，suggest 需要用户确认）
 	if (routeIntent.type !== 'none' && routeIntent.type !== 'suggest' && routeIntent.project) {
+		const rp = projects[routeIntent.project];
+		if (!rp) {
+			return {
+				workspace: projects[default_project]?.path || ROOT,
+				prompt: text.trim(),
+				label: default_project,
+				intent: routeIntent,
+			};
+		}
 		return {
-			workspace: projects[routeIntent.project].path,
+			workspace: rp.path,
 			prompt: routeIntent.cleanedText || text,
 			label: routeIntent.project,
 			routeChanged: routeIntent.type === 'switch',
@@ -1049,21 +1103,21 @@ const childPids = new Set<number>();
 // lockKey → 正在运行的 agent 子进程（用于 /stop 终止）
 const activeAgents = new Map<string, { pid: number | undefined; kill: () => void; workspace: string }>();
 
+// 统一 Agent 执行器（超时保护、并发限制、僵尸清理）
+const agentExecutor = new AgentExecutor({
+	timeout: MAX_AGENT_TIMEOUT,
+	maxConcurrent: 10, // 提高并发限制
+});
+
 // 优雅退出
 process.on("SIGINT", async () => {
 	console.log("\n[退出] 正在清理资源...");
 
-	// 终止所有运行中的 Agent 进程
-	if (activeAgents.size > 0) {
-		console.log(`[退出] 正在终止 ${activeAgents.size} 个运行中的任务...`);
-		for (const [lockKey, agent] of activeAgents.entries()) {
-			try {
-				agent.kill();
-				console.log(`[退出] 已终止任务: ${lockKey}`);
-			} catch (err) {
-				console.error(`[退出] 终止任务失败 ${lockKey}:`, err);
-			}
-		}
+	// 终止所有运行中的 Agent 进程（使用统一执行器）
+	const active = agentExecutor.getActiveAgents();
+	if (active.length > 0) {
+		console.log(`[退出] 正在终止 ${active.length} 个运行中的任务...`);
+		agentExecutor.killAll();
 		activeAgents.clear();
 		busySessions.clear();
 	}
@@ -1393,7 +1447,7 @@ function dedupeRepeatedContent(text: string): string {
 	const blocks = s.split(/\n\s*\n/).map((b) => b.trim()).filter(Boolean);
 	if (blocks.length >= 2) {
 		const lastBlock = blocks[blocks.length - 1];
-		if (lastBlock.length >= 30) {
+		if (lastBlock !== undefined && lastBlock.length >= 30) {
 			const rest = blocks.slice(0, -1);
 			if (rest.some((b) => b === lastBlock || (b.length > 50 && lastBlock.includes(b.slice(0, 80))))) {
 				return rest.join("\n\n");
@@ -1509,9 +1563,9 @@ function buildToolSummary(tools: string[]): string {
 	for (const tool of tools) {
 		const match = tool.match(/^([🔧📖✏️⚡🔍📂🔎🌐🗑️📓🔌🤖]+)\s+(.+)/);
 		if (!match) continue;
-		
 		const emoji = match[1];
 		const detail = match[2];
+		if (emoji === undefined || detail === undefined) continue;
 		
 		if (!groups.has(emoji)) {
 			groups.set(emoji, { emoji, items: [] });
@@ -1555,10 +1609,12 @@ async function execAgentWithFallback(
 	let lastError: Error | null = null;
 	const skippedModels: string[] = [];
 	
-	// 检查主模型是否被跳过
+	// 检查主模型是否被跳过（黑名单）
 	const fullChain = getModelChain(primaryModel);
-	if (fullChain.length > 0 && fullChain[0] && modelChain[0] && fullChain[0].id !== modelChain[0].id) {
+	const wasBlacklisted = fullChain.length > 0 && fullChain[0] && modelChain[0] && fullChain[0].id !== modelChain[0].id;
+	if (wasBlacklisted) {
 		skippedModels.push(primaryModel);
+		console.log(`[智能跳过] ${primaryModel} 在黑名单中，静默切换到 ${modelChain[0]?.id}`);
 	}
 	
 	for (let i = 0; i < modelChain.length; i++) {
@@ -1568,7 +1624,7 @@ async function execAgentWithFallback(
 		const isFallback = i > 0 || skippedModels.length > 0;
 		
 		try {
-			if (isFallback) {
+			if (isFallback && !wasBlacklisted) {
 				console.log(`[Fallback ${i}/${modelChain.length - 1}] 尝试 ${model.id}（原模型：${primaryModel}）`);
 			}
 			
@@ -1576,14 +1632,17 @@ async function execAgentWithFallback(
 			
 			// 成功执行
 			if (isFallback) {
-				const skippedInfo = skippedModels.length > 0 
-					? `已跳过：${skippedModels.map(m => `\`${m}\``).join(', ')}（配额用尽）\n\n`
-					: '';
+				// 如果是因为黑名单跳过的，静默切换，不提示
+				if (wasBlacklisted && i === 0) {
+					return out;
+				}
+				
+				// 如果是运行中失败导致的 fallback，返回错误信息（用于显示提示）
 				return { 
 					...out, 
 					usedFallback: true, 
 					fallbackModel: model.id,
-					errorMsg: skippedInfo + (lastError?.message || ''),
+					errorMsg: lastError?.message || '',
 				};
 			}
 			
@@ -1613,8 +1672,8 @@ async function execAgentWithFallback(
 	throw new Error(`所有模型都失败了（尝试了 ${modelChain.map(m => m.id).join(' → ')}）\n最后错误: ${lastError?.message || '未知错误'}`);
 }
 
-// 核心：spawn agent CLI，解析 stream-json，返回结果
-function execAgent(
+// 核心：spawn agent CLI，解析 stream-json，返回结果（使用统一执行器）
+async function execAgent(
 	lockKey: string,
 	workspace: string,
 	model: string,
@@ -1625,232 +1684,46 @@ function execAgent(
 		context?: { platform?: string; chatId?: string };
 	},
 ): Promise<{ result: string; sessionId?: string }> {
-	return new Promise((res, reject) => {
-		const args = [
-			"-p", "--force", "--trust", "--approve-mcps",
-			"--workspace", workspace,
-			"--model", model,
-			"--output-format", "stream-json",
-			"--stream-partial-output",
-		];
-
-		if (opts?.sessionId) {
-			args.push("--resume", opts.sessionId);
-		}
-		args.push("--", prompt);
-
-		const env: AgentEnv = { ...process.env, CURSOR_API_KEY: config.CURSOR_API_KEY };
-		
-		// 传递平台和回调地址给 agent（用于创建定时任务）
-		if (opts?.context?.platform) {
-			env.CURSOR_PLATFORM = opts.context.platform;
-		}
-		if (opts?.context?.chatId) {
-			env.CURSOR_WEBHOOK = opts.context.chatId;
-		}
-		
-		// 传递定时任务文件的绝对路径（Agent 直接写入，不依赖工作区）
-		const cronFilePath = resolve(ROOT, 'cron-jobs-feishu.json');
-		env.CURSOR_CRON_FILE = cronFilePath;
-		console.log(`[ENV] 设置 CURSOR_CRON_FILE=${cronFilePath}`);
-
-		const child = spawn(AGENT_BIN, args, {
-			env,
-			stdio: ["ignore", "pipe", "pipe"],
+	try {
+		const result = await agentExecutor.execute({
+			workspace,
+			model,
+			prompt,
+			sessionId: opts?.sessionId,
+			platform: opts?.context?.platform as 'feishu' | undefined,
+			webhook: opts?.context?.chatId,
+			onProgress: opts?.onProgress,
+			apiKey: config.CURSOR_API_KEY,
 		});
-		if (child.pid) {
-			childPids.add(child.pid);
-			activeAgents.set(lockKey, {
-				pid: child.pid,
-				kill: () => { try { child.kill("SIGTERM"); } catch {} },
-				workspace, // 用于 /stop 命令按项目名查找
-			});
+		
+		// 构建工具调用摘要（添加到回复开头）
+		let finalOutput = result.result;
+		if (result.toolSummary && result.toolSummary.length > 0) {
+			const summary = buildToolSummary(result.toolSummary);
+			if (summary) {
+				finalOutput = summary + "\n\n" + result.result;
+			}
 		}
-
-	let stderr = "";
-	let resultText = "";
-	let sessionId: string | undefined;
-	let phase: AgentProgress["phase"] = "thinking";
-	let thinkingBuf = "";
-	let assistantBuf = "";
-	let lastSegment = "";
-	let toolBuf = ""; // 工具活动日志（显示在进度卡片中）
-	let toolSummary: string[] = []; // 工具调用摘要（最终追加到回复）
-	let done = false;
-	const startTime = Date.now();
-	let lastProgressTime = 0;
-	let lineBuf = "";
-	let globalTimeout: NodeJS.Timeout | null = null;
-
-	/** 清理进程资源（activeAgents、timers、childPids），busySessions 由外层 finally 清理 */
-	function cleanup() {
-		done = true;
-		clearInterval(timer);
-		if (globalTimeout) clearTimeout(globalTimeout);
-		if (child.pid) childPids.delete(child.pid);
-		activeAgents.delete(lockKey);
+		
+		// 去重处理
+		finalOutput = dedupeRepeatedContent(finalOutput);
+		
+		// 检查计费错误
+		if (isBillingError(finalOutput)) {
+			throw new Error(finalOutput);
+		}
+		
+		return {
+			result: finalOutput,
+			sessionId: result.sessionId,
+		};
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		if (isBillingError(message)) {
+			throw err;
+		}
+		throw err;
 	}
-
-		function getSnippet(): string {
-			if (phase === "thinking") return thinkingBuf.slice(-200);
-			if (phase === "tool_call") {
-				const lines = toolBuf.split("\n").filter(l => l.trim());
-				return lines.slice(-6).join("\n") || assistantBuf.slice(-300);
-			}
-			return assistantBuf.slice(-300);
-		}
-
-		// 进度更新定时器（每秒）：始终推送 elapsed，无 snippet 时也显示秒数
-		const timer = setInterval(() => {
-			if (done) return;
-			const now = Date.now();
-			if (opts?.onProgress && now - lastProgressTime >= PROGRESS_INTERVAL) {
-				lastProgressTime = now;
-				const snippet = getSnippet();
-				opts.onProgress({
-					elapsed: Math.round((now - startTime) / 1000),
-					phase,
-					snippet: snippet || "...",
-				});
-			}
-		}, 1000);
-
-		// 全局超时定时器（30分钟）
-		globalTimeout = setTimeout(() => {
-			if (done) return;
-			const elapsed = Math.round((Date.now() - startTime) / 1000 / 60);
-			console.error(`[超时] Agent运行超过${MAX_AGENT_TIMEOUT/60000}分钟 (实际: ${elapsed}分钟)，强制终止 [${lockKey}]`);
-			cleanup();
-			try {
-				child.kill("SIGKILL"); // 强制终止
-			} catch (e) {
-				console.error(`[超时] 终止进程失败:`, e);
-			}
-			reject(new Error(`Agent运行超时 (${elapsed}分钟)，已强制终止。如需更长时间，请分批处理或使用 /stop 手动终止。`));
-		}, MAX_AGENT_TIMEOUT);
-
-		function processLine(line: string) {
-			const ev = tryParseJson(line);
-			if (!ev) return;
-
-			if (ev.session_id && !sessionId) sessionId = ev.session_id;
-
-			const prevPhase = phase;
-			switch (ev.type) {
-				case "thinking":
-					phase = "thinking";
-					if (ev.text) thinkingBuf += ev.text;
-					break;
-				case "assistant":
-					if (phase !== "responding") toolBuf = "";
-					phase = "responding";
-					if (ev.message?.content) {
-						for (const c of ev.message.content) {
-							if (c.type === "text" && c.text) {
-								assistantBuf += c.text;
-								lastSegment += c.text;
-							}
-						}
-					}
-					break;
-			case "tool_call":
-				phase = "tool_call";
-				lastSegment = "";
-				if (ev.tool_call) {
-					if (ev.subtype === "started") {
-						const desc = describeToolCall(ev.tool_call);
-						toolBuf += (toolBuf ? "\n" : "") + desc;
-						toolSummary.push(desc); // 记录到摘要
-					} else if (ev.subtype === "completed") {
-						const brief = describeToolResult(ev.tool_call);
-						if (brief) {
-							const oneLiner = brief.split("\n").filter(l => l.trim()).slice(0, 2).join(" | ");
-							toolBuf += `  → ${oneLiner.slice(0, 120)}`;
-						}
-					}
-				}
-				break;
-				case "result":
-					if (ev.result != null) resultText = ev.result;
-					if (ev.subtype === "error" && ev.error) {
-						resultText = ev.error;
-					}
-					break;
-			}
-
-			// 阶段切换 或 tool_call 新事件时立即触发进度更新
-			const isToolEvent = ev.type === "tool_call" && ev.tool_call;
-			if ((phase !== prevPhase || isToolEvent) && opts?.onProgress) {
-				const now = Date.now();
-				lastProgressTime = now;
-				opts.onProgress({
-					elapsed: Math.round((now - startTime) / 1000),
-					phase,
-					snippet: getSnippet() || "...",
-				});
-			}
-		}
-
-	child.stdout!.on("data", (chunk: Buffer) => {
-		lineBuf += chunk.toString();
-		const lines = lineBuf.split("\n");
-		lineBuf = lines.pop()!;
-		for (const line of lines) processLine(line);
-	});
-
-	child.stderr!.on("data", (chunk: Buffer) => {
-		stderr += chunk.toString();
-	});
-
-	// Bug #55 修复: 处理子进程启动失败
-	child.on("error", (err) => {
-		if (done) return;
-		cleanup();
-		console.error(`[Agent] 子进程启动失败:`, err);
-		reject(new Error(`Agent CLI 启动失败: ${err.message}`));
-	});
-
-	child.on("close", (code) => {
-		if (done) return;
-		cleanup();
-		
-		// Bug #56 修复: 延迟 resolve，确保所有已调度的 timer 回调执行完毕
-		// timer 每 1s 触发，PROGRESS_INTERVAL=2s，cleanup后等待 150ms 足够
-		setTimeout(() => {
-			// 处理 lineBuf 中残留的最后一行
-			if (lineBuf.trim()) processLine(lineBuf);
-
-			// 优先用 result 事件（仅一份），再取最后一段 assistant，避免流式重复导致同一条消息内容重复两遍
-			const finalSegment = strip(lastSegment);
-			const rawResultText = typeof resultText === "string" ? strip(resultText) : "";
-			const rawOutput = rawResultText || finalSegment || strip(assistantBuf) || strip(stderr) || "(无输出)";
-			const output = dedupeRepeatedContent(rawOutput);
-
-			// 构建工具调用摘要（添加到回复开头）
-			let finalOutput = output;
-			if (toolSummary.length > 0) {
-				const summary = buildToolSummary(toolSummary);
-				if (summary) {
-					finalOutput = summary + "\n\n" + output;
-				}
-			}
-
-			if (code !== 0 && code !== null && !rawResultText) {
-				reject(new Error(strip(stderr) || output));
-				return;
-			}
-			if (isBillingError(output) || isBillingError(stderr)) {
-				reject(new Error(output));
-				return;
-			}
-			res({ result: finalOutput, sessionId });
-		}, 150);
-	});
-
-		child.on("error", (err) => {
-			if (!done) { cleanup(); reject(err); }
-		});
-	});
 }
 
 // ── 会话级活跃追踪（lockKey = session:id 或 ws:path）──────
@@ -1866,7 +1739,7 @@ async function runAgent(
 		context?: { chatId?: string };
 	},
 ): Promise<{ result: string; quotaWarning?: string }> {
-	const primaryModel = config.CURSOR_MODEL;
+	const primaryModel = config.CURSOR_MODEL || DEFAULT_MODEL;
 	let lockKey = getLockKey(workspace);
 
 	return withSessionLock(lockKey, async () => {
@@ -1894,24 +1767,17 @@ async function runAgent(
 					if (isNewSession) {
 						generateSessionTitle(workspace, sessionId, prompt, result);
 					}
-					// Bug 修复: sessionId 创建后，需更新 activeAgents 的 key
-					const newLockKey = `session:${sessionId}`;
-					if (lockKey !== newLockKey) {
-						const agent = activeAgents.get(lockKey);
-						if (agent) {
-							activeAgents.delete(lockKey);
-							activeAgents.set(newLockKey, agent);
-							lockKey = newLockKey; // 更新闭包变量，让 finally 使用新 key
-							console.log(`[lockKey] 更新: ws:... → ${newLockKey.slice(0, 30)}...`);
-						}
-					}
 				}
 				
 				// 检查是否使用了 fallback
 				if (usedFallback && fallbackModel) {
+					// 简化提示：只说明原因和结果，避免重复
+					const reason = errorMsg?.toLowerCase().includes('usage limit') || errorMsg?.toLowerCase().includes('quota')
+						? `\`${primaryModel}\` 配额用尽`
+						: `\`${primaryModel}\` 失败`;
 					return {
 						result,
-						quotaWarning: `⚠️ **模型降级**\n\n原模型 \`${primaryModel}\` 失败，已用 \`${fallbackModel}\` 完成。\n\n${errorMsg ? `错误：${errorMsg.slice(0, 100)}` : ''}`,
+						quotaWarning: `⚠️ **模型降级**\n\n${reason}，已改用 \`${fallbackModel}\` 完成。`,
 					};
 				}
 				
@@ -1938,24 +1804,17 @@ async function runAgent(
 						if (sessionId) {
 							setActiveSession(workspace, sessionId);
 							generateSessionTitle(workspace, sessionId, prompt, result);
-							// Bug 修复: 重试时也需要更新 lockKey
-							const newLockKey = `session:${sessionId}`;
-							if (lockKey !== newLockKey) {
-								const agent = activeAgents.get(lockKey);
-								if (agent) {
-									activeAgents.delete(lockKey);
-									activeAgents.set(newLockKey, agent);
-									lockKey = newLockKey;
-									console.log(`[lockKey] 重试后更新: → ${newLockKey.slice(0, 30)}...`);
-								}
-							}
 						}
 						
 						// 检查是否使用了 fallback
 						if (usedFallback && fallbackModel) {
+							// 简化提示：只说明原因和结果，避免重复
+							const reason = errorMsg?.toLowerCase().includes('usage limit') || errorMsg?.toLowerCase().includes('quota')
+								? `\`${primaryModel}\` 配额用尽`
+								: `\`${primaryModel}\` 失败`;
 							return {
 								result,
-								quotaWarning: `⚠️ **模型降级**\n\n原模型 \`${primaryModel}\` 失败，已用 \`${fallbackModel}\` 完成。\n\n${errorMsg ? `错误：${errorMsg.slice(0, 100)}` : ''}`,
+								quotaWarning: `⚠️ **模型降级**\n\n${reason}，已改用 \`${fallbackModel}\` 完成。`,
 							};
 						}
 						
@@ -2208,7 +2067,9 @@ async function handleInner(
 		if (parsed.imageKeys && parsed.imageKeys.length > 0) {
 			const imagePaths: string[] = [];
 			for (let i = 0; i < parsed.imageKeys.length; i++) {
-				const path = await downloadMedia(messageId, parsed.imageKeys[i], "image", ".png");
+				const imgKey = parsed.imageKeys[i];
+				if (imgKey === undefined) continue;
+				const path = await downloadMedia(messageId, imgKey, "image", ".png");
 				imagePaths.push(path);
 			}
 			const imageTexts = imagePaths.map((p, i) => `图片${i + 1}：${p}`).join("\n");
@@ -2261,12 +2122,20 @@ async function handleInner(
 			await replyCard(messageId, content, options);
 		},
 		sendFile: async (filePath: string, fileName?: string) => {
+			const buffer = readFileSync(filePath);
 			await sendMediaFeishu({
-				client,
-				messageId,
-				chatId,
-				filePath,
-				fileName: fileName || filePath.split('/').pop() || 'file',
+				cfg: {
+					channels: {
+						feishu: {
+							appId: config.FEISHU_APP_ID,
+							appSecret: config.FEISHU_APP_SECRET,
+						},
+					},
+				},
+				to: chatId,
+				mediaBuffer: buffer,
+				fileName: fileName || filePath.split("/").pop() || "file",
+				replyToMessageId: messageId,
 			});
 		},
 	};
@@ -2291,6 +2160,7 @@ async function handleInner(
 		getActiveSessionId: (ws: string) => getActiveSessionId(ws) || null,
 		switchToSession,
 		rootDir: ROOT,
+		agentExecutor, // 统一 Agent 执行器
 	};
 	
 	// 创建命令处理器
@@ -2323,7 +2193,12 @@ async function handleInner(
 	// 检测相对时间新闻推送（X分钟后推送热点、X小时后推送新闻）
 	const relativeNewsMatch = text.match(/(\d+)\s*(分钟|小时)(?:[后以]后|后)\s*(?:推送|发送)?\s*(?:前|top)?\s*(\d+)?\s*条?\s*(?:今日)?\s*(热点|新闻|热榜)/i);
 	if (relativeNewsMatch) {
-		const [, numStr, unit, topNStr, _] = relativeNewsMatch;
+		const numStr = relativeNewsMatch[1];
+		const unit = relativeNewsMatch[2];
+		const topNStr = relativeNewsMatch[3];
+		if (!numStr || !unit) {
+			// 正则已匹配但捕获组异常，交给后续逻辑
+		} else {
 		const num = parseInt(numStr, 10);
 		const topN = topNStr ? Math.min(50, Math.max(1, parseInt(topNStr, 10))) : 15;
 		const minutes = unit === '小时' ? num * 60 : num;
@@ -2347,17 +2222,21 @@ async function handleInner(
 			{ title: "⏰ 定时任务已创建", color: "green" },
 		);
 		return;
+		}
 	}
 
 	// 检测新闻推送定时请求（每天/每日 早上/上午 9点 推送热点、明天上午10点推送新闻）
 	const newsScheduleMatch = text.match(/(每天|每日|明天)\s*(早上|上午|下午)?\s*([0-9一二三四五六七八九十]+)\s*[点时]?\s*(?:给我)?\s*(?:推送|发送)?\s*(?:下|今日)?\s*(热点|新闻|热榜)/i);
 	if (newsScheduleMatch) {
-		const [, when, ap, hourStr, _] = newsScheduleMatch;
+		const when = newsScheduleMatch[1];
+		const ap = newsScheduleMatch[2];
+		const hourStr = newsScheduleMatch[3];
+		if (when && hourStr) {
 		const numMap: Record<string, number> = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
 		const toNum = (s: string) => (numMap[s] ?? parseInt(s, 10)) || 9;
 		let topN = 15;
 		const topMatch = text.match(/(?:推送|前)\s*(\d+)\s*条/i);
-		if (topMatch) topN = Math.min(50, Math.max(1, parseInt(topMatch[1], 10)));
+		if (topMatch?.[1]) topN = Math.min(50, Math.max(1, parseInt(topMatch[1], 10)));
 		let schedule: { kind: "cron"; expr: string; tz?: string } | { kind: "at"; at: string };
 		let timeDesc: string;
 		if (when === "每天" || when === "每日") {
@@ -2390,13 +2269,18 @@ async function handleInner(
 			{ title: "⏰ 定时任务已创建", color: "green" },
 		);
 		return;
+		}
 	}
 
 	// 检测「每个工作日 HH点/HH:MM/HH点MM/HH点 MM分 提醒」请求，服务器端直接创建
 	const weekdayScheduleMatch = text.match(/每个工作日\s*(\d{1,2})(?:[.:：](\d{1,2})|点\s*(\d{1,2})\s*分?|点)?\s*(?:提醒|通知)?(?:我)?\s*(.+)$/i);
 	if (weekdayScheduleMatch) {
-		const [, hourStr, minStr1, minStr2, taskMessage] = weekdayScheduleMatch;
-		const hour = Math.min(23, Math.max(0, parseInt(hourStr!, 10) || 14));
+		const hourStr = weekdayScheduleMatch[1];
+		const minStr1 = weekdayScheduleMatch[2];
+		const minStr2 = weekdayScheduleMatch[3];
+		const taskMessage = weekdayScheduleMatch[4];
+		if (hourStr && taskMessage !== undefined) {
+		const hour = Math.min(23, Math.max(0, parseInt(hourStr, 10) || 14));
 		// 分钟可能来自 `:45` (minStr1) 或 `点45` (minStr2)
 		const minStr = minStr1 || minStr2;
 		const minute = minStr != null && minStr !== '' ? Math.min(59, Math.max(0, parseInt(minStr, 10) || 0)) : 0;
@@ -2405,21 +2289,25 @@ async function handleInner(
 			enabled: true,
 			deleteAfterRun: false,
 			schedule: { kind: "cron", expr: `${minute} ${hour} * * 1-5`, tz: "Asia/Shanghai" },
-			message: taskMessage!.trim(),
+			message: taskMessage.trim(),
 			platform: "feishu",
 			webhook: chatId,
 		});
 		const timeDesc = `${hour}:${String(minute).padStart(2, "0")}`;
-		await replyCard(messageId, `✅ 已设置好，**每个工作日 ${timeDesc}** 通过飞书提醒你：\n\n${taskMessage!.trim()}\n\n发送 \`/cron\` 可查看所有任务。`, { title: "⏰ 定时任务已创建", color: "green" });
+		await replyCard(messageId, `✅ 已设置好，**每个工作日 ${timeDesc}** 通过飞书提醒你：\n\n${taskMessage.trim()}\n\n发送 \`/cron\` 可查看所有任务。`, { title: "⏰ 定时任务已创建", color: "green" });
 		console.log(`[任务] 服务器端创建: 每个工作日 ${timeDesc} 提醒`);
 		return;
+		}
 	}
 
 	// 检测简单定时任务请求，服务器端直接创建（不依赖 Agent）
 	const simpleScheduleMatch = text.match(/^(\d+)(分钟|小时)后\s*(?:提醒|通知)?(?:我)?\s*(.+)$/i);
 	if (simpleScheduleMatch) {
-		const [, num, unit, taskMessage] = simpleScheduleMatch;
-		const minutes = unit === '小时' ? parseInt(num) * 60 : parseInt(num);
+		const num = simpleScheduleMatch[1];
+		const unit = simpleScheduleMatch[2];
+		const taskMessage = simpleScheduleMatch[3];
+		if (num && unit && taskMessage !== undefined) {
+		const minutes = unit === "小时" ? parseInt(num, 10) * 60 : parseInt(num, 10);
 		const runAtMs = Date.now() + minutes * 60 * 1000;
 		const runAt = new Date(runAtMs);
 		
@@ -2433,9 +2321,12 @@ async function handleInner(
 		if (isNewsRequest) {
 			// 提取条数（默认 15 条）
 			const topNMatch = taskMessage.match(/(\d+)\s*条/);
-			const topN = topNMatch ? Math.min(50, Math.max(1, parseInt(topNMatch[1], 10))) : 15;
-			finalMessage = JSON.stringify({ type: 'fetch-news', options: { topN } });
-			taskName = '热点新闻推送';
+			const topN =
+				topNMatch?.[1] != null
+					? Math.min(50, Math.max(1, parseInt(topNMatch[1], 10)))
+					: 15;
+			finalMessage = JSON.stringify({ type: "fetch-news", options: { topN } });
+			taskName = "热点新闻推送";
 			console.log(`[定时] → 创建新闻推送任务，topN=${topN}`);
 		} else {
 			finalMessage = taskMessage.trim();
@@ -2447,17 +2338,18 @@ async function handleInner(
 			name: taskName,
 			enabled: true,
 			deleteAfterRun: true,
-			schedule: { kind: 'at', at: runAt.toISOString() },
+			schedule: { kind: "at", at: runAt.toISOString() },
 			message: finalMessage,
-			platform: 'feishu',
+			platform: "feishu",
 			webhook: chatId,
 		});
 		
-		const timeStr = runAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+		const timeStr = runAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
 		const content = isNewsRequest ? `今日热点新闻（前 ${JSON.parse(finalMessage).options.topN} 条）` : taskMessage;
-		await replyCard(messageId, `✅ 已设置好，大约在 **${timeStr}** 通过飞书提醒你：\n\n${content}\n\n发送 \`/cron\` 可查看所有任务。`, { title: '⏰ 定时任务已创建', color: 'green' });
+		await replyCard(messageId, `✅ 已设置好，大约在 **${timeStr}** 通过飞书提醒你：\n\n${content}\n\n发送 \`/cron\` 可查看所有任务。`, { title: "⏰ 定时任务已创建", color: "green" });
 		console.log(`[任务] 服务器端创建: ${task.name} @ ${timeStr}`);
 		return;
+		}
 	}
 	
 	// 路由解析（传入 intent 避免重复检测）
@@ -2642,6 +2534,13 @@ async function handleInner(
 		}
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
+		
+		// 手动终止的任务不需要发送错误消息（用户已经收到"已终止"的回复）
+		if (msg === 'MANUALLY_STOPPED') {
+			console.log(`[手动终止] workspace=${workspace} messageId=${messageId}`);
+			return;
+		}
+		
 		console.error(`[${new Date().toISOString()}] 失败 [${label}]: ${msg}`);
 		if (err instanceof Error && err.stack) console.error(`[Stack] ${err.stack}`);
 
@@ -2792,8 +2691,39 @@ scheduler.start().catch((e) => console.warn(`[scheduler] start failed: ${e}`));
 
 heartbeat.start();
 
-ws.start({ eventDispatcher: dispatcher });
-console.log("飞书长连接已启动，等待消息...");
+// 使用重连管理器启动飞书连接
+const reconnectManager = new ReconnectManager({
+	maxRetries: 10,
+	backoffDelays: [1, 2, 5, 10, 30, 60], // 秒
+});
+
+await reconnectManager.connectWithRetry(
+	async () => {
+		// 飞书 SDK 的 start() 是同步的，包装成 Promise
+		return new Promise<void>((resolve, reject) => {
+			try {
+				ws.start({ eventDispatcher: dispatcher });
+				// 假设启动成功（飞书 SDK 不抛错）
+				resolve();
+			} catch (err) {
+				reject(err);
+			}
+		});
+	},
+	{
+		onSuccess: () => {
+			console.log("✅ 飞书长连接已启动，等待消息...");
+		},
+		onFailure: (err) => {
+			console.error("❌ 飞书连接失败，已重试 10 次:", err.message);
+			console.error("请检查网络连接和飞书凭据（APP_ID / APP_SECRET）");
+			process.exit(1);
+		},
+		onRetry: (attempt, delay, error) => {
+			console.warn(`[飞书] 第 ${attempt} 次连接失败，${delay}秒后重试...`);
+		},
+	}
+);
 
 // ── 启动自检（.cursor/BOOT.md）───────────────────────
 setTimeout(async () => {
@@ -2803,24 +2733,36 @@ setTimeout(async () => {
 		const content = readFileSync(bootPath, "utf-8").trim();
 		if (!content) return;
 
-		console.log("[启动] 检测到 .cursor/BOOT.md，执行启动自检...");
+	console.log("[启动] 检测到 .cursor/BOOT.md，执行启动自检...");
 
-		const bootPrompt = [
-			"你正在执行启动自检。严格按以下清单执行：",
-			"",
-			content,
-			"",
-			"如果无事可做，回复 'HEARTBEAT_OK'。",
-		].join("\n");
+	const bootPrompt = [
+		"你正在执行启动自检。严格按以下清单执行：",
+		"",
+		content,
+		"",
+		"**输出要求**：",
+		"- 如果一切正常，只回复 'HEARTBEAT_OK'",
+		"- 如果发现问题，必须在问题前加上 ⚠️ 或 ❌ 标识",
+		"- 需要关注的配置项用 🔔 标识",
+		"- 格式示例：",
+		"  ✅ 记忆系统：正常",
+		"  ⚠️ 定时任务：发现 2 个配置错误",
+		"  ❌ .env 配置：缺少 VOLC_EMBEDDING_API_KEY",
+	].join("\n");
 
-		const { result, quotaWarning } = await runAgent(memoryWorkspace, bootPrompt);
-		const trimmed = result.trim();
-		const finalResult = quotaWarning ? `${quotaWarning}\n\n---\n\n${trimmed}` : trimmed;
+	const { result, quotaWarning } = await runAgent(memoryWorkspace, bootPrompt);
+	const trimmed = result.trim();
+	const finalResult = quotaWarning ? `${quotaWarning}\n\n---\n\n${trimmed}` : trimmed;
 
-		// 如果有需要推送的内容且有活跃会话
-		if (finalResult && !/^(无输出|HEARTBEAT_OK)$/i.test(trimmed) && lastActiveChatId) {
-			await sendCard(lastActiveChatId, finalResult, { title: "🚀 启动自检", color: "wathet" });
-		}
+	// 如果有需要推送的内容且有活跃会话
+	if (finalResult && !/^(无输出|HEARTBEAT_OK)$/i.test(trimmed) && lastActiveChatId) {
+		// 根据结果内容判断严重程度
+		const hasError = /[❌⚠️🔔]/.test(trimmed);
+		const color = hasError ? "red" : "wathet";
+		const title = hasError ? "⚠️ 启动自检 - 发现问题" : "✅ 启动自检";
+		
+		await sendCard(lastActiveChatId, finalResult, { title, color });
+	}
 		console.log("[启动] .cursor/BOOT.md 自检完成");
 	} catch (e) {
 		console.warn(`[启动] .cursor/BOOT.md 执行失败: ${e}`);

@@ -22,10 +22,13 @@ const DINGTALK_MAX = 20 * 1024;
 export function groupByPlatform(items: NewsItem[]): Record<string, NewsItem[]> {
   const grouped: Record<string, NewsItem[]> = {};
   for (const item of items) {
-    if (!grouped[item.platform]) {
-      grouped[item.platform] = [];
+    const plat = item.platform;
+    let bucket = grouped[plat];
+    if (!bucket) {
+      bucket = [];
+      grouped[plat] = bucket;
     }
-    grouped[item.platform].push(item);
+    bucket.push(item);
   }
   return grouped;
 }
@@ -163,6 +166,7 @@ export function formatNewsCard(
 
   for (const platformName of platformsToShow) {
     const news = grouped[platformName];
+    if (!news || news.length === 0) continue;
     // 每个平台的最大条数：优先使用 platformMaxItems，否则用 maxItemsPerPlatform
     const maxItems = config.platformMaxItems?.[platformName] ?? config.maxItemsPerPlatform;
     

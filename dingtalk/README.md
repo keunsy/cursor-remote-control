@@ -390,7 +390,7 @@ bash service.sh logs       # 查看实时日志
 A: 不需要。运行 `agent login` 登录后会自动使用登录凭据。
 
 **Q: 为什么提示配额用完？**  
-A: 默认 `opus-4.6-thinking` 消耗配额大，建议改用 `auto` 或 `sonnet-4`。
+A: 默认 `opus-4.6`。如果配额用尽，可切换：`/模型 auto`（省配额）或 `/模型 opust`（深度推理）。
 
 **Q: 钉钉和飞书可以同时运行吗？**  
 A: 可以！两个服务独立运行，互不干扰，共享 `projects.json` 配置。

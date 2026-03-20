@@ -1,0 +1,30 @@
+{
+  "defaultModel": "opus-4.6",
+  "blacklistResetCron": "0 0 1 * *",
+  "models": [
+    {
+      "id": "opus-4.6",
+      "name": "Claude Opus 4.6",
+      "description": "最强模型（推荐）",
+      "aliases": ["opus-4.6", "opus", "opus46", "opust"],
+      "fallbackChain": ["opus-4.6-thinking", "auto"],
+      "recommended": true
+    },
+    {
+      "id": "opus-4.6-thinking",
+      "name": "Claude Opus 4.6 (Thinking)",
+      "description": "长思考链版本",
+      "aliases": ["opus-4.6-thinking", "thinking", "opusthinking"],
+      "fallbackChain": ["auto"],
+      "note": "适合复杂推理任务"
+    },
+    {
+      "id": "auto",
+      "name": "Auto",
+      "description": "自动选择（兜底模型）",
+      "aliases": ["auto"],
+      "note": "永不加入黑名单",
+      "protected": true
+    }
+  ]
+}

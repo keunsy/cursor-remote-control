@@ -54,6 +54,8 @@ export interface NewsSourcesConfig {
     includeDescription: boolean;
     descriptionMaxLength: number;
     includeUrl: boolean;
+    /** 使用增强样式（新样式）；false 为旧样式 */
+    useEnhancedStyle?: boolean;
     platformOrder?: string[]; // 平台显示顺序
     platformMaxItems?: Record<string, number>; // 每个平台的最大条数
   };

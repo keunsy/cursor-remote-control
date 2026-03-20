@@ -123,8 +123,12 @@ export class NewsnowSource implements NewsSource {
         title: item.title || item.id || '',
         url: item.url || '',
         rank: idx + 1,
-        hotValue: item.extra?.value || item.extra?.info || '',
-        description: item.desc || item.extra?.hover || '',
+        hotValue:
+          item.extra?.value ||
+          (item.extra as { info?: string } | undefined)?.info ||
+          '',
+        description:
+          item.desc || (item.extra as { hover?: string } | undefined)?.hover || '',
         timestamp: Date.now(),
       }));
 
@@ -175,12 +179,11 @@ export class NewsnowSource implements NewsSource {
       needTranslate.map((item) => this.translateText(item.description!))
     );
 
-    for (let i = 0; i < needTranslate.length; i++) {
+    for (let i = 0; i < results.length; i++) {
       const result = results[i];
-      if (result.status === 'fulfilled' && result.value) {
-        needTranslate[i].description = result.value;
-      }
-      // 翻译失败则保持原文
+      if (!result || result.status !== 'fulfilled' || !result.value) continue;
+      const target = needTranslate[i];
+      if (target) target.description = result.value;
     }
   }
 

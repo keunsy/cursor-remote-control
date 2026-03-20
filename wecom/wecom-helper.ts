@@ -201,9 +201,9 @@ export function buildToolSummary(tools: string[]): string {
 	for (const tool of tools) {
 		const match = tool.match(/^([🔧📖✏️⚡🔍📂🔎🌐🗑️📓🔌🤖]+)\s+(.+)/);
 		if (!match) continue;
-		
 		const emoji = match[1];
 		const detail = match[2];
+		if (emoji === undefined || detail === undefined) continue;
 		
 		if (!groups.has(emoji)) {
 			groups.set(emoji, { emoji, items: [] });
@@ -239,25 +239,38 @@ export function detectRouteIntent(text: string, projectNames: string[]): RouteIn
 	const pathSymbolMatch = raw.match(/^[#@]((?:~?\/|~).+?)\s+(.+)$/);
 	if (pathSymbolMatch) {
 		const rawPath = pathSymbolMatch[1];
+		const rest = pathSymbolMatch[2];
+		if (rawPath === undefined || rest === undefined) {
+			return { type: 'none', cleanedText: text };
+		}
 		const absolutePath = rawPath.startsWith('~') 
 			? rawPath.replace(/^~/, process.env.HOME || '~')
 			: rawPath;
-		return { type: 'temp', path: absolutePath, cleanedText: pathSymbolMatch[2].trim() };
+		return { type: 'temp', path: absolutePath, cleanedText: rest.trim() };
 	}
 	
 	// 1. 简化符号
 	const symbolMatch = raw.match(new RegExp(`^[#@](${projectPattern})\\s+(.+)`, 'i'));
 	if (symbolMatch) {
-		const project = symbolMatch[1].toLowerCase();
-		return { type: 'temp', project, cleanedText: symbolMatch[2].trim() };
+		const symProj = symbolMatch[1];
+		const symRest = symbolMatch[2];
+		if (symProj === undefined || symRest === undefined) {
+			return { type: 'none', cleanedText: text };
+		}
+		const project = symProj.toLowerCase();
+		return { type: 'temp', project, cleanedText: symRest.trim() };
 	}
 	
 	// 2a. 切换到任意路径
 	const pathSwitchMatch = raw.match(/^(?:切换到|切到|切换|进入|打开)(?:路径)?\s+([~\/].+?)\s*$/i);
 	if (pathSwitchMatch) {
-		const absolutePath = pathSwitchMatch[1].startsWith('~')
-			? pathSwitchMatch[1].replace(/^~/, process.env.HOME || '~')
-			: pathSwitchMatch[1];
+		const p1 = pathSwitchMatch[1];
+		if (p1 === undefined) {
+			return { type: 'none', cleanedText: text };
+		}
+		const absolutePath = p1.startsWith('~')
+			? p1.replace(/^~/, process.env.HOME || '~')
+			: p1;
 		return { type: 'switch', path: absolutePath, cleanedText: '' };
 	}
 	
@@ -269,7 +282,9 @@ export function detectRouteIntent(text: string, projectNames: string[]): RouteIn
 	for (const pattern of switchPatterns) {
 		const match = raw.match(pattern);
 		if (match) {
-			const project = match[1].toLowerCase();
+			const m1 = match[1];
+			if (m1 === undefined) continue;
+			const project = m1.toLowerCase();
 			return { type: 'switch', project, cleanedText: '' };
 		}
 	}
@@ -283,7 +298,9 @@ export function detectRouteIntent(text: string, projectNames: string[]): RouteIn
 	for (const pattern of tempPatterns) {
 		const match = raw.match(pattern);
 		if (match) {
-			const project = match[1].toLowerCase();
+			const m1 = match[1];
+			if (m1 === undefined) continue;
+			const project = m1.toLowerCase();
 			return { type: 'temp', project, cleanedText: text };
 		}
 	}
@@ -302,13 +319,25 @@ export function resolveWorkspace(
 	
 	// 1. 传统路由
 	const slashMatch = text.match(/^\/(\w+)\s+(.+)$/s);
-	if (slashMatch && projects[slashMatch[1].toLowerCase()]) {
+	const slashProj = slashMatch?.[1];
+	const slashMsg = slashMatch?.[2];
+	if (slashProj && slashMsg && projects[slashProj.toLowerCase()]) {
+		const key = slashProj.toLowerCase();
+		const projEntry = projects[key];
+		if (!projEntry) {
+			return {
+				workspace: projects[defaultProject]?.path || ROOT,
+				message: text.trim(),
+				label: defaultProject,
+				intent: intent || { type: 'none', cleanedText: text.trim() },
+			};
+		}
 		return {
-			workspace: projects[slashMatch[1].toLowerCase()].path,
-			message: slashMatch[2].trim(),
-			label: slashMatch[1].toLowerCase(),
+			workspace: projEntry.path,
+			message: slashMsg.trim(),
+			label: key,
 			routeChanged: true,
-			intent: intent || { type: 'none', cleanedText: slashMatch[2].trim() },
+			intent: intent || { type: 'none', cleanedText: slashMsg.trim() },
 		};
 	}
 	

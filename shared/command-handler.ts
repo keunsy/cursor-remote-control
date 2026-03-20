@@ -11,10 +11,12 @@ import { execFileSync } from "node:child_process";
 import type { Scheduler } from "./scheduler.js";
 import type { MemoryManager } from "./memory.js";
 import type { HeartbeatRunner } from "./heartbeat.js";
+import type { AgentExecutor } from "./agent-executor.js";
 import { FeilianController, type OperationResult } from "./feilian-control.js";
 import { fetchNews } from "./news-fetcher.js";
 import { getHealthStatus } from "./news-sources/monitoring.js";
 import { humanizeCronInChinese } from "cron-chinese";
+import { findModel, formatModelList, getModelChain, getBlacklistStatus, resetBlacklist } from "./models-config.js";
 
 const HOME = process.env.HOME!;
 
@@ -56,6 +58,7 @@ export interface CommandContext {
 	getActiveSessionId: (workspace: string) => string | null;
 	switchToSession: (workspace: string, sessionId: string) => boolean;
 	rootDir: string;
+	agentExecutor?: AgentExecutor; // 统一 Agent 执行器（可选，用于新架构）
 }
 
 // ──────────────────────────────────────────────────
@@ -111,7 +114,9 @@ export class CommandHandler {
 			"- `/状态` `/status` — 查看服务状态",
 			"- `/项目` `/project` — 列出所有项目",
 			"- `/新对话` `/new` — 重置当前会话",
+			"- `/新对话 --all` — 批量重置所有项目的会话",
 			"- `/终止 [项目名]` `/stop` — 终止正在执行的任务",
+			"- `/终止 --all` — 批量终止所有运行中的任务",
 			"",
 			"**热点 / 新闻**",
 			"- `/新闻` `/news` — **立即推送**今日热点（直接发 `/新闻`）；定时例：`/新闻 每天9点 推送10条`",
@@ -122,51 +127,56 @@ export class CommandHandler {
 			"- `/会话` `/sessions` — 查看最近会话列表",
 			"- `/会话 编号` — 切换到指定会话",
 			"",
-			"**模型与密钥**",
-			"- `/模型` `/model` — 查看/切换 AI 模型",
-			"- `/密钥` `/apikey` — 查看/更换 API Key（仅私聊）",
-			"  用法：`/密钥 key_xxx...`",
-			"",
+		"**模型与密钥**",
+		"- `/模型` `/model` — 查看/切换 AI 模型（支持缩略名：`/模型 opus`）",
+		"- `/黑名单` `/配额` — 查看配额用尽的模型（每月1号自动重置）",
+		"- `/黑名单 重置` — 手动重置黑名单",
+		"- `/密钥` `/apikey` — 查看/更换 API Key（仅私聊）",
+		"  用法：`/密钥 key_xxx...`",
+		"",
 			"**记忆系统**",
 			"- `/记忆` `/memory` — 查看记忆状态",
 			"- `/记忆 关键词` — 语义搜索记忆",
 			"- `/记录 内容` — 写入今日日记",
-			"- `/整理记忆` `/reindex` — 重建记忆索引",
-			"",
-		];
+		"- `/整理记忆` `/reindex` — 重建记忆索引",
+		"",
+	];
 
-		// 企业微信和飞书支持文件发送
-		if (this.ctx.platform !== "dingtalk") {
-			helpText.push(
-				"**文件操作**",
-				"- `/apk` `/sendapk` — 快速发送 Android APK（需配置 Android 项目）",
-				"- `/发送文件 路径` — 发送任意本地文件",
-				"- 示例: `/发送文件 ~/document.pdf`",
-				""
-			);
-		}
+	// 文件操作（所有平台支持）
+	helpText.push(
+		"**文件操作**",
+		"- `/apk` `/sendapk` — 快速发送 Android APK（需配置 Android 项目）",
+		"- `/发送文件 路径` — 发送任意本地文件",
+		"- 示例: `/发送文件 ~/document.pdf`",
+		""
+	);
 
-		helpText.push(
-			"**定时任务**",
-			"- `/任务` `/cron` — 查看/暂停/恢复/删除定时任务",
-			"- 热点定时见上文 **热点 / 新闻**；其它定时也可说「每天早上9点提醒我XX」",
-			"",
-			"**心跳系统**",
-			"- `/心跳` `/heartbeat` — 查看心跳状态",
-			"- `/心跳 开启/关闭/执行`",
-			"- `/心跳 间隔 分钟数`",
-			"",
-			"**飞连 VPN 控制**",
-			"- `/飞连` `/vpn` — 切换 VPN 状态",
-			"- `/飞连 开` — 确保 VPN 连接",
-			"- `/飞连 关` — 断开 VPN",
-			"- `/飞连 状态` — 查询连接状态",
-			"",
-			"**项目路由**",
-			"· 对话切换：说「切到 remote」等可持久切换",
-			"· 前缀指定：`项目名:消息` 或 `#项目名 消息`",
-			`· 可用项目：${projects}`,
-		);
+	// 钉钉特殊提示
+	if (this.ctx.platform === "dingtalk") {
+		helpText.push("  ⚠️  钉钉文件发送为实验性功能，如遇问题请反馈", "");
+	}
+
+	helpText.push(
+		"**定时任务**",
+		"- `/任务` `/cron` — 查看/暂停/恢复/删除定时任务",
+		"- 热点定时见上文 **热点 / 新闻**；其它定时也可说「每天早上9点提醒我XX」",
+		"",
+		"**心跳系统**",
+		"- `/心跳` `/heartbeat` — 查看心跳状态",
+		"- `/心跳 开启/关闭/执行`",
+		"- `/心跳 间隔 分钟数`",
+		"",
+		"**飞连 VPN 控制**",
+		"- `/飞连` `/vpn` — 切换 VPN 状态",
+		"- `/飞连 开` — 确保 VPN 连接",
+		"- `/飞连 关` — 断开 VPN",
+		"- `/飞连 状态` — 查询连接状态",
+		"",
+		"**项目路由**",
+		"· 对话切换：说「切到 remote」等可持久切换",
+		"· 前缀指定：`项目名:消息` 或 `#项目名 消息`",
+		`· 可用项目：${projects}`,
+	);
 
 		await this.adapter.reply(`📖 **使用帮助**\n\n${helpText.join("\n")}`);
 	}
@@ -176,7 +186,7 @@ export class CommandHandler {
 	// ──────────────────────────────────────────────────
 
 	async handleStatus(): Promise<void> {
-		const { config, projectsConfig, memoryWorkspace, memory, scheduler, heartbeat, activeAgents, sessionsStore } = this.ctx;
+		const { config, projectsConfig, memoryWorkspace, memory, scheduler, heartbeat, activeAgents, sessionsStore, agentExecutor } = this.ctx;
 
 		// 平台特定的配置预览
 		let credentialPreview = "";
@@ -228,7 +238,7 @@ export class CommandHandler {
 			`**记忆：** ${memStatus}`,
 			`**调度：** ${schedText}`,
 			`**心跳：** ${hbText}`,
-			`**活跃任务：** ${activeAgents.size} 个运行中`,
+			`**活跃任务：** ${agentExecutor ? agentExecutor.getActiveAgents().length : activeAgents.size} 个运行中`,
 			`**工作区：** ${memoryWorkspace}`,
 			"",
 			"**项目路由：**",
@@ -245,18 +255,71 @@ export class CommandHandler {
 	// /新对话 - 重置会话
 	// ──────────────────────────────────────────────────
 
-	async handleNew(): Promise<void> {
+	async handleNew(args?: string): Promise<void> {
+		const { projectsConfig, activeAgents, archiveAndResetSession, getSessionHistory, agentExecutor } = this.ctx;
+
+		const trimmed = args?.trim();
+		if (trimmed && trimmed !== "--all") {
+			await this.adapter.reply(
+				"❌ **未知参数**\n\n用法：\n- `/新对话` — 重置当前项目会话\n- `/新对话 --all` — 批量重置所有项目会话"
+			);
+			return;
+		}
+		
+		// 批量重置所有项目
+		if (trimmed === '--all') {
+			const projects = Object.entries(projectsConfig.projects);
+			
+			// 检查是否有任何运行中的任务
+			const activeList = agentExecutor ? agentExecutor.getActiveAgents() : Array.from(activeAgents.values());
+			const runningProjects: string[] = [];
+			
+			for (const agent of activeList) {
+				const projectName = Object.entries(projectsConfig.projects)
+					.find(([, v]: [string, any]) => v.path === agent.workspace)?.[0];
+				if (projectName) {
+					runningProjects.push(projectName);
+				}
+			}
+			
+			if (runningProjects.length > 0) {
+				await this.adapter.reply(
+					`⚠️ **以下项目有任务正在运行**\n\n${runningProjects.map(p => `- ${p}`).join('\n')}\n\n` +
+					`请先使用 \`/终止 --all\` 命令停止所有任务，再批量重置会话。`
+				);
+				return;
+			}
+			
+			const results: string[] = [];
+			for (const [projectName, projectInfo] of projects as [string, any][]) {
+				const workspace = projectInfo.path;
+				archiveAndResetSession(workspace);
+				const historyCount = getSessionHistory(workspace).length;
+				results.push(`✅ **${projectName}**: 会话已重置${historyCount > 0 ? ` (历史 ${historyCount} 个)` : ''}`);
+			}
+			
+			await this.adapter.reply(
+				`🆕 **批量重置完成**\n\n${results.join('\n')}\n\n` +
+				`共重置 ${projects.length} 个项目的会话。`
+			);
+			return;
+		}
+		
+		// 单个项目重置（原有逻辑）
 		const currentProject = this.ctx.getCurrentProject(this.ctx.defaultWorkspace) || this.ctx.projectsConfig.default_project;
 		const workspace = this.ctx.projectsConfig.projects[currentProject]?.path || this.ctx.defaultWorkspace;
 
 		// Bug 修复: 检查是否有正在运行的任务
-		for (const [lk, agent] of this.ctx.activeAgents.entries()) {
-			if (agent.workspace === workspace) {
-				await this.adapter.reply(
-					`⚠️ **当前项目有任务正在运行**\n\n请先使用 \`/终止\` 命令停止任务，再开始新对话。\n\n或者等待当前任务完成后再发送 \`/新对话\`。`
-				);
-				return;
-			}
+		const activeList = agentExecutor ? agentExecutor.getActiveAgents() : Array.from(activeAgents.entries()).map(([lk, agent]) => ({ 
+			key: lk, workspace: agent.workspace, pid: agent.pid, runningTime: 0 
+		}));
+		
+		const hasRunning = activeList.some(agent => agent.workspace === workspace);
+		if (hasRunning) {
+			await this.adapter.reply(
+				`⚠️ **当前项目有任务正在运行**\n\n请先使用 \`/终止\` 命令停止任务，再开始新对话。\n\n或者等待当前任务完成后再发送 \`/新对话\`。`
+			);
+			return;
 		}
 
 		this.ctx.archiveAndResetSession(workspace);
@@ -287,7 +350,7 @@ export class CommandHandler {
 	// ──────────────────────────────────────────────────
 
 	async handleStop(projectHint?: string): Promise<void> {
-		const { projectsConfig, activeAgents, busySessions, sessionsStore } = this.ctx;
+		const { projectsConfig, activeAgents, busySessions, sessionsStore, agentExecutor } = this.ctx;
 
 		const projectNameForWorkspace = (wsPath: string): string | null => {
 			for (const [name, info] of Object.entries(projectsConfig.projects) as [string, any][]) {
@@ -303,7 +366,7 @@ export class CommandHandler {
 			}
 			if (lockKey.startsWith("session:")) {
 				const sessionId = lockKey.slice("session:".length);
-				for (const [workspace, wsData] of sessionsStore.entries() as [string, any][]) {
+				for (const [workspace, wsData] of Array.from(sessionsStore.entries()) as [string, any][]) {
 					if (wsData?.active === sessionId) {
 						return projectNameForWorkspace(workspace);
 					}
@@ -315,6 +378,44 @@ export class CommandHandler {
 			return null;
 		};
 
+		// 批量终止所有任务
+		if (projectHint?.trim() === '--all') {
+			const activeList = agentExecutor ? agentExecutor.getActiveAgents() : Array.from(activeAgents.values());
+			if (activeList.length === 0) {
+				await this.adapter.reply("当前没有正在运行的任务。");
+				return;
+			}
+			
+			const killedTasks: string[] = [];
+			if (agentExecutor) {
+				// 使用新的 executor
+				for (const agent of activeList) {
+					const projectName = projectNameForWorkspace(agent.workspace) || "未知项目";
+					killedTasks.push(`✅ **${projectName}**: 已终止 (PID: ${agent.pid}, 运行 ${agent.runningTime}s)`);
+					console.log(`[指令] 批量终止 agent pid=${agent.pid} project=${projectName}`);
+				}
+				agentExecutor.killAll();
+				activeAgents.clear();
+				busySessions.clear();
+			} else {
+				// 兼容旧模式
+				for (const [lk, agent] of activeAgents.entries()) {
+					const projectName = getProjectNameByLockKey(lk) || "未知项目";
+					agent.kill();
+					activeAgents.delete(lk);
+					busySessions.delete(lk);
+					killedTasks.push(`✅ **${projectName}**: 已终止 (PID: ${agent.pid})`);
+					console.log(`[指令] 批量终止 agent pid=${agent.pid} project=${projectName} session=${lk}`);
+				}
+			}
+			
+			await this.adapter.reply(
+				`🛑 **批量终止完成**\n\n${killedTasks.join('\n')}\n\n` +
+				`共终止 ${killedTasks.length} 个任务。`
+			);
+			return;
+		}
+
 		if (projectHint) {
 			if (!projectsConfig.projects[projectHint]) {
 				const available = Object.keys(projectsConfig.projects).map(k => `\`${k}\``).join("、");
@@ -323,117 +424,226 @@ export class CommandHandler {
 			}
 			const wsPath = projectsConfig.projects[projectHint].path;
 			
-			// Bug 修复: 不依赖 getLockKey，直接通过 workspace 匹配（因为 lockKey 可能在运行时变化）
-			// 终止所有匹配的任务（理论上应该只有一个，但为了健壮性处理多个）
-			const matchedTasks: Array<{ lockKey: string; agent: any }> = [];
-			for (const [lk, agent] of activeAgents.entries()) {
-				if (agent.workspace === wsPath) {
-					matchedTasks.push({ lockKey: lk, agent });
+			if (agentExecutor) {
+				// 使用新的 executor
+				const killed = agentExecutor.killAgent(wsPath);
+				if (killed) {
+					// 清理关联状态
+					activeAgents.clear();
+					busySessions.clear();
+					await this.adapter.reply(`✅ 已终止项目 **${projectHint}** 的任务。\n\n发送新消息将继续在当前会话中对话。`);
+				} else {
+					await this.adapter.reply(`项目 **${projectHint}** 没有正在运行的任务。`);
 				}
-			}
-			
-			if (matchedTasks.length > 0) {
-				for (const { lockKey: lk, agent } of matchedTasks) {
-					agent.kill();
-					activeAgents.delete(lk);
-					busySessions.delete(lk);
-					console.log(`[指令] 终止 agent pid=${agent.pid} project=${projectHint} session=${lk}`);
-				}
-				const countText = matchedTasks.length > 1 ? `${matchedTasks.length} 个任务` : "任务";
-				await this.adapter.reply(`已终止项目 **${projectHint}** 的${countText}。\n\n发送新消息将继续在当前会话中对话。`);
 			} else {
-				await this.adapter.reply(`项目 **${projectHint}** 没有正在运行的任务。`);
+				// 兼容旧模式
+				const matchedTasks: Array<{ lockKey: string; agent: any }> = [];
+				for (const [lk, agent] of activeAgents.entries()) {
+					if (agent.workspace === wsPath) {
+						matchedTasks.push({ lockKey: lk, agent });
+					}
+				}
+				
+				if (matchedTasks.length > 0) {
+					for (const { lockKey: lk, agent } of matchedTasks) {
+						agent.kill();
+						activeAgents.delete(lk);
+						busySessions.delete(lk);
+						console.log(`[指令] 终止 agent pid=${agent.pid} project=${projectHint} session=${lk}`);
+					}
+					const countText = matchedTasks.length > 1 ? `${matchedTasks.length} 个任务` : "任务";
+					await this.adapter.reply(`已终止项目 **${projectHint}** 的${countText}。\n\n发送新消息将继续在当前会话中对话。`);
+				} else {
+					await this.adapter.reply(`项目 **${projectHint}** 没有正在运行的任务。`);
+				}
 			}
 			return;
 		}
 
-		if (activeAgents.size === 0) {
+		// 获取活跃任务列表
+		const activeList = agentExecutor ? agentExecutor.getActiveAgents() : Array.from(activeAgents.entries()).map(([lk, agent]) => ({ 
+			key: lk, workspace: agent.workspace, pid: agent.pid, runningTime: 0 
+		}));
+		
+		if (activeList.length === 0) {
 			await this.adapter.reply("当前没有正在运行的任务。");
 			return;
 		}
 
-		if (activeAgents.size === 1) {
-			const [lk, agent] = [...activeAgents][0];
-			const projectName = getProjectNameByLockKey(lk) || "当前项目";
-			agent.kill();
-			activeAgents.delete(lk);
-			busySessions.delete(lk);
-			console.log(`[指令] 终止 agent pid=${agent.pid} session=${lk}`);
+		if (activeList.length === 1) {
+			const agent = activeList[0]!;
+			const projectName = agentExecutor 
+				? projectNameForWorkspace(agent.workspace) || "当前项目"
+				: getProjectNameByLockKey((agent as { key?: string }).key ?? "") || "当前项目";
+			
+			if (agentExecutor) {
+				agentExecutor.killAgent(agent.workspace);
+				activeAgents.clear();
+				busySessions.clear();
+			} else {
+				const firstPair = [...activeAgents][0];
+				if (!firstPair) {
+					await this.adapter.reply("当前没有正在运行的任务。");
+					return;
+				}
+				const [lk, a] = firstPair;
+				a.kill();
+				activeAgents.delete(lk);
+				busySessions.delete(lk);
+			}
+			console.log(`[指令] 终止 agent pid=${agent.pid}`);
 			await this.adapter.reply(`✅ 已终止 **${projectName}** 的任务。`);
 			return;
 		}
 
-		const tasks = [...activeAgents.entries()].map(([lk, agent], i) => {
-			const projectName = getProjectNameByLockKey(lk) || "未知项目";
-			return `${i + 1}. **${projectName}**\n   会话: \`${lk.slice(0, 20)}...\`\n   PID: ${agent.pid}`;
+		const tasks = activeList.map((agent, i) => {
+			const projectName = agentExecutor
+				? projectNameForWorkspace(agent.workspace) || "未知项目"
+				: getProjectNameByLockKey((agent as any).key) || "未知项目";
+			const timeHint = agentExecutor ? `运行 ${agent.runningTime}s` : "";
+			return `${i + 1}. **${projectName}**\n   PID: ${agent.pid} ${timeHint}`;
 		});
 
 		await this.adapter.reply(
-			`**当前运行中（${activeAgents.size} 个）**\n\n${tasks.join("\n\n")}\n\n> 发送 \`/终止 项目名\` 可终止指定项目的任务`
+			`**当前运行中（${activeList.length} 个）**\n\n${tasks.join("\n\n")}\n\n> 发送 \`/终止 项目名\` 可终止指定项目的任务\n> 发送 \`/终止 --all\` 可终止所有任务`
 		);
 	}
 
 	// ──────────────────────────────────────────────────
-	// /模型 - 切换 AI 模型
+	// /模型 - 切换 AI 模型（集成模型配置库）
 	// ──────────────────────────────────────────────────
 
 	async handleModel(args: string): Promise<void> {
-		const models = [
-			{ name: "opus-4.6-thinking", desc: "Claude Opus 4.6 (thinking)" },
-			{ name: "opus-4", desc: "Claude Opus 4" },
-			{ name: "sonnet-4", desc: "Claude Sonnet 4" },
-			{ name: "o1-mini", desc: "GPT-4 O1 Mini" },
-			{ name: "o1", desc: "GPT-4 O1" },
-			{ name: "gpt-4o", desc: "GPT-4 Turbo" },
-			{ name: "auto", desc: "Auto（推荐，省配额）" },
-		];
-
+		// 无参数：显示模型列表
 		if (!args) {
-			const lines = models.map((m, i) => {
-				const isCurrent = this.ctx.config.CURSOR_MODEL === m.name;
-				return isCurrent ? `**${i + 1}. ${m.desc}** ✅\n   \`${m.name}\`` : `${i + 1}. ${m.desc}\n   \`${m.name}\``;
-			});
-			lines.push("", "**用法：**", "· `/模型 编号` — 切换到指定模型", "· `/模型 名称` — 切换到指定模型（如 `/模型 auto`）");
-			await this.adapter.reply(`**可用模型（共 ${models.length} 个）**\n\n${lines.join("\n")}`);
+			const list = formatModelList(this.ctx.config.CURSOR_MODEL);
+			await this.adapter.reply(list);
 			return;
 		}
 
-		const num = Number.parseInt(args, 10);
-		let targetModel: string | null = null;
-
-		if (!Number.isNaN(num) && num >= 1 && num <= models.length) {
-			targetModel = models[num - 1].name;
-		} else {
-			const found = models.find((m) => m.name.toLowerCase() === args.toLowerCase());
-			if (found) targetModel = found.name;
-		}
-
+		// 查找目标模型（支持编号、ID、别名）
+		const targetModel = findModel(args);
 		if (!targetModel) {
-			await this.adapter.reply("❌ 无效的模型编号或名称。\n\n发送 `/模型` 查看可用模型列表。");
+			await this.adapter.reply(`❌ 找不到模型：\`${args}\`\n\n发送 \`/模型\` 查看可用模型列表。`);
 			return;
 		}
 
-	this.ctx.config.CURSOR_MODEL = targetModel;
-	const envPath = resolve(this.ctx.rootDir, this.ctx.platform, ".env");
-	try {
-		const raw = readFileSync(envPath, "utf-8");
-		const lines = raw.split("\n");
-		let found = false;
-		const updated = lines.map((line) => {
-			if (line.trim().startsWith("CURSOR_MODEL=") || line.trim().startsWith("#CURSOR_MODEL=")) {
-				found = true;
-				return `CURSOR_MODEL=${targetModel}`;
+		// 更新内存中的配置
+		const prevModel = this.ctx.config.CURSOR_MODEL;
+		this.ctx.config.CURSOR_MODEL = targetModel.id;
+
+		// 持久化到全局配置文件 config/model-config.json
+		const configPath = resolve(this.ctx.rootDir, "config", "model-config.json");
+		try {
+			const fs = await import("node:fs/promises");
+			
+			// 读取配置文件
+			const raw = await fs.readFile(configPath, "utf-8");
+			const config = JSON.parse(raw);
+			
+			// 更新 defaultModel
+			config.defaultModel = targetModel.id;
+			
+			// 写回配置文件（保持格式）
+			await fs.writeFile(configPath, JSON.stringify(config, null, 2) + '\n', "utf-8");
+			
+			console.log(`[模型切换] 全局配置已更新: ${prevModel} → ${targetModel.id}`);
+
+			// 构建回复消息
+			const chain = getModelChain(targetModel.id);
+			const fallbackInfo = chain.length > 1 
+				? `\n**Fallback 链：** ${chain.slice(1).map(m => `\`${m.id}\``).join(' → ')}`
+				: '';
+
+			// 检查是否有正在运行的 Agent（需要热重启）
+			const { activeAgents, agentExecutor } = this.ctx;
+			const activeList = agentExecutor ? agentExecutor.getActiveAgents() : Array.from(activeAgents.entries());
+			
+			if (activeList.length > 0) {
+				// 有正在运行的任务，执行热重启
+				let restartMsg = '';
+				if (agentExecutor) {
+					console.log(`[热重启] 终止所有 Agent (${activeList.length}个), model=${prevModel}`);
+					agentExecutor.killAll();
+					activeAgents.clear();
+					this.ctx.busySessions.clear();
+					restartMsg = '\n\n⚠️ **已重启正在运行的任务**（将使用新模型继续）';
+				} else {
+					for (const [lockKey, agent] of activeList as any[]) {
+						try {
+							console.log(`[热重启] 终止旧 Agent (pid=${agent.pid}), model=${prevModel}`);
+							agent.kill();
+							activeAgents.delete(lockKey);
+							this.ctx.busySessions.delete(lockKey);
+							restartMsg = '\n\n⚠️ **已重启正在运行的任务**（将使用新模型继续）';
+						} catch (err) {
+							console.error('[热重启] 终止进程失败:', err);
+						}
+					}
+				}
+				
+				await this.adapter.reply(
+					`✅ **已切换模型（全局）**\n\n` +
+					`**之前：** \`${prevModel}\`\n` +
+					`**现在：** \`${targetModel.id}\`${fallbackInfo}${restartMsg}\n\n` +
+					`✨ 已更新全局配置，三个平台（飞书/钉钉/企微）同步生效。`
+				);
+			} else {
+				// 没有运行中的任务
+				await this.adapter.reply(
+					`✅ **已切换模型（全局）**\n\n` +
+					`**之前：** \`${prevModel}\`\n` +
+					`**现在：** \`${targetModel.id}\`${fallbackInfo}\n\n` +
+					`✨ 已更新全局配置，三个平台（飞书/钉钉/企微）同步生效。`
+				);
 			}
-			return line;
-		});
-		if (!found) updated.push(`CURSOR_MODEL=${targetModel}`);
-		const fs = await import("node:fs/promises");
-		await fs.writeFile(envPath, updated.join("\n"), "utf-8");
-		await this.adapter.reply(`✅ **已切换模型**\n\n当前模型：\`${targetModel}\`\n\n新会话将使用此模型。`);
-	} catch (error) {
-		console.error("[模型切换] 写入 .env 失败", error);
-		await this.adapter.reply(`❌ 切换失败\n\n${error instanceof Error ? error.message : String(error)}`);
+		} catch (error) {
+			console.error("[模型切换] 写入全局配置失败", error);
+			await this.adapter.reply(`❌ 切换失败\n\n${error instanceof Error ? error.message : String(error)}`);
+		}
 	}
+
+	// ──────────────────────────────────────────────────
+	// /黑名单 - 查看/重置模型黑名单
+	// ──────────────────────────────────────────────────
+
+	async handleBlacklist(args: string): Promise<void> {
+		const { models, nextResetDate } = getBlacklistStatus();
+
+		// 无参数：显示黑名单状态
+		if (!args) {
+			if (models.length === 0) {
+				await this.adapter.reply(
+					`**📊 模型配额状态**\n\n` +
+					`✅ 当前所有模型均可用\n\n` +
+					`**下次重置时间：** ${nextResetDate}\n\n` +
+					`> 配额用尽的模型会被自动加入黑名单，并在每月1号重置。`
+				);
+			} else {
+				const modelList = models.map(m => `· \`${m}\``).join('\n');
+				await this.adapter.reply(
+					`**📊 模型配额状态**\n\n` +
+					`⚠️ **以下模型已配额用尽：**\n\n${modelList}\n\n` +
+					`**下次重置时间：** ${nextResetDate}\n\n` +
+					`发送消息时会自动跳过这些模型，使用 fallback 链。\n\n` +
+					`**手动重置：** 发送 \`/黑名单 重置\``
+				);
+			}
+			return;
+		}
+
+		// 重置命令
+		if (/^(重置|reset|清空|clear)$/i.test(args)) {
+			resetBlacklist();
+			await this.adapter.reply(
+				`✅ **已重置模型黑名单**\n\n` +
+				`所有模型已恢复可用状态。\n\n` +
+				`**下次自动重置：** ${nextResetDate}`
+			);
+			return;
+		}
+
+		await this.adapter.reply(`❌ 无效的命令。\n\n**用法：**\n· \`/黑名单\` — 查看状态\n· \`/黑名单 重置\` — 手动重置`);
 	}
 
 	// ──────────────────────────────────────────────────
@@ -586,6 +796,10 @@ export class CommandHandler {
 		const pauseMatch = subCmd.match(/^(暂停|pause|disable)\s+(\S+)/i);
 		if (pauseMatch) {
 			const idPrefix = pauseMatch[2];
+			if (!idPrefix) {
+				await this.adapter.reply("❌ 请提供任务 ID 前缀，例如：`/任务 暂停 abc123`");
+				return;
+			}
 			const job = (await this.ctx.scheduler.list(true)).find((j) => j.id.startsWith(idPrefix));
 			if (!job) {
 				await this.adapter.reply(`未找到 ID 为 \`${idPrefix}\` 的任务`);
@@ -600,6 +814,10 @@ export class CommandHandler {
 		const resumeMatch = subCmd.match(/^(恢复|resume|enable)\s+(\S+)/i);
 		if (resumeMatch) {
 			const idPrefix = resumeMatch[2];
+			if (!idPrefix) {
+				await this.adapter.reply("❌ 请提供任务 ID 前缀，例如：`/任务 恢复 abc123`");
+				return;
+			}
 			const job = (await this.ctx.scheduler.list(true)).find((j) => j.id.startsWith(idPrefix));
 			if (!job) {
 				await this.adapter.reply(`未找到 ID 为 \`${idPrefix}\` 的任务`);
@@ -614,6 +832,10 @@ export class CommandHandler {
 		const deleteMatch = subCmd.match(/^(删除|delete|remove)\s+(\S+)/i);
 		if (deleteMatch) {
 			const idPrefix = deleteMatch[2];
+			if (!idPrefix) {
+				await this.adapter.reply("❌ 请提供任务 ID 前缀，例如：`/任务 删除 abc123`");
+				return;
+			}
 			const job = (await this.ctx.scheduler.list(true)).find((j) => j.id.startsWith(idPrefix));
 			if (!job) {
 				await this.adapter.reply(`未找到 ID 为 \`${idPrefix}\` 的任务`);
@@ -628,6 +850,10 @@ export class CommandHandler {
 		const runMatch = subCmd.match(/^(执行|run|trigger)\s+(\S+)/i);
 		if (runMatch) {
 			const idPrefix = runMatch[2];
+			if (!idPrefix) {
+				await this.adapter.reply("❌ 请提供任务 ID 前缀，例如：`/任务 执行 abc123`");
+				return;
+			}
 			const job = (await this.ctx.scheduler.list(true)).find((j) => j.id.startsWith(idPrefix));
 			if (!job) {
 				await this.adapter.reply(`未找到 ID 为 \`${idPrefix}\` 的任务`);
@@ -684,20 +910,31 @@ export class CommandHandler {
 		if (subCmd === "执行" || subCmd === "运行" || subCmd === "run" || subCmd === "trigger") {
 			await this.adapter.reply("▶ **正在执行心跳检查...**");
 			const result = await this.ctx.heartbeat.runOnce();
-			await this.adapter.reply(
-				result.status === "ok" ? `✅ **检查完成**\n\n${result.report || ""}` : `❌ **检查失败**\n\n${result.error || ""}`
-			);
+			if (result.status === "skipped") {
+				await this.adapter.reply(
+					`⏭ **检查已跳过**\n\n原因：\`${result.reason}\`\n\n> 若在非活跃时段，可调整心跳活跃时间或稍后再试。`
+				);
+			} else if (result.hasContent) {
+				await this.adapter.reply(`✅ **检查完成**\n\n已尝试推送需要关注的内容（耗时 ${result.durationMs}ms）。`);
+			} else {
+				await this.adapter.reply(`✅ **检查完成**\n\n无需额外报告（约 ${result.durationMs}ms）。`);
+			}
 			return;
 		}
 
 		const intervalMatch = subCmd.match(/^(间隔|interval)\s+(\d+)/i);
 		if (intervalMatch) {
-			const minutes = Number.parseInt(intervalMatch[2], 10);
+			const minutesStr = intervalMatch[2];
+			if (!minutesStr) {
+				await this.adapter.reply("❌ 请提供分钟数，例如：`/心跳 间隔 30`");
+				return;
+			}
+			const minutes = Number.parseInt(minutesStr, 10);
 			if (minutes < 1 || minutes > 1440) {
 				await this.adapter.reply("❌ 间隔必须在 1-1440 分钟之间。");
 				return;
 			}
-			await this.ctx.heartbeat.setInterval(minutes * 60 * 1000);
+			this.ctx.heartbeat.updateConfig({ everyMs: minutes * 60 * 1000 });
 			await this.adapter.reply(`✅ **间隔已设置**\n\n新间隔: ${minutes} 分钟`);
 			return;
 		}
@@ -736,16 +973,16 @@ export class CommandHandler {
 
 		// 语义搜索
 		try {
-			const results = await memory.search(args, { limit: 5 });
+			const results = await memory.search(args, 5);
 			if (results.length === 0) {
 				await this.adapter.reply(`未找到与「${args}」相关的记忆。`);
 				return;
 			}
 
 			const lines = results.map((r, i) => {
-				const time = new Date(r.timestamp).toLocaleDateString("zh-CN");
-				const preview = r.content.slice(0, 100);
-				return `**${i + 1}. ${r.file}**\n   ${time}\n   ${preview}${r.content.length > 100 ? "..." : ""}`;
+				const fileLabel = r.path.split("/").pop() ?? r.path;
+				const preview = r.text.slice(0, 100);
+				return `**${i + 1}. ${fileLabel}**\n   相关度: ${(r.score * 100).toFixed(1)}%\n   ${preview}${r.text.length > 100 ? "..." : ""}`;
 			});
 
 			await this.adapter.reply(`🔍 **搜索结果（共 ${results.length} 条）**\n\n${lines.join("\n\n")}`);
@@ -785,7 +1022,7 @@ export class CommandHandler {
 
 			await fs.appendFile(diaryFile, entry, "utf-8");
 
-			await memory.indexFile(diaryFile);
+			await memory.index();
 
 			await this.adapter.reply(`✅ **已记录到今日日记**\n\n${content}`);
 		} catch (err) {
@@ -810,7 +1047,7 @@ export class CommandHandler {
 			await this.adapter.reply("🔄 **正在重建记忆索引...**\n\n这可能需要几分钟，请稍候。");
 
 			const before = memory.getStats();
-			await memory.reindex();
+			await memory.index();
 			const after = memory.getStats();
 
 			const report = [
@@ -885,39 +1122,47 @@ export class CommandHandler {
 		const controller = new FeilianController();
 		const subCmd = args.trim().toLowerCase();
 
-		let result: OperationResult;
-
 		if (!subCmd || subCmd === "toggle" || subCmd === "切换") {
-			result = await controller.toggle();
-		} else if (subCmd === "on" || subCmd === "开" || subCmd === "连接" || subCmd === "开启") {
-			result = await controller.ensureConnected();
-		} else if (subCmd === "off" || subCmd === "关" || subCmd === "断开" || subCmd === "关闭") {
-			result = await controller.ensureDisconnected();
-		} else if (subCmd === "status" || subCmd === "状态") {
-			result = await controller.getStatus();
-		} else {
-			await this.adapter.reply(
-				"❌ 未知操作\n\n可用操作：\n- `/飞连` — 切换状态\n- `/飞连 开` — 确保连接\n- `/飞连 关` — 断开\n- `/飞连 状态` — 查询状态"
-			);
+			const result = await controller.toggle();
+			await this.replyFeilianOperation(result);
+			return;
+		}
+		if (subCmd === "on" || subCmd === "开" || subCmd === "连接" || subCmd === "开启") {
+			const result = await controller.ensureConnected();
+			await this.replyFeilianOperation(result);
+			return;
+		}
+		if (subCmd === "off" || subCmd === "关" || subCmd === "断开" || subCmd === "关闭") {
+			const result = await controller.ensureDisconnected();
+			await this.replyFeilianOperation(result);
+			return;
+		}
+		if (subCmd === "status" || subCmd === "状态") {
+			const vpn = await controller.checkStatus();
+			await this.adapter.reply(`**飞连 VPN 状态**\n\n${controller.formatStatus(vpn)}`);
 			return;
 		}
 
-		const statusEmoji = result.connected ? "✅" : "⏸️";
-		const actionDesc = result.action === "toggled-on" ? "已开启"
-			: result.action === "toggled-off" ? "已断开"
-			: result.action === "already-on" ? "已是开启状态"
-			: result.action === "already-off" ? "已是关闭状态"
-			: result.action === "status" ? "当前状态"
-			: "操作完成";
+		await this.adapter.reply(
+			"❌ 未知操作\n\n可用操作：\n- `/飞连` — 切换状态\n- `/飞连 开` — 确保连接\n- `/飞连 关` — 断开\n- `/飞连 状态` — 查询状态"
+		);
+	}
 
-		const content = [
-			`${statusEmoji} **${actionDesc}**`,
+	/** 飞连操作类指令的统一回复（与 OperationResult 对齐） */
+	private async replyFeilianOperation(result: OperationResult): Promise<void> {
+		const vpn = result.status;
+		const statusLine =
+			vpn !== undefined
+				? `**VPN 状态：** ${vpn.connected ? "🟢 已连接" : "⚪ 未连接"}`
+				: "";
+		const lines = [
+			result.success ? "✅ **操作结果**" : "⚠️ **操作结果**",
 			"",
-			`**VPN 状态：** ${result.connected ? "🟢 已连接" : "⚪ 未连接"}`,
-			result.message ? `\n> ${result.message}` : "",
-		].join("\n");
-
-		await this.adapter.reply(content);
+			result.message.trim(),
+			statusLine ? `\n${statusLine}` : "",
+			result.error ? `\n\n> ${result.error}` : "",
+		];
+		await this.adapter.reply(lines.join(""));
 	}
 
 	// ──────────────────────────────────────────────────
@@ -951,11 +1196,11 @@ export class CommandHandler {
 
 		const stats = statSync(apkPath);
 		const fileSize = stats.size;
-		const maxSize = this.ctx.platform === "feishu" ? 30 * 1024 * 1024 : 20 * 1024 * 1024;
+		const maxSize = this.ctx.platform === "wecom" ? 20 * 1024 * 1024 : 30 * 1024 * 1024;
 		const modTime = new Date(stats.mtime).toLocaleString("zh-CN");
 
 		if (fileSize > maxSize) {
-			const limit = this.ctx.platform === "feishu" ? "30MB" : "20MB";
+			const limit = this.ctx.platform === "wecom" ? "20MB" : "30MB";
 			await this.adapter.reply(`❌ **文件太大**\n\n文件大小: ${(fileSize / 1024 / 1024).toFixed(2)}MB\n限制: ${limit}`);
 			return;
 		}
@@ -1012,10 +1257,10 @@ export class CommandHandler {
 
 		const stats = statSync(expandedPath);
 		const fileSize = stats.size;
-		const maxSize = this.ctx.platform === "feishu" ? 30 * 1024 * 1024 : 20 * 1024 * 1024;
+		const maxSize = this.ctx.platform === "wecom" ? 20 * 1024 * 1024 : 30 * 1024 * 1024;
 
 		if (fileSize > maxSize) {
-			const limit = this.ctx.platform === "feishu" ? "30MB" : "20MB";
+			const limit = this.ctx.platform === "wecom" ? "20MB" : "30MB";
 			await this.adapter.reply(`❌ **文件太大**\n\n文件大小: ${(fileSize / 1024 / 1024).toFixed(2)}MB\n限制: ${limit}\n\n请选择较小的文件。`);
 			return;
 		}
@@ -1052,8 +1297,10 @@ export class CommandHandler {
 		}
 
 		// /new、/新对话
-		if (/^\/(new|新对话|新会话)\s*$/i.test(text.trim())) {
-			await this.handleNew();
+		const newMatch = text.trim().match(/^\/(new|新对话|新会话)(?:\s+(.+))?$/i);
+		if (newMatch) {
+			const args = newMatch[2]?.trim();
+			await this.handleNew(args);
 			return true;
 		}
 
@@ -1074,48 +1321,55 @@ export class CommandHandler {
 		// /model、/模型
 		const modelMatch = text.match(/^\/(model|模型|切换模型)[\s:：]*(.*)/i);
 		if (modelMatch) {
-			await this.handleModel(modelMatch[2].trim());
+			await this.handleModel((modelMatch[2] ?? "").trim());
 			return true;
 		}
 
 		// /apikey、/密钥
 		const apiKeyMatch = text.match(/^\/?(?:apikey|api\s*key|密钥|换key|更换密钥)[\s:：]*(.*)/i);
 		if (apiKeyMatch) {
-			await this.handleApiKey(apiKeyMatch[1].trim());
+			await this.handleApiKey((apiKeyMatch[1] ?? "").trim());
+			return true;
+		}
+
+		// /黑名单、/配额
+		const blacklistMatch = text.match(/^\/(黑名单|配额|quota|blacklist)[\s:：]*(.*)/i);
+		if (blacklistMatch) {
+			await this.handleBlacklist((blacklistMatch[2] ?? "").trim());
 			return true;
 		}
 
 		// /会话、/sessions
 		const sessionMatch = text.match(/^\/(会话|sessions?)[\s:：=]*(.*)/i);
 		if (sessionMatch) {
-			await this.handleSession(sessionMatch[2].trim(), updateSessionCallback);
+			await this.handleSession((sessionMatch[2] ?? "").trim(), updateSessionCallback);
 			return true;
 		}
 
 		// /任务、/cron
 		const taskMatch = text.match(/^\/(任务|cron|定时|task|schedule|定时任务)[\s:：]*(.*)/i);
 		if (taskMatch) {
-			await this.handleTask(taskMatch[2].trim());
+			await this.handleTask((taskMatch[2] ?? "").trim());
 			return true;
 		}
 
 		// /心跳、/heartbeat
 		const heartbeatMatch = text.match(/^\/(心跳|heartbeat|hb)[\s:：]*(.*)/i);
 		if (heartbeatMatch) {
-			await this.handleHeartbeat(heartbeatMatch[2].trim());
+			await this.handleHeartbeat((heartbeatMatch[2] ?? "").trim());
 			return true;
 		}
 
 		// /记忆、/memory
 		const memoryMatch = text.match(/^\/(记忆|memory)[\s:：]*(.*)/i);
 		if (memoryMatch) {
-			await this.handleMemory(memoryMatch[2].trim());
+			await this.handleMemory((memoryMatch[2] ?? "").trim());
 			return true;
 		}
 
 		// /记录
 		const logMatch = text.match(/^\/(记录|log)[\s:：]+(.+)/i);
-		if (logMatch) {
+		if (logMatch && logMatch[2] != null) {
 			await this.handleLog(logMatch[2]);
 			return true;
 		}
@@ -1142,22 +1396,22 @@ export class CommandHandler {
 		// /飞连、/vpn
 		const feilianMatch = text.match(/^\/(飞连|vpn|feilian)[\s:：]*(.*)/i);
 		if (feilianMatch) {
-			await this.handleFeilian(feilianMatch[2].trim());
+			await this.handleFeilian((feilianMatch[2] ?? "").trim());
 			return true;
 		}
 
-		// /apk、/sendapk（仅企业微信和飞书）
-		if (this.ctx.platform !== "dingtalk" && /^\/(apk|sendapk)\s*$/i.test(text.trim())) {
-			await this.handleSendApk();
-			return true;
-		}
+	// /apk、/sendapk（所有平台支持）
+	if (/^\/(apk|sendapk)\s*$/i.test(text.trim())) {
+		await this.handleSendApk();
+		return true;
+	}
 
-		// /发送文件（仅企业微信和飞书）
-		const sendFileMatch = text.match(/^\/(发送文件|sendfile|send|发送)[\s:：]+(.+)/i);
-		if (this.ctx.platform !== "dingtalk" && sendFileMatch) {
-			await this.handleSendFile(sendFileMatch[2].trim());
-			return true;
-		}
+	// /发送文件（所有平台支持）
+	const sendFileMatch = text.match(/^\/(发送文件|sendfile|send|发送)[\s:：]+(.+)/i);
+	if (sendFileMatch && sendFileMatch[2] != null) {
+		await this.handleSendFile(sendFileMatch[2].trim());
+		return true;
+	}
 
 		// 未匹配任何命令
 		return false;

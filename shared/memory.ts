@@ -71,9 +71,11 @@ function cosineSim(a: number[], b: number[]): number {
 	let magA = 0;
 	let magB = 0;
 	for (let i = 0; i < a.length; i++) {
-		dot += a[i] * b[i];
-		magA += a[i] * a[i];
-		magB += b[i] * b[i];
+		const av = a[i]!;
+		const bv = b[i]!;
+		dot += av * bv;
+		magA += av * av;
+		magB += bv * bv;
 	}
 	return dot / (Math.sqrt(magA) * Math.sqrt(magB) + 1e-8);
 }
@@ -82,8 +84,8 @@ function cosineSim(a: number[], b: number[]): number {
 function applyTemporalDecay(score: number, filePath: string, halfLife = 30): number {
 	// 从路径提取日期（memory/YYYY-MM-DD.md）
 	const dateMatch = filePath.match(/(\d{4}-\d{2}-\d{2})/);
-	if (!dateMatch) return score; // 非日期文件不衰减
-	
+	if (!dateMatch?.[1]) return score; // 非日期文件不衰减
+
 	const fileDate = new Date(dateMatch[1]);
 	const daysSince = (Date.now() - fileDate.getTime()) / (24 * 3600 * 1000);
 	
@@ -118,7 +120,7 @@ function mmrRerank(candidates: SearchResult[], topK: number, lambda = 0.5): Sear
 		let bestScore = -Infinity;
 		
 		for (let i = 0; i < remaining.length; i++) {
-			const candidate = remaining[i];
+			const candidate = remaining[i]!;
 			
 			// 相关性得分（已计算好的混合得分）
 			const relevance = candidate.score;
@@ -139,7 +141,9 @@ function mmrRerank(candidates: SearchResult[], topK: number, lambda = 0.5): Sear
 			}
 		}
 		
-		selected.push(remaining[bestIdx]);
+		const picked = remaining[bestIdx];
+		if (!picked) break;
+		selected.push(picked);
 		remaining.splice(bestIdx, 1);
 	}
 	
@@ -387,7 +391,16 @@ export class MemoryManager {
 				};
 				// 火山引擎 multimodal API 返回 data.embedding（对象），标准 OpenAI 格式返回 data[0].embedding（数组）
 				const data = json.data;
-				const embedding = Array.isArray(data) ? data[0].embedding : data.embedding;
+				let embedding: number[];
+				if (Array.isArray(data)) {
+					const first = data[0] as { embedding?: number[] } | undefined;
+					if (!first?.embedding) throw new Error("Embedding API: missing data[0].embedding");
+					embedding = first.embedding;
+				} else {
+					const single = data as { embedding?: number[] };
+					if (!single.embedding) throw new Error("Embedding API: missing data.embedding");
+					embedding = single.embedding;
+				}
 				this.cacheEmbedding(hash, embedding);
 				return embedding;
 			} catch (err) {
@@ -433,6 +446,7 @@ export class MemoryManager {
 
 		for (let i = 0; i < lines.length; i++) {
 			const line = lines[i];
+			if (line === undefined) continue;
 
 			if (/^#{1,3}\s/.test(line) && buf.length > 0) {
 				pushChunk();
@@ -479,22 +493,52 @@ export class MemoryManager {
 				return;
 			}
 
-			for (const name of entries) {
-				if (name.startsWith(".")) continue;
-
-				const fullPath = resolve(dir, name);
-				let stat;
+		for (const name of entries) {
+			// 特殊处理：.cursor 目录只索引 memory 子目录和 MEMORY.md
+			if (name === ".cursor") {
+				const cursorPath = resolve(dir, name);
 				try {
-					stat = statSync(fullPath);
-				} catch {
-					continue;
-				}
+					const cursorStat = statSync(cursorPath);
+					if (cursorStat.isDirectory()) {
+						// 索引 .cursor/memory/ 目录下的所有文件
+						const memoryPath = resolve(cursorPath, "memory");
+						if (existsSync(memoryPath)) {
+							walk(memoryPath);
+						}
+						// 索引根目录的 .cursor/MEMORY.md
+						const memoryMdPath = resolve(cursorPath, "MEMORY.md");
+						if (existsSync(memoryMdPath)) {
+							try {
+								const memStat = statSync(memoryMdPath);
+								if (memStat.isFile() && memStat.size > 0 && memStat.size <= MemoryManager.MAX_FILE_BYTES) {
+									const content = readFileSync(memoryMdPath, "utf-8");
+									if (content.trim().length >= 20) {
+										const relPath = relative(root, memoryMdPath);
+										result.set(relPath, { content, hash: textHash(content), size: memStat.size });
+									}
+								}
+							} catch {}
+						}
+					}
+				} catch {}
+				continue;  // 跳过 .cursor 的其他内容
+			}
+			
+			if (name.startsWith(".")) continue;
 
-				if (stat.isDirectory()) {
-					if (MemoryManager.SKIP_DIRS.has(name)) continue;
-					walk(fullPath);
-					continue;
-				}
+			const fullPath = resolve(dir, name);
+			let stat;
+			try {
+				stat = statSync(fullPath);
+			} catch {
+				continue;
+			}
+
+			if (stat.isDirectory()) {
+				if (MemoryManager.SKIP_DIRS.has(name)) continue;
+				walk(fullPath);
+				continue;
+			}
 
 				if (!stat.isFile()) continue;
 				if (MemoryManager.SKIP_FILES.has(name)) continue;
@@ -617,6 +661,7 @@ export class MemoryManager {
 
 				for (let i = 0; i < chunks.length; i++) {
 					const c = chunks[i];
+					if (!c) continue;
 					const emb = embeddings[i];
 					const embBuf = emb ? Buffer.from(new Float32Array(emb).buffer) : null;
 					insChunk.run(c.id, c.path, c.text, c.startLine, c.endLine, embBuf, c.hash);

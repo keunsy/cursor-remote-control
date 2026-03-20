@@ -22,6 +22,8 @@ import { fetchNews } from '../shared/news-fetcher.js';
 import { getHealthStatus } from '../shared/news-sources/monitoring.js';
 import { humanizeCronInChinese } from 'cron-chinese';
 import { CommandHandler, type PlatformAdapter, type CommandContext } from '../shared/command-handler.js';
+import { AgentExecutor } from '../shared/agent-executor.js';
+import { ReconnectManager } from '../shared/reconnect-manager.js';
 import {
 	getSession, setActiveSession, archiveAndResetSession,
 	getSessionHistory, getActiveSessionId, switchToSession, getLockKey, busySessions,
@@ -29,7 +31,7 @@ import {
 	loadSessionsFromDisk, saveSessions, sessionsStore,
 	getCurrentProject, setCurrentProject,
 } from './wecom-helper.js';
-import { getAvailableModelChain, shouldFallback, isQuotaExhausted, addToBlacklist, getModelChain, DEFAULT_MODEL, type ModelConfig } from '../shared/models-config.js';
+import { getAvailableModelChain, shouldFallback, isQuotaExhausted, addToBlacklist, getModelChain, DEFAULT_MODEL } from '../shared/models-config.js';
 
 const HOME = process.env.HOME!;
 const ROOT = resolve(import.meta.dirname, '..');
@@ -248,6 +250,12 @@ const heartbeat = new HeartbeatRunner({
 // ── Agent 进程跟踪（用于 /终止 命令）─────────────
 const activeAgents = new Map<string, { pid: number | undefined; kill: () => void; workspace: string }>();
 
+// 统一 Agent 执行器（超时保护、并发限制、僵尸清理）
+const agentExecutor = new AgentExecutor({
+	timeout: 60 * 60 * 1000, // 60 分钟（统一超时）
+	maxConcurrent: 10, // 提高并发限制
+});
+
 // ── Cursor Agent 调用 ─────────────────────────────
 const PROGRESS_INTERVAL = 2_000;
 
@@ -274,7 +282,7 @@ async function runAgent(
 		onStart?: () => void;
 	}
 ): Promise<RunAgentResult> {
-	const primaryModel = config.CURSOR_MODEL || 'auto';
+	const primaryModel = config.CURSOR_MODEL || DEFAULT_MODEL;
 
 	const notifySession = (out: { sessionId?: string }) => {
 		if (out.sessionId && context?.onSessionId) {
@@ -287,141 +295,35 @@ async function runAgent(
 	};
 
 	async function runWithModel(model: string): Promise<{ result: string; sessionId?: string }> {
-		return new Promise((res, reject) => {
-			const args = [
-				'-p', '--force', '--trust', '--approve-mcps',
-				'--workspace', workspace,
-				'--model', model,
-				'--output-format', 'stream-json',
-				'--stream-partial-output',
-			];
-			if (agentId) args.push('--resume', agentId);
-			args.push('--', message);
-
-			const env: AgentEnv = {
-				...process.env,
-				CURSOR_API_KEY: config.CURSOR_API_KEY || process.env.CURSOR_API_KEY || '',
+		try {
+			const result = await agentExecutor.execute({
+				workspace,
+				model,
+				prompt: message,
+				sessionId: agentId,
+				platform: context?.platform as 'wecom' | undefined,
+				webhook: context?.webhook,
+				onProgress: context?.onProgress,
+				onStart: context?.onStart,
+				apiKey: config.CURSOR_API_KEY,
+			});
+			
+			// 构建工具调用摘要（添加到回复开头）
+			let finalOutput = result.result;
+			if (result.toolSummary && result.toolSummary.length > 0) {
+				const summary = buildToolSummary(result.toolSummary);
+				if (summary) {
+					finalOutput = summary + '\n\n---\n\n' + result.result;
+				}
+			}
+			
+			return {
+				result: finalOutput,
+				sessionId: result.sessionId,
 			};
-			if (context?.platform) env.CURSOR_PLATFORM = context.platform;
-			if (context?.webhook) env.CURSOR_WEBHOOK = context.webhook;
-			env.CURSOR_CRON_FILE = resolve(ROOT, 'cron-jobs-wecom.json');
-
-		const proc = spawn('agent', args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
-
-		let lockKey = getLockKey(workspace);
-		const startTime = Date.now();
-		
-		// 注册到 activeAgents（用于 /终止 命令）- 统一格式以便三平台共用 CommandHandler
-		activeAgents.set(lockKey, {
-			pid: proc.pid,
-			kill: () => { try { proc.kill("SIGTERM"); } catch {} },
-			workspace, // 用于 /stop 命令按项目名查找
-		});
-
-			let stderr = '';
-			let resultText = '';
-			let sessionId: string | undefined = agentId;
-			let assistantBuf = '';
-			let toolSummary: string[] = [];
-			let lineBuf = '';
-			let done = false;
-			let currentPhase: "thinking" | "tool_call" | "responding" = "thinking";
-			let lastProgressTime = 0;
-			let sessionLockAcquired = false;
-
-		/** 清理进程资源（activeAgents、timers），busySessions 由外层 finally 清理 */
-		function cleanup() {
-			done = true;
-			activeAgents.delete(lockKey);
-			if (progressTimer) clearInterval(progressTimer);
+		} catch (err) {
+			throw err;
 		}
-
-			// 定时器：每2秒发送进度更新
-			const progressTimer = setInterval(() => {
-				if (done) return;
-				const elapsed = Math.floor((Date.now() - startTime) / 1000);
-				const snippet = assistantBuf.split('\n').filter(l => l.trim()).slice(-4).join('\n');
-				
-				if (context?.onProgress) {
-					context.onProgress({
-						elapsed,
-						phase: currentPhase,
-						snippet: snippet || '...',
-					});
-				}
-			}, PROGRESS_INTERVAL);
-
-			proc.stdout.on('data', (chunk) => {
-				lineBuf += chunk.toString();
-				const lines = lineBuf.split('\n');
-				lineBuf = lines.pop() || '';
-				for (const line of lines) {
-					if (!line.trim()) continue;
-					try {
-						const ev = JSON.parse(line);
-						if (ev.session_id && !sessionId) sessionId = ev.session_id;
-
-						if (ev.type === 'result' && ev.result != null) {
-							resultText = ev.result;
-							currentPhase = "responding";
-						}
-						if (ev.type === 'assistant' && ev.message?.content) {
-							for (const c of ev.message.content) {
-								if (c.type === 'text' && c.text) {
-									assistantBuf += c.text;
-									currentPhase = "responding";
-								}
-							}
-						}
-						if (ev.type === 'tool_call' && ev.tool_call) {
-							if (ev.subtype === 'started') {
-								const desc = describeToolCall(ev.tool_call);
-								toolSummary.push(desc);
-								currentPhase = "tool_call";
-							}
-						}
-						
-						// 检测到获取 session lock 后触发 onStart
-						if (!sessionLockAcquired && sessionId && context?.onStart) {
-							sessionLockAcquired = true;
-							context.onStart();
-						}
-					} catch (_) {}
-				}
-			});
-
-			proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
-
-			proc.on('close', (code) => {
-				if (done) return;
-				cleanup();
-				if (lineBuf.trim()) {
-					try {
-						const ev = JSON.parse(lineBuf);
-						if (ev.session_id && !sessionId) sessionId = ev.session_id;
-						if (ev.type === 'result' && ev.result != null) resultText = ev.result;
-					} catch (_) {}
-				}
-
-				const rawResultText = typeof resultText === 'string' ? resultText.trim() : '';
-				const rawOutput = rawResultText || assistantBuf.trim() || stderr.trim() || '(无输出)';
-
-				let finalOutput = rawOutput;
-				if (toolSummary.length > 0) {
-					const summary = buildToolSummary(toolSummary);
-					if (summary) {
-						finalOutput = summary + '\n\n---\n\n' + rawOutput;
-					}
-				}
-
-				if (code === 0) res({ result: finalOutput, sessionId });
-				else reject(new Error(`Agent exited with code ${code}\n${stderr}`));
-			});
-
-			proc.on('error', (err) => {
-				if (!done) { cleanup(); reject(err); }
-			});
-		});
 	}
 
 	// 获取可用模型链（自动过滤黑名单）
@@ -435,10 +337,12 @@ async function runAgent(
 	let lastError: Error | null = null;
 	const skippedModels: string[] = [];
 	
-	// 检查主模型是否被跳过
+	// 检查主模型是否被跳过（黑名单）
 	const fullChain = getModelChain(primaryModel);
-	if (fullChain.length > 0 && fullChain[0] && modelChain[0] && fullChain[0].id !== modelChain[0].id) {
+	const wasBlacklisted = fullChain.length > 0 && fullChain[0] && modelChain[0] && fullChain[0].id !== modelChain[0].id;
+	if (wasBlacklisted) {
 		skippedModels.push(primaryModel);
+		console.log(`[智能跳过] ${primaryModel} 在黑名单中，静默切换到 ${modelChain[0]?.id}`);
 	}
 	
 	for (let i = 0; i < modelChain.length; i++) {
@@ -448,7 +352,7 @@ async function runAgent(
 		const isFallback = i > 0 || skippedModels.length > 0;
 		
 		try {
-			if (isFallback) {
+			if (isFallback && !wasBlacklisted) {
 				console.log(`[Fallback ${i}/${modelChain.length - 1}] 尝试 ${model.id}（原模型：${primaryModel}）`);
 			}
 			
@@ -457,10 +361,19 @@ async function runAgent(
 			
 			// 成功执行，检查是否使用了 fallback
 			if (isFallback) {
-				const skippedInfo = skippedModels.length > 0 
-					? `已跳过：${skippedModels.map(m => `\`${m}\``).join(', ')}（配额用尽）\n\n`
-					: '';
-				const fallbackMsg = `⚠️ **模型降级**\n\n${skippedInfo}原模型 \`${primaryModel}\` 失败，已用 \`${model.id}\` 完成。`;
+				// 如果是因为黑名单跳过的，静默切换，不提示
+				if (wasBlacklisted && i === 0) {
+					return { result: out.result };
+				}
+				
+				// 如果是运行中失败导致的 fallback，显示提示
+				let reason = '';
+				if (skippedModels.length > 0 && !wasBlacklisted) {
+					reason = `\`${skippedModels.join('`, `')}\` 配额用尽`;
+				} else {
+					reason = `\`${primaryModel}\` 失败`;
+				}
+				const fallbackMsg = `⚠️ **模型降级**\n\n${reason}，已改用 \`${model.id}\` 完成。`;
 				return { result: out.result, quotaWarning: fallbackMsg };
 			}
 			
@@ -586,13 +499,50 @@ const wsClient = new AiBot.WSClient({
 	secret: config.WECOM_BOT_SECRET,
 });
 
+// 使用重连管理器启动企业微信连接
+const reconnectManager = new ReconnectManager({
+	maxRetries: 10,
+	backoffDelays: [1, 2, 5, 10, 30, 60], // 秒
+});
+
+// 统一连接函数
+async function connectToWecom(): Promise<void> {
+	return new Promise<void>((resolve, reject) => {
+		try {
+			wsClient.connect();
+			// SDK 可能是同步的，延迟一下确保连接建立
+			setTimeout(resolve, 1000);
+		} catch (err) {
+			reject(err);
+		}
+	});
+}
+
 // ── 事件监听 ─────────────────────────────────────
 wsClient.on('authenticated', () => {
 	console.log('🔐 [企业微信] WebSocket 认证成功');
+	reconnectManager.markConnected();
 });
 
-wsClient.on('disconnected', (reason) => {
+wsClient.on('disconnected', async (reason) => {
 	console.warn(`⚠️  [企业微信] 连接断开: ${reason || '未知原因'}`);
+	reconnectManager.markDisconnected();
+	
+	// 自动重连
+	console.log('[企业微信] 检测到断线，开始自动重连...');
+	try {
+		await reconnectManager.connectWithRetry(connectToWecom, {
+			onSuccess: () => {
+				console.log('✅ 企业微信重连成功');
+			},
+			onRetry: (attempt, delay) => {
+				console.warn(`[企业微信] 重连尝试 ${attempt}，${delay}秒后重试...`);
+			},
+		});
+	} catch (err) {
+		console.error('❌ 企业微信重连失败:', err);
+		// 不退出进程，等待下次手动触发
+	}
 });
 
 // 进入会话事件（发送欢迎语）
@@ -713,6 +663,7 @@ wsClient.on('message.text', async (frame: WsFrame) => {
 		getActiveSessionId: (ws: string) => getActiveSessionId(ws) || null,
 		switchToSession,
 		rootDir: ROOT,
+		agentExecutor, // 统一 Agent 执行器
 	};
 	
 	// 创建命令处理器
@@ -1049,14 +1000,20 @@ wsClient.on('message.text', async (frame: WsFrame) => {
 		console.log(`[完成] model=${quotaWarning ? 'auto' : config.CURSOR_MODEL} elapsed=${elapsed} (${result.length} chars)`);
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : String(error);
-			console.error(`[失败] ${msg.slice(0, 200)}`);
 			
-			await wsClient.replyStream(
-				frame,
-				streamId,
-				`❌ **执行失败**\n\n\`\`\`\n${msg.slice(0, 500)}\n\`\`\`\n\n发送 \`/帮助\` 查看可用命令。`,
-				true
-			);
+			// 手动终止的任务不需要发送错误消息（用户已经收到"已终止"的回复）
+			if (msg === 'MANUALLY_STOPPED') {
+				console.log(`[手动终止] workspace=${workspace} lockKey=${lockKey}`);
+			} else {
+				console.error(`[失败] ${msg.slice(0, 200)}`);
+				
+				await wsClient.replyStream(
+					frame,
+					streamId,
+					`❌ **执行失败**\n\n\`\`\`\n${msg.slice(0, 500)}\n\`\`\`\n\n发送 \`/帮助\` 查看可用命令。`,
+					true
+				);
+			}
 		} finally {
 			busySessions.delete(lockKey);
 		}
@@ -1182,34 +1139,45 @@ setTimeout(async () => {
 		const content = readFileSync(bootPath, "utf-8").trim();
 		if (!content) return;
 
-		console.log("[启动] 检测到 .cursor/BOOT.md，执行启动自检...");
+	console.log("[启动] 检测到 .cursor/BOOT.md，执行启动自检...");
 
-		const bootPrompt = [
-			"你正在执行启动自检。严格按以下清单执行：",
-			"",
-			content,
-			"",
-			"如果无事可做，回复 'HEARTBEAT_OK'。",
-		].join("\n");
+	const bootPrompt = [
+		"你正在执行启动自检。严格按以下清单执行：",
+		"",
+		content,
+		"",
+		"**输出要求**：",
+		"- 如果一切正常，只回复 'HEARTBEAT_OK'",
+		"- 如果发现问题，必须在问题前加上 ⚠️ 或 ❌ 标识",
+		"- 需要关注的配置项用 🔔 标识",
+		"- 格式示例：",
+		"  ✅ 记忆系统：正常",
+		"  ⚠️ 定时任务：发现 2 个配置错误",
+		"  ❌ .env 配置：缺少 VOLC_EMBEDDING_API_KEY",
+	].join("\n");
 
-		const { result, quotaWarning } = await runAgent(memoryWorkspace, bootPrompt);
-		const trimmed = result.trim();
-		const finalResult = quotaWarning ? `${quotaWarning}\n\n---\n\n${trimmed}` : trimmed;
+	const { result, quotaWarning } = await runAgent(memoryWorkspace, bootPrompt);
+	const trimmed = result.trim();
+	const finalResult = quotaWarning ? `${quotaWarning}\n\n---\n\n${trimmed}` : trimmed;
 
-		// 如果有需要推送的内容且有活跃会话
-		if (finalResult && !/^(无输出|HEARTBEAT_OK)$/i.test(trimmed) && lastActiveSession) {
-			try {
-				await wsClient.sendMessage(lastActiveSession.chatid, {
-					msgtype: 'markdown',
-					markdown: {
-						content: `🚀 **启动自检**\n\n${finalResult.slice(0, 3000)}`,
-					},
-				});
-				console.log("[启动] 自检结果已推送到企业微信");
-			} catch (err) {
-				console.warn('[启动] 自检推送失败:', err);
-			}
+	// 如果有需要推送的内容且有活跃会话
+	if (finalResult && !/^(无输出|HEARTBEAT_OK)$/i.test(trimmed) && lastActiveSession) {
+		try {
+			// 根据结果内容判断严重程度
+			const hasError = /[❌⚠️🔔]/.test(trimmed);
+			const title = hasError ? '⚠️ 启动自检 - 发现问题' : '✅ 启动自检';
+			
+			await wsClient.sendMessage(lastActiveSession.chatid, {
+				msgtype: 'markdown',
+				markdown: {
+					content: `**${title}**\n\n${finalResult.slice(0, 3000)}`,
+				},
+			});
+			console.log("[启动] 自检结果已推送到企业微信");
+		} catch (err) {
+			console.warn('[启动] 自检推送失败:', err);
 		}
+	}
 
 		console.log("[启动] .cursor/BOOT.md 自检完成");
 	} catch (e) {
@@ -1217,25 +1185,30 @@ setTimeout(async () => {
 	}
 }, BOOT_DELAY_MS);
 
-// 连接
-wsClient.connect();
-console.log('[企业微信] 正在连接 WebSocket...');
+// 初始连接
+await reconnectManager.connectWithRetry(connectToWecom, {
+	onSuccess: () => {
+		console.log('✅ 企业微信 WebSocket 连接已建立，等待消息...');
+	},
+	onFailure: (err) => {
+		console.error('❌ 企业微信连接失败，已重试 10 次:', err.message);
+		console.error('请检查网络连接和企业微信凭据（BOT_ID / BOT_SECRET）');
+		process.exit(1);
+	},
+	onRetry: (attempt, delay) => {
+		console.warn(`[企微] 第 ${attempt} 次连接失败，${delay}秒后重试...`);
+	},
+});
 
 // 优雅退出
 process.on('SIGINT', async () => {
 	console.log('\n[退出] 正在清理资源...');
 
-	// Bug #13 修复：终止所有运行中的 Agent 进程
-	if (activeAgents.size > 0) {
-		console.log(`[退出] 正在终止 ${activeAgents.size} 个运行中的任务...`);
-		for (const [lockKey, agent] of activeAgents.entries()) {
-			try {
-				agent.kill();
-				console.log(`[退出] 已终止任务: ${lockKey}`);
-			} catch (err) {
-				console.error(`[退出] 终止任务失败 ${lockKey}:`, err);
-			}
-		}
+	// Bug #13 修复：终止所有运行中的 Agent 进程（使用统一执行器）
+	const active = agentExecutor.getActiveAgents();
+	if (active.length > 0) {
+		console.log(`[退出] 正在终止 ${active.length} 个运行中的任务...`);
+		agentExecutor.killAll();
 		activeAgents.clear();
 		busySessions.clear();
 	}

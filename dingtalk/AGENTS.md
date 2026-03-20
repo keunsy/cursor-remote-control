@@ -64,6 +64,7 @@ dingtalk-cursor-claw/
 - ✅ Markdown 回复
 - ✅ 语音识别（本地 whisper）
 - ✅ 图片、文件处理
+- ✅ **文件发送**（/发送文件、/apk 命令，30MB 限制）🆕
 - ✅ 命令系统（/help、/模型、/会话、/新闻、/任务 等）
 - ✅ 定时任务（独立配置 cron-jobs-dingtalk.json）
 - ✅ 心跳系统
@@ -142,6 +143,10 @@ tail -f /tmp/dingtalk-cursor.log
 **配置管理：**
 - `/模型` `/model` — 查看/切换 AI 模型
 - `/密钥` `/apikey` — 查看/更换 API Key
+
+**文件操作：**
+- `/发送文件 路径` `/sendfile` — 发送本地文件（30MB 限制）🆕
+- `/apk` `/sendapk` — 快速发送 Android APK（需配置项目）🆕
 
 **任务管理：**
 - `/任务` `/cron` — 查看所有定时任务
