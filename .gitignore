@@ -105,6 +105,7 @@ TEST-*.md
 !/docs/ARCHITECTURE.md
 !/docs/DEVELOPMENT.md
 !/docs/TROUBLESHOOTING.md
+!/docs/MEMORY-SYSTEM.md
 !/docs/test-plan-*.md
 
 # 私人新闻源配置（每人不同，不提交）
