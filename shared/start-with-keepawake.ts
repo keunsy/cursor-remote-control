@@ -8,8 +8,7 @@
  * 
  * caffeinate 参数说明：
  * -d: 防止显示器休眠（允许显示器关闭，但系统保持唤醒）
- * -i: 防止系统空闲休眠
- * -s: 防止系统休眠（即使盖上笔记本盖子）
+ * -i: 防止系统空闲休眠（本脚本仅使用 -i）
  */
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";

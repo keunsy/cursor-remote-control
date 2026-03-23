@@ -27,7 +27,7 @@ import { humanizeCronInChinese } from 'cron-chinese';
 import { CommandHandler, type PlatformAdapter, type CommandContext } from '../shared/command-handler.js';
 import { AgentExecutor } from '../shared/agent-executor.js';
 import { ReconnectManager } from '../shared/reconnect-manager.js';
-import { getAvailableModelChain, getModelChain, shouldFallback, isQuotaExhausted, addToBlacklist, DEFAULT_MODEL, type ModelConfig } from '../shared/models-config.js';
+import { getAvailableModelChain, shouldFallback, isQuotaExhausted, addToBlacklist, isBlacklisted, DEFAULT_MODEL, type ModelConfig } from '../shared/models-config.js';
 import { uploadFileDingtalk, sendFileDingtalk } from './send-file-dingtalk.js';
 
 const HOME = process.env.HOME!;
@@ -831,8 +831,7 @@ async function runAgent(
 	const skippedModels: string[] = [];
 	
 	// 检查主模型是否被跳过（黑名单）
-	const fullChain = getModelChain(primaryModel);
-	const wasBlacklisted = fullChain.length > 0 && fullChain[0] && modelChain[0] && fullChain[0].id !== modelChain[0].id;
+	const wasBlacklisted = isBlacklisted(primaryModel);
 	if (wasBlacklisted) {
 		skippedModels.push(primaryModel);
 		console.log(`[智能跳过] ${primaryModel} 在黑名单中，静默切换到 ${modelChain[0]?.id}`);

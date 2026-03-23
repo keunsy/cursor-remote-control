@@ -29,7 +29,7 @@ import { ReconnectManager } from "../shared/reconnect-manager.js";
 import { tryRecordMessagePersistent } from "./feishu/dedup.js";
 import { sendMediaFeishu } from "./feishu/media.js";
 import { humanizeCronInChinese } from 'cron-chinese';
-import { getAvailableModelChain, shouldFallback, isQuotaExhausted, addToBlacklist, getModelChain, DEFAULT_MODEL } from "../shared/models-config.js";
+import { getAvailableModelChain, shouldFallback, isQuotaExhausted, addToBlacklist, isBlacklisted, DEFAULT_MODEL } from "../shared/models-config.js";
 
 const HOME = process.env.HOME;
 if (!HOME) throw new Error("$HOME is not set");
@@ -1610,8 +1610,7 @@ async function execAgentWithFallback(
 	const skippedModels: string[] = [];
 	
 	// 检查主模型是否被跳过（黑名单）
-	const fullChain = getModelChain(primaryModel);
-	const wasBlacklisted = fullChain.length > 0 && fullChain[0] && modelChain[0] && fullChain[0].id !== modelChain[0].id;
+	const wasBlacklisted = isBlacklisted(primaryModel);
 	if (wasBlacklisted) {
 		skippedModels.push(primaryModel);
 		console.log(`[智能跳过] ${primaryModel} 在黑名单中，静默切换到 ${modelChain[0]?.id}`);
@@ -2763,6 +2762,28 @@ await reconnectManager.connectWithRetry(
 		},
 	}
 );
+
+// 合盖再开盖后：TCP 可能半开，WebSocket 迟迟不触发 `close`，Lark SDK 只有收到 close 才会走内部重连，
+// 表现为开盖后发消息很久才有回复。网络从断到通、或探测间隔突然拉长（刚从睡眠恢复）时主动重建长连接。
+if (process.platform === "darwin") {
+	const { startNetworkRecoveryMonitor } = await import("../shared/network-recovery.js");
+	startNetworkRecoveryMonitor({
+		intervalMs: 8_000,           // 8秒探测一次（原15秒）- 更快检测到网络状态变化
+		wakeGapMs: 45_000,          // 45秒判定为唤醒（原120秒）- 适配短时合盖场景
+		minReconnectGapMs: 30_000,  // 30秒内不重复重连（原90秒）- 允许更频繁重连
+		onRecover: async (reason) => {
+			try {
+				console.warn(`[飞书] 主动重建长连接 (${reason})`);
+				ws.close({ force: true });
+				await new Promise((r) => setTimeout(r, 800));
+				await ws.start({ eventDispatcher: dispatcher });
+				console.log("[飞书] 长连接已重建");
+			} catch (e) {
+				console.error("[飞书] 主动重建长连接失败:", e);
+			}
+		},
+	});
+}
 
 // ── 启动自检（.cursor/BOOT.md）───────────────────────
 setTimeout(async () => {
