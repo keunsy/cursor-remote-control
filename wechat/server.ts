@@ -1367,7 +1367,8 @@ async function startWechatServer() {
 				// 显示"正在输入中"而不是发送普通文本
 				try {
 					await client.sendTypingIndicator(uid, contextToken, '⏳ 排队中，请稍候...');
-				} catch (e) {
+				} catch (_e) {
+					// Typing indicator 失败时回退到普通文本
 					await sendWechatText(uid, '⏳ 当前会话有任务进行中，请稍候…', contextToken);
 				}
 				const maxWait = 5 * 60 * 1000;

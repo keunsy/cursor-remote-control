@@ -23,7 +23,7 @@ import { getHealthStatus } from '../shared/news-sources/monitoring.js';
 import { humanizeCronInChinese } from 'cron-chinese';
 import { CommandHandler, type PlatformAdapter, type CommandContext } from '../shared/command-handler.js';
 import { AgentExecutor } from '../shared/agent-executor.js';
-import { ReconnectManager } from '../shared/reconnect-manager.js';
+// import { ReconnectManager } from '../shared/reconnect-manager.js';  // 已移除，SDK 自带重连
 import {
 	getSession, setActiveSession, archiveAndResetSession,
 	getSessionHistory, getActiveSessionId, switchToSession, getLockKey, busySessions,
@@ -525,44 +525,15 @@ const reconnectManager = new ReconnectManager({
 	backoffDelays: [1, 2, 5, 10, 30, 60], // 秒
 });
 
-// 统一连接函数
-async function connectToWecom(): Promise<void> {
-	return new Promise<void>((resolve, reject) => {
-		try {
-			wsClient.connect();
-			// SDK 可能是同步的，延迟一下确保连接建立
-			setTimeout(resolve, 1000);
-		} catch (err) {
-			reject(err);
-		}
-	});
-}
-
 // ── 事件监听 ─────────────────────────────────────
 wsClient.on('authenticated', () => {
 	console.log('🔐 [企业微信] WebSocket 认证成功');
-	reconnectManager.markConnected();
 });
 
 wsClient.on('disconnected', async (reason) => {
 	console.warn(`⚠️  [企业微信] 连接断开: ${reason || '未知原因'}`);
-	reconnectManager.markDisconnected();
-	
-	// 自动重连
-	console.log('[企业微信] 检测到断线，开始自动重连...');
-	try {
-		await reconnectManager.connectWithRetry(connectToWecom, {
-			onSuccess: () => {
-				console.log('✅ 企业微信重连成功');
-			},
-			onRetry: (attempt, delay) => {
-				console.warn(`[企业微信] 重连尝试 ${attempt}，${delay}秒后重试...`);
-			},
-		});
-	} catch (err) {
-		console.error('❌ 企业微信重连失败:', err);
-		// 不退出进程，等待下次手动触发
-	}
+	// SDK 会自动重连，无需手动干预
+	console.log('[企业微信] SDK 将自动重连...');
 });
 
 // 进入会话事件（发送欢迎语）
@@ -1155,20 +1126,37 @@ console.log(`[心跳] 已启动，默认关闭（发送 /心跳 开启）`);
 // 已禁用：agent 进程初始化太慢，会阻塞启动
 console.log("[启动] BOOT.md 自检已禁用（避免启动阻塞）");
 
-// 初始连接
-await reconnectManager.connectWithRetry(connectToWecom, {
-	onSuccess: () => {
-		console.log('✅ 企业微信 WebSocket 连接已建立，等待消息...');
-	},
-	onFailure: (err) => {
-		console.error('❌ 企业微信连接失败，已重试 10 次:', err.message);
-		console.error('请检查网络连接和企业微信凭据（BOT_ID / BOT_SECRET）');
-		process.exit(1);
-	},
-	onRetry: (attempt, delay) => {
-		console.warn(`[企微] 第 ${attempt} 次连接失败，${delay}秒后重试...`);
-	},
-});
+// 启动企业微信 WebSocket，简单重试 3 次，之后由 SDK 自己管理重连
+let startRetries = 3;
+while (startRetries > 0) {
+	try {
+		wsClient.connect();
+		// 等待认证成功
+		await new Promise<void>((resolve, reject) => {
+			const timeout = setTimeout(() => reject(new Error('连接超时')), 10000);
+			wsClient.once('authenticated', () => {
+				clearTimeout(timeout);
+				resolve();
+			});
+			wsClient.once('error', (err) => {
+				clearTimeout(timeout);
+				reject(err);
+			});
+		});
+		console.log('✅ 企业微信 WebSocket 已连接（SDK 自动管理重连）');
+		break;
+	} catch (err) {
+		startRetries--;
+		const errMsg = err instanceof Error ? err.message : String(err);
+		if (startRetries === 0) {
+			console.error('❌ 企业微信连接启动失败（已重试 3 次）:', errMsg);
+			console.error('请检查网络连接和企业微信凭据（WECOM_BOT_ID / WECOM_BOT_SECRET）');
+			process.exit(1);
+		}
+		console.warn(`[企业微信] 连接失败，5秒后重试 (剩余 ${startRetries} 次): ${errMsg}`);
+		await new Promise(r => setTimeout(r, 5000));
+	}
+}
 
 // 优雅退出
 process.on('SIGINT', async () => {

@@ -26,7 +26,7 @@ import { FeilianController, type OperationResult } from '../shared/feilian-contr
 import { humanizeCronInChinese } from 'cron-chinese';
 import { CommandHandler, type PlatformAdapter, type CommandContext } from '../shared/command-handler.js';
 import { AgentExecutor } from '../shared/agent-executor.js';
-import { ReconnectManager } from '../shared/reconnect-manager.js';
+// import { ReconnectManager } from '../shared/reconnect-manager.js';  // 已移除，SDK 自带重连
 import { getAvailableModelChain, shouldFallback, isQuotaExhausted, addToBlacklist, isBlacklisted, DEFAULT_MODEL, type ModelConfig } from '../shared/models-config.js';
 import { uploadFileDingtalk, sendFileDingtalk } from './send-file-dingtalk.js';
 
@@ -1988,31 +1988,26 @@ client.registerCallbackListener(TOPIC_ROBOT, async (res) => {
 	}
 });
 
-// 使用重连管理器启动钉钉连接
-const reconnectManager = new ReconnectManager({
-	maxRetries: 10,
-	backoffDelays: [1, 2, 5, 10, 30, 60], // 秒
-});
-
-await reconnectManager.connectWithRetry(
-	async () => {
+// 启动钉钉 Stream 连接，简单重试 3 次，之后由 SDK 自己管理重连
+let startRetries = 3;
+while (startRetries > 0) {
+	try {
 		await refreshAccessToken();
 		await client.connect();
-	},
-	{
-		onSuccess: () => {
-			console.log('✅ 钉钉 Stream 连接已建立，等待消息...');
-		},
-		onFailure: (err) => {
-			console.error('❌ 钉钉连接失败，已重试 10 次:', err.message);
-			console.error('请检查网络连接和钉钉凭据（CLIENT_ID / CLIENT_SECRET）');
+		console.log('✅ 钉钉 Stream 已连接（SDK 自动管理重连）');
+		break;
+	} catch (err) {
+		startRetries--;
+		const errMsg = err instanceof Error ? err.message : String(err);
+		if (startRetries === 0) {
+			console.error('❌ 钉钉连接启动失败（已重试 3 次）:', errMsg);
+			console.error('请检查网络连接和钉钉凭据（DINGTALK_APP_KEY / DINGTALK_APP_SECRET）');
 			process.exit(1);
-		},
-		onRetry: (attempt, delay, error) => {
-			console.warn(`[钉钉] 第 ${attempt} 次连接失败，${delay}秒后重试...`);
-		},
+		}
+		console.warn(`[钉钉] 连接失败，5秒后重试 (剩余 ${startRetries} 次): ${errMsg}`);
+		await new Promise(r => setTimeout(r, 5000));
 	}
-);
+}
 
 // ── 启动定时任务调度器 ────────────────────────────
 console.log('[scheduler] starting...');

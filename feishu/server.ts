@@ -25,7 +25,7 @@ import { fetchNews } from "../shared/news-fetcher.js";
 import { getHealthStatus } from "../shared/news-sources/monitoring.js";
 import { CommandHandler, type PlatformAdapter, type CommandContext } from "../shared/command-handler.js";
 import { AgentExecutor } from "../shared/agent-executor.js";
-import { ReconnectManager } from "../shared/reconnect-manager.js";
+// import { ReconnectManager } from "../shared/reconnect-manager.js";  // 已移除，SDK 自带重连
 import { tryRecordMessagePersistent } from "./feishu/dedup.js";
 import { sendMediaFeishu } from "./feishu/media.js";
 import { humanizeCronInChinese } from 'cron-chinese';
@@ -2772,39 +2772,15 @@ scheduler.start().catch((e) => console.warn(`[scheduler] start failed: ${e}`));
 
 heartbeat.start();
 
-// 使用重连管理器启动飞书连接
-const reconnectManager = new ReconnectManager({
-	maxRetries: 10,
-	backoffDelays: [1, 2, 5, 10, 30, 60], // 秒
-});
-
-await reconnectManager.connectWithRetry(
-	async () => {
-		// 飞书 SDK 的 start() 是同步的，包装成 Promise
-		return new Promise<void>((resolve, reject) => {
-			try {
-				ws.start({ eventDispatcher: dispatcher });
-				// 假设启动成功（飞书 SDK 不抛错）
-				resolve();
-			} catch (err) {
-				reject(err);
-			}
-		});
-	},
-	{
-		onSuccess: () => {
-			console.log("✅ 飞书长连接已启动，等待消息...");
-		},
-		onFailure: (err) => {
-			console.error("❌ 飞书连接失败，已重试 10 次:", err.message);
-			console.error("请检查网络连接和飞书凭据（APP_ID / APP_SECRET）");
-			process.exit(1);
-		},
-		onRetry: (attempt, delay, error) => {
-			console.warn(`[飞书] 第 ${attempt} 次连接失败，${delay}秒后重试...`);
-		},
-	}
-);
+// 直接启动飞书 WebSocket，SDK 自带重连机制
+// 移除外部 ReconnectManager 避免双重重连冲突
+try {
+	ws.start({ eventDispatcher: dispatcher });
+	console.log("✅ 飞书 WebSocket 已启动（SDK 自动管理连接和重连）");
+} catch (err) {
+	console.error("❌ 飞书 WebSocket 启动失败:", err);
+	process.exit(1);
+}
 
 // 网络恢复监控已禁用：
 // 实践证明频繁的主动重连反而导致消息丢失和连接不稳定

@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "example-wechat-reminder",
+      "name": "微信定时示例（默认关闭）",
+      "enabled": false,
+      "deleteAfterRun": false,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 9 * * *",
+        "comment": "每天上午 9:00"
+      },
+      "message": "早上好！该开始工作了",
+      "platform": "wechat",
+      "webhook": "your_wechat_user_id_here",
+      "createdAt": "2026-03-23T00:00:00.000Z",
+      "updatedAt": "2026-03-23T00:00:00.000Z",
+      "state": {}
+    }
+  ]
+}

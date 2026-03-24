@@ -386,7 +386,7 @@ export class AgentExecutor {
 					activeAgents.delete(lockKey);
 				}
 			}
-		}, 60000); // 每分钟检查一次
+		}, 30000); // 每 30 秒检查一次（更快发现僵尸进程）
 	}
 	
 	// 获取当前活跃任务

@@ -55,6 +55,7 @@ wechat/
 ## 已实现（与三端对齐）
 
 - QR 扫码登录、Token / 同步游标持久化、长轮询收消息、文本发送（分片）、去重、断线重连、`context_token` 缓存
+- **"正在输入中" 状态** ✅：通过 `message_state: 1` 在微信界面显示"对方正在输入..."提示（类似 OpenClaw）
 - **CommandHandler**：`/帮助`、`/状态`、`/模型`、`/任务`、记忆相关指令等与共享逻辑一致（平台展示为微信个人号）
 - **会话**：`wechat-helper` + `wechat/.sessions.json`，key `wechat_${userId}`
 - **项目路由**：`#项目`、对话式切换、`projects.json` 持久当前项目
@@ -84,7 +85,8 @@ HTTP 长轮询；请求头需 `AuthorizationType: ilink_bot_token`、`X-WECHAT-U
 |------|----------------|------------|
 | 连接 | WS/Stream 等 | HTTP 长轮询 |
 | 定时 webhook | URL / 开放能力 id | **用户 id** |
-| 流式回复 | 部分支持 | 否 |
+| 流式回复 | 部分支持（卡片更新） | 否 |
+| 输入提示 | 支持 | ✅ **已实现**（`message_state: 1`） |
 
 ---
 

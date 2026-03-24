@@ -1,4 +1,4 @@
-# AGENTS.md — 飞书远程控制（虾群平台版）
+# AGENTS.md — 飞书远程控制
 
 > 本文件是 AI 编码助手理解本项目的入口。所有信息矛盾时以 `文档/` 目录为准。
 
@@ -26,7 +26,7 @@
 ## 目录结构
 
 ```
-虾群平台版/
+feishu/
 ├── server.ts              # 主服务入口：飞书 WebSocket → Cursor Agent CLI
 ├── bridge.ts              # OpenAI API 桥接（供 OpenClaw 调用）
 ├── memory.ts              # 记忆管理器 v2（SQLite + 向量 + FTS5）
