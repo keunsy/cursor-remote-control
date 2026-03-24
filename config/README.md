@@ -10,7 +10,7 @@
 
 | 文件 | 用途 | Git追踪 |
 |------|------|---------|
-| `model-config.json` | **模型默认配置**（统一三平台） | ✅ 提交 |
+| `model-config.json` | **模型默认配置**（统一四平台） | ✅ 提交 |
 | `model-config.example.json` | 示例配置 | ✅ 提交 |
 | `model-config.README.md` | 模型配置说明 | ✅ 提交 |
 
