@@ -274,24 +274,30 @@ bash service.sh uninstall  # 卸载自启动
 - ✅ **进程清理**：`stop` 命令强制杀死所有相关进程
 - ✅ **日志输出**：标准输出和错误输出统一记录到 `/tmp/dingtalk-cursor.log`
 
-## 与飞书版共存
+## 与其他平台共存
 
-钉钉版和飞书版可以同时运行，互不干扰：
+钉钉、飞书、企业微信、微信个人号四个服务可以同时运行，互不干扰：
 
-| 服务 | 标签 | 日志路径 | 端口 |
-|------|------|---------|------|
-| 飞书 | com.cursor-feishu | /tmp/feishu-cursor.log | - |
-| 钉钉 | com.dingtalk-cursor-claw | /tmp/dingtalk-cursor.log | - |
+| 服务 | 标签 | 日志路径 | SDK |
+|------|------|---------|-----|
+| 飞书 | com.cursor-feishu | /tmp/feishu-cursor.log | @larksuiteoapi/node-sdk |
+| 钉钉 | com.dingtalk-cursor-claw | /tmp/dingtalk-cursor.log | dingtalk-stream |
+| 企业微信 | com.wecom-cursor-claw | /tmp/wecom-cursor.log | @wecom/aibot-node-sdk |
+| 微信个人号 | - | 直接运行 | ilink bot API |
 
 **共享配置**（位于根目录）：
-- `projects.json` - 项目路由配置
-- 两个服务使用相同的项目路由规则
+- `projects.json` - 项目路由配置（四平台通用）
+- `.memory.sqlite` - 记忆向量数据库（四平台共享）
 
 **独立配置**：
 - `feishu/.env` - 飞书凭据
 - `dingtalk/.env` - 钉钉凭据
+- `wecom/.env` - 企业微信凭据
+- `wechat/.env` - 微信个人号凭据
 - `cron-jobs-feishu.json` - 飞书定时任务
 - `cron-jobs-dingtalk.json` - 钉钉定时任务
+- `cron-jobs-wecom.json` - 企业微信定时任务
+- `cron-jobs-wechat.json` - 微信定时任务
 
 **统一管理**：
 ```bash
@@ -392,8 +398,8 @@ A: 不需要。运行 `agent login` 登录后会自动使用登录凭据。
 **Q: 为什么提示配额用完？**  
 A: 默认 `opus-4.6`。如果配额用尽，可切换：`/模型 auto`（省配额）或 `/模型 opust`（深度推理）。
 
-**Q: 钉钉和飞书可以同时运行吗？**  
-A: 可以！两个服务独立运行，互不干扰，共享 `projects.json` 配置。
+**Q: 钉钉和其他平台可以同时运行吗？**  
+A: 可以！飞书、钉钉、企业微信、微信个人号四个服务独立运行，互不干扰，共享 `projects.json` 配置。
 
 **Q: 如何切换 AI 模型？**  
 A: 编辑 `.env` 中的 `CURSOR_MODEL` 变量，支持热更新（无需重启）。
