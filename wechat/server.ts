@@ -266,8 +266,6 @@ const MESSAGE_ITEM_VIDEO = 5;
 
 const MESSAGE_TYPE_USER = 1;  // 单聊
 const MESSAGE_TYPE_BOT = 2;   // Bot 回复
-const MESSAGE_STATE_NEW = 0;  // 新消息
-const MESSAGE_STATE_GENERATING = 1;  // 生成中（显示"正在输入中"）
 const MESSAGE_STATE_FINISH = 2;  // 消息完成状态
 
 interface TextItem {

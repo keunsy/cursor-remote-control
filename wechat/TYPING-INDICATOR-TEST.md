@@ -6,12 +6,12 @@
 
 ## 实现原理
 
-通过 `message_state: 1` 触发微信界面显示"对方正在输入..."提示。
+使用微信 ilink API 的 `/ilink/bot/sendtyping` 接口：
 
-```typescript
-const MESSAGE_STATE_GENERATING = 1;  // 生成中（显示"正在输入中"）
-const MESSAGE_STATE_FINISH = 2;      // 消息完成状态
-```
+1. 先调用 `/ilink/bot/getconfig` 获取 `typing_ticket`
+2. 使用 `typing_ticket` 调用 `/ilink/bot/sendtyping`
+
+这会在微信顶部显示"对方正在输入..."提示（真正的头部状态，不是消息）。
 
 ## 测试步骤
 

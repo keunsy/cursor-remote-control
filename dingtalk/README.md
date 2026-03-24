@@ -307,6 +307,8 @@ bash manage-services.sh status           # 查看所有服务
 bash manage-services.sh restart          # 重启所有服务
 bash manage-services.sh logs feishu      # 飞书日志
 bash manage-services.sh logs dingtalk    # 钉钉日志
+bash manage-services.sh logs wecom       # 企业微信日志
+bash manage-services.sh logs wechat      # 微信日志
 ```
 - 核心模块（bridge.ts、memory.ts等通过符号链接）
 - 工作区记忆（`.cursor/MEMORY.md`）

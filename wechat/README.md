@@ -10,11 +10,21 @@
 bun install
 ```
 
-### 2. 配置环境变量
+### 2. 创建配置文件
 
 ```bash
+# 在项目根目录创建项目路由配置
+cd /path/to/cursor-remote-control
+cp projects.json.example projects.json
+# 编辑 projects.json，配置你的工作区路径
+
+# 在项目根目录创建定时任务配置
+cp cron-jobs-wechat.json.example cron-jobs-wechat.json
+
+# 配置微信凭据
+cd wechat
 cp .env.example .env
-# 编辑 .env 填入必要配置（Cursor API Key 推荐使用 agent login）
+# 编辑 .env，推荐使用 agent login（无需填 CURSOR_API_KEY）
 ```
 
 ### 3. 启动服务
@@ -108,6 +118,23 @@ bun run start.ts
 - **单条消息限制**: 3800 字符（超长自动分片）
 - **去重时间**: 5 分钟
 - **Session 过期**: 错误码 -14
+
+## 📁 配置文件管理
+
+| 文件 | 用途 | Git 管理 |
+|------|------|---------|
+| `projects.json.example` | 项目路由模板 | ✅ 提交到仓库 |
+| `projects.json` | 实际项目路径 | ❌ 已忽略（本机配置） |
+| `cron-jobs-wechat.json.example` | 空的定时任务模板 | ✅ 提交到仓库 |
+| `cron-jobs-wechat.json` | AI 创建的定时任务 | ❌ 已忽略（运行时数据） |
+| `wechat/.env.example` | 环境变量模板 | ✅ 提交到仓库 |
+| `wechat/.env` | 实际凭据 | ❌ 已忽略（敏感信息） |
+| `wechat/.wechat_token.json` | 微信登录 Token | ❌ 已忽略（自动生成） |
+
+**工作流程**：
+1. 首次安装：从 `.example` 文件复制创建配置
+2. Git pull 更新：你的本地配置不会被覆盖
+3. 分享代码：敏感信息和本机路径不会泄露
 
 ## 📖 使用指南
 
