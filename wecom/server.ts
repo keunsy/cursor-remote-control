@@ -258,9 +258,6 @@ const heartbeat = new HeartbeatRunner({
 	log: (msg: string) => console.log(`[心跳] ${msg}`),
 });
 
-// ── Agent 进程跟踪（用于 /终止 命令）─────────────
-const activeAgents = new Map<string, { pid: number | undefined; kill: () => void; workspace: string }>();
-
 // 统一 Agent 执行器（超时保护、并发限制、僵尸清理）
 const agentExecutor = new AgentExecutor({
 	timeout: 60 * 60 * 1000, // 60 分钟（统一超时）

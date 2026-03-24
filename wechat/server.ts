@@ -218,7 +218,6 @@ try {
 	memory = undefined;
 }
 
-const activeAgents = new Map<string, { pid: number | undefined; kill: () => void; workspace: string }>();
 const agentExecutor = new AgentExecutor({
 	timeout: 60 * 60 * 1000,
 	maxConcurrent: 10,

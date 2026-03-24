@@ -619,10 +619,6 @@ async function withSessionLock<T>(lockKey: string, fn: () => Promise<T>): Promis
 // 同会话串行执行，不同会话可并行
 const busySessions = new Set<string>();
 
-// 追踪运行中的 agent 进程（用于 /终止）
-const activeAgents = new Map<string, { pid: number | undefined; kill: () => void; workspace: string }>();
-const childPids = new Set<number>();
-
 // 统一 Agent 执行器（超时保护、并发限制、僵尸清理）
 const agentExecutor = new AgentExecutor({
 	timeout: 60 * 60 * 1000, // 60 分钟（统一超时）
