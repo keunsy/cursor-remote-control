@@ -159,7 +159,7 @@ cursor-remote-control/
 
 ### 选择你的渠道
 
-> 💡 **三个渠道可以同时运行**，互不干扰，共享项目配置和记忆系统。
+> 💡 **所有渠道可以同时运行**，互不干扰，共享项目配置和记忆系统。
 
 #### 🟦 安装飞书服务
 
@@ -233,6 +233,26 @@ bash service.sh install
 ```
 
 详细配置见 [wecom/README.md](wecom/README.md)
+
+#### 🟧 安装微信个人号服务
+
+```bash
+cd wechat
+cp .env.example .env
+# 编辑 .env（推荐使用 agent login，无需填 CURSOR_API_KEY）
+
+bun install
+bun run start.ts
+# 首次启动会显示二维码，使用微信扫码登录即可
+```
+
+**特点**：
+- HTTP 长轮询模式（35秒超时）
+- 基于腾讯官方 ilink bot API
+- Token 自动持久化（无需重复扫码）
+- 支持"正在输入中"状态提示
+
+详细配置见 [wechat/README.md](wechat/README.md)
 
 #### 同时使用多个渠道
 
@@ -544,6 +564,7 @@ A: 可以！所有平台服务独立运行，互不干扰，共享 `projects.jso
 - **飞书服务**: [feishu/README.md](feishu/README.md) - 完整的飞书配置、功能说明和使用指南
 - **钉钉服务**: [dingtalk/README.md](dingtalk/README.md) - 完整的钉钉配置、功能说明和使用指南
 - **企业微信服务**: [wecom/README.md](wecom/README.md) - 完整的企业微信配置、功能说明和使用指南
+- **微信个人号服务**: [wechat/README.md](wechat/README.md) - 完整的微信配置、功能说明和使用指南
 - **热点新闻推送**: [docs/news-push-usage.md](docs/news-push-usage.md) - 新闻推送功能使用文档
 - **个人配置**: [飞书-Cursor-快速参考](docs/飞书-Cursor-快速参考.md) - 项目快捷路由配置
 
