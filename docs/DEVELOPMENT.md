@@ -143,35 +143,53 @@ bash service.sh logs
 ```
 cursor-remote-control/
 ├── shared/                  # 共享模块（核心逻辑）
+│   ├── agent-executor.ts    # Cursor Agent 执行器
+│   ├── command-handler.ts   # 统一命令处理
 │   ├── memory.ts            # 记忆系统
-│   ├── scheduler.ts         # 定时任务
+│   ├── memory-tool.ts       # 记忆 CLI 工具
+│   ├── scheduler.ts         # 定时任务调度器
 │   ├── heartbeat.ts         # 心跳系统
-│   └── sync-apple-notes.ts  # Apple Notes 同步
+│   ├── feilian-control.ts   # 飞连 VPN 控制
+│   └── news-fetcher.ts      # 新闻推送
 │
 ├── feishu/                  # 飞书服务
 │   ├── server.ts            # 主服务（消息收发）
 │   ├── bridge.ts            # OpenAI API 桥接
-│   ├── memory-tool.ts       # 记忆 CLI 工具
 │   ├── service.sh           # 服务管理脚本
 │   ├── .env                 # 环境变量（已忽略）
 │   └── README.md            # 飞书详细文档
 │
 ├── dingtalk/                # 钉钉服务
-│   ├── server-minimal.ts    # 主服务
-│   ├── dingtalk-client.ts   # Stream 客户端
-│   ├── memory-tool.ts       # 记忆 CLI 工具
+│   ├── server.ts            # 主服务
+│   ├── dingtalk-client.ts   # Stream 客户端封装
 │   ├── service.sh           # 服务管理脚本
 │   ├── .env                 # 环境变量（已忽略）
 │   └── README.md            # 钉钉详细文档
 │
+├── wecom/                   # 企业微信服务
+│   ├── server.ts            # 主服务
+│   ├── service.sh           # 服务管理脚本
+│   ├── .env                 # 环境变量（已忽略）
+│   └── README.md            # 企业微信详细文档
+│
+├── wechat/                  # 微信个人号服务
+│   ├── server.ts            # 主服务
+│   ├── wechat-helper.ts     # 会话管理
+│   ├── start.ts             # 启动脚本
+│   ├── .env                 # 环境变量（已忽略）
+│   └── README.md            # 微信详细文档
+│
 ├── projects.json            # 项目路由（已忽略）
 ├── cron-jobs-feishu.json    # 飞书定时任务（已忽略）
 ├── cron-jobs-dingtalk.json  # 钉钉定时任务（已忽略）
+├── cron-jobs-wecom.json     # 企业微信定时任务（已忽略）
+├── cron-jobs-wechat.json    # 微信定时任务（已忽略）
 ├── manage-services.sh       # 统一服务管理
 └── docs/                    # 文档
     ├── ARCHITECTURE.md      # 架构设计
     ├── DEVELOPMENT.md       # 本文档
-    └── TROUBLESHOOTING.md   # 故障排查
+    ├── TROUBLESHOOTING.md   # 故障排查
+    └── WECHAT-INTEGRATION-PLAN.md  # 微信接入方案
 ```
 
 ## 核心模块开发

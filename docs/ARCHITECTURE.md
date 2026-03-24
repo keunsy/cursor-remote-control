@@ -2,7 +2,7 @@
 
 ## 概述
 
-Cursor Remote Control 是一个双渠道 AI 中继服务，通过飞书和钉钉远程控制 Cursor AI Agent。
+Cursor Remote Control 是一个多平台 AI 中继服务，通过飞书、钉钉、企业微信、微信个人号四个平台远程控制 Cursor AI Agent。
 
 ## 整体架构
 
