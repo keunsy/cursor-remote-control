@@ -129,3 +129,4 @@ REFACTOR-SUMMARY.md
 # 微信 token 和同步文件
 wechat/.wechat_token.json
 wechat/.wechat_sync_buf
+wechat/.sessions.json
