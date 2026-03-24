@@ -326,7 +326,7 @@ nano projects.json
 {
   "projects": {
     "mycode": {
-      "path": "/Users/keunsy/Projects/myapp",
+      "path": "/path/to/your/project",
       "description": "代码项目"
     }
   }
@@ -512,7 +512,7 @@ test: 列出文件
 1. **检查路径**：
    ```bash
    # 使用绝对路径
-   /发送文件 /Users/keunsy/Desktop/report.pdf
+   /发送文件 /path/to/your/file.pdf
    
    # 或 ~ 家目录
    /发送文件 ~/Desktop/report.pdf
