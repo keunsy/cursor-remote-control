@@ -1948,13 +1948,23 @@ ${Object.entries(projectsConfig.projects).map(([k, v]) => `│    /${k} → ${v.
 `);
 
 // ── 启动前校验：未配置钉钉凭据则直接退出 ─────────────
-if (!config.DINGTALK_APP_KEY?.trim() || !config.DINGTALK_APP_SECRET?.trim()) {
-	console.error('[致命] 钉钉机器人未配置，无法建立连接。');
-	console.error('  请在 dingtalk/.env 中设置:');
-	console.error('    DINGTALK_APP_KEY=你的AppKey');
-	console.error('    DINGTALK_APP_SECRET=你的AppSecret');
-	console.error('  参考: cp .env.example .env 后编辑，或查看 README');
-	process.exit(1);
+function isValidConfig(value: string | undefined): boolean {
+	if (!value?.trim()) return false;
+	const placeholders = ['your_dingtalk_app_key', 'your_dingtalk_app_secret', 'your_app_key', 'your_app_secret'];
+	return !placeholders.includes(value.toLowerCase().trim());
+}
+
+if (!isValidConfig(config.DINGTALK_APP_KEY) || !isValidConfig(config.DINGTALK_APP_SECRET)) {
+	console.error('\n┌──────────────────────────────────────────────────┐');
+	console.error('│  ⚠️  钉钉机器人未正确配置，服务不会启动          │');
+	console.error('└──────────────────────────────────────────────────┘\n');
+	console.error('如需使用钉钉集成，请在 dingtalk/.env 中配置:');
+	console.error('  1. 复制模板: cp dingtalk/.env.example dingtalk/.env');
+	console.error('  2. 编辑 .env 文件，填入真实的机器人凭据:');
+	console.error('     DINGTALK_APP_KEY=your_actual_app_key');
+	console.error('     DINGTALK_APP_SECRET=your_actual_app_secret');
+	console.error('\n如不需要钉钉集成，可以忽略此提示。\n');
+	process.exit(0); // 使用 exit(0) 表示正常退出，不是错误
 }
 
 // ── 钉钉 Stream 客户端 ───────────────────────────
@@ -2015,51 +2025,14 @@ console.log(`[scheduler] started, file: ${cronStorePath}`);
 heartbeat.start();
 console.log(`[心跳] 已启动，默认关闭（发送 /心跳 开启）`);
 
+// 网络恢复监控已禁用：
+// 实践证明频繁的主动重连反而导致消息丢失和连接不稳定
+// 钉钉 Stream SDK 自带断线重连机制（ReconnectManager），已足够可靠
+// if (process.platform === 'darwin') {
+// 	const { startNetworkRecoveryMonitor } = await import('../shared/network-recovery.js');
+// 	startNetworkRecoveryMonitor({ ... });
+// }
+
 // ── 启动自检（.cursor/BOOT.md）───────────────────────
-setTimeout(async () => {
-	const bootPath = resolve(memoryWorkspace, ".cursor/BOOT.md");
-	try {
-		if (!existsSync(bootPath)) return;
-		const content = readFileSync(bootPath, "utf-8").trim();
-		if (!content) return;
-
-	console.log("[启动] 检测到 .cursor/BOOT.md，执行启动自检...");
-
-	const bootPrompt = [
-		"你正在执行启动自检。严格按以下清单执行：",
-		"",
-		content,
-		"",
-		"**输出要求**：",
-		"- 如果一切正常，只回复 'HEARTBEAT_OK'",
-		"- 如果发现问题，必须在问题前加上 ⚠️ 或 ❌ 标识",
-		"- 需要关注的配置项用 🔔 标识",
-		"- 格式示例：",
-		"  ✅ 记忆系统：正常",
-		"  ⚠️ 定时任务：发现 2 个配置错误",
-		"  ❌ .env 配置：缺少 VOLC_EMBEDDING_API_KEY",
-	].join("\n");
-
-	const { result, quotaWarning } = await runAgent(memoryWorkspace, bootPrompt);
-	const trimmed = result.trim();
-	const finalResult = quotaWarning ? `${quotaWarning}\n\n---\n\n${trimmed}` : trimmed;
-
-	// 如果有需要推送的内容且有活跃 webhook
-	if (finalResult && !/^(无输出|HEARTBEAT_OK)$/i.test(trimmed)) {
-		const webhook = getWebhook();
-		if (webhook) {
-			// 根据结果内容判断严重程度
-			const hasError = /[❌⚠️🔔]/.test(trimmed);
-			const title = hasError ? '⚠️ 启动自检 - 发现问题' : '✅ 启动自检';
-			const color = hasError ? 'red' : 'wathet';
-			
-			await sendMarkdown(webhook, finalResult, title, color);
-			console.log("[启动] 自检结果已推送到钉钉");
-		}
-	}
-
-		console.log("[启动] .cursor/BOOT.md 自检完成");
-	} catch (e) {
-		console.warn(`[启动] .cursor/BOOT.md 执行失败: ${e}`);
-	}
-}, BOOT_DELAY_MS);
+// 已禁用：agent 进程初始化太慢，会阻塞启动
+console.log("[启动] BOOT.md 自检已禁用（避免启动阻塞）");

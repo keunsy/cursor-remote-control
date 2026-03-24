@@ -1,0 +1,38 @@
+{
+  "name": "wechat-cursor-claw",
+  "version": "1.0.0",
+  "description": "Turn WeChat Personal into a remote control for Cursor AI — your personal AI strategic partner via IM",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run start-with-keepawake.ts",
+    "start": "bun run start.ts"
+  },
+  "engines": {
+    "bun": ">=1"
+  },
+  "keywords": [
+    "cursor",
+    "wechat",
+    "weixin",
+    "personal-wechat",
+    "ai-agent",
+    "cursor-agent"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/keunsy/cursor-remote-control"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/qrcode-terminal": "^0.12.2"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "cron-chinese": "^1.2.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

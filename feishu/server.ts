@@ -1096,8 +1096,10 @@ function isBillingError(text: string): boolean {
 	return BILLING_PATTERNS.some((p) => p.test(text));
 }
 
-// Agent 全局超时时间（1小时），防止长时间任务卡死
-const MAX_AGENT_TIMEOUT = 60 * 60 * 1000; // 1小时
+// Agent 全局超时时间（30分钟），防止长时间任务卡死
+// 大多数任务在 30 分钟内完成，极少数复杂任务可能需要更长时间
+// 如需更长时间，可通过 /终止 后重新提问或分批处理
+const MAX_AGENT_TIMEOUT = 30 * 60 * 1000; // 30分钟
 
 const childPids = new Set<number>();
 // lockKey → 正在运行的 agent 子进程（用于 /stop 终止）
@@ -1407,16 +1409,43 @@ function getSessionHistory(workspace: string, limit = 10): SessionEntry[] {
 
 // 同一 session 的消息串行执行；不同 session（即使同工作区）可并行
 const sessionLocks = new Map<string, Promise<void>>();
+const sessionQueueDepth = new Map<string, number>(); // 追踪每个 session 的排队深度
+const MAX_QUEUE_DEPTH = 3; // 最多允许 3 个任务排队
+
 async function withSessionLock<T>(lockKey: string, fn: () => Promise<T>): Promise<T> {
-	const prev = sessionLocks.get(lockKey) || Promise.resolve();
+	// 先设置好 release，避免提前抛异常导致 finally 中 release 未定义
 	let release!: () => void;
 	const next = new Promise<void>((r) => { release = r; });
-	sessionLocks.set(lockKey, next);
-	await prev;
+	let depthIncremented = false;
+	
 	try {
+		// 检查排队深度
+		const currentDepth = sessionQueueDepth.get(lockKey) || 0;
+		if (currentDepth >= MAX_QUEUE_DEPTH) {
+			throw new Error(`⚠️ 同会话有 ${currentDepth} 个任务排队，请等待前面的任务完成后再试。\n\n💡 建议：\n- 使用 /终止 停止当前任务\n- 或者使用 /新对话 开始新会话`);
+		}
+		
+		// 增加排队计数
+		sessionQueueDepth.set(lockKey, currentDepth + 1);
+		depthIncremented = true;
+		
+		const prev = sessionLocks.get(lockKey) || Promise.resolve();
+		sessionLocks.set(lockKey, next);
+		
+		await prev;
 		return await fn();
 	} finally {
 		release();
+		// 只有成功增加了计数才需要减少
+		if (depthIncremented) {
+			const depth = sessionQueueDepth.get(lockKey) || 0;
+			if (depth <= 1) {
+				sessionQueueDepth.delete(lockKey);
+				sessionLocks.delete(lockKey);
+			} else {
+				sessionQueueDepth.set(lockKey, depth - 1);
+			}
+		}
 	}
 }
 
@@ -2679,6 +2708,26 @@ dispatcher.register({
 	},
 });
 
+// ── 启动前校验：未配置飞书凭据则直接退出 ─────────────
+function isValidConfig(value: string | undefined): boolean {
+	if (!value?.trim()) return false;
+	const placeholders = ['your_feishu_app_id', 'your_feishu_app_secret', 'your_app_id', 'your_app_secret', 'cli_your_feishu_app_id'];
+	return !placeholders.includes(value.toLowerCase().trim());
+}
+
+if (!isValidConfig(config.FEISHU_APP_ID) || !isValidConfig(config.FEISHU_APP_SECRET)) {
+	console.error('\n┌──────────────────────────────────────────────────┐');
+	console.error('│  ⚠️  飞书机器人未正确配置，服务不会启动          │');
+	console.error('└──────────────────────────────────────────────────┘\n');
+	console.error('如需使用飞书集成，请在 feishu/.env 中配置:');
+	console.error('  1. 复制模板: cp feishu/.env.example feishu/.env');
+	console.error('  2. 编辑 .env 文件，填入真实的机器人凭据:');
+	console.error('     FEISHU_APP_ID=cli_your_actual_app_id');
+	console.error('     FEISHU_APP_SECRET=your_actual_app_secret');
+	console.error('\n如不需要飞书集成，可以忽略此提示。\n');
+	process.exit(0); // 使用 exit(0) 表示正常退出，不是错误
+}
+
 const ws = new Lark.WSClient({
 	appId: config.FEISHU_APP_ID,
 	appSecret: config.FEISHU_APP_SECRET,
@@ -2763,68 +2812,14 @@ await reconnectManager.connectWithRetry(
 	}
 );
 
-// 合盖再开盖后：TCP 可能半开，WebSocket 迟迟不触发 `close`，Lark SDK 只有收到 close 才会走内部重连，
-// 表现为开盖后发消息很久才有回复。网络从断到通、或探测间隔突然拉长（刚从睡眠恢复）时主动重建长连接。
-if (process.platform === "darwin") {
-	const { startNetworkRecoveryMonitor } = await import("../shared/network-recovery.js");
-	startNetworkRecoveryMonitor({
-		intervalMs: 8_000,           // 8秒探测一次（原15秒）- 更快检测到网络状态变化
-		wakeGapMs: 45_000,          // 45秒判定为唤醒（原120秒）- 适配短时合盖场景
-		minReconnectGapMs: 30_000,  // 30秒内不重复重连（原90秒）- 允许更频繁重连
-		onRecover: async (reason) => {
-			try {
-				console.warn(`[飞书] 主动重建长连接 (${reason})`);
-				ws.close({ force: true });
-				await new Promise((r) => setTimeout(r, 800));
-				await ws.start({ eventDispatcher: dispatcher });
-				console.log("[飞书] 长连接已重建");
-			} catch (e) {
-				console.error("[飞书] 主动重建长连接失败:", e);
-			}
-		},
-	});
-}
+// 网络恢复监控已禁用：
+// 实践证明频繁的主动重连反而导致消息丢失和连接不稳定
+// 飞书 SDK 自带断线重连机制，已足够可靠
+// if (process.platform === "darwin") {
+// 	const { startNetworkRecoveryMonitor } = await import("../shared/network-recovery.js");
+// 	startNetworkRecoveryMonitor({ ... });
+// }
 
 // ── 启动自检（.cursor/BOOT.md）───────────────────────
-setTimeout(async () => {
-	const bootPath = resolve(memoryWorkspace, ".cursor/BOOT.md");  // 修复：使用 memoryWorkspace（服务自己的启动自检）
-	try {
-		if (!existsSync(bootPath)) return;
-		const content = readFileSync(bootPath, "utf-8").trim();
-		if (!content) return;
-
-	console.log("[启动] 检测到 .cursor/BOOT.md，执行启动自检...");
-
-	const bootPrompt = [
-		"你正在执行启动自检。严格按以下清单执行：",
-		"",
-		content,
-		"",
-		"**输出要求**：",
-		"- 如果一切正常，只回复 'HEARTBEAT_OK'",
-		"- 如果发现问题，必须在问题前加上 ⚠️ 或 ❌ 标识",
-		"- 需要关注的配置项用 🔔 标识",
-		"- 格式示例：",
-		"  ✅ 记忆系统：正常",
-		"  ⚠️ 定时任务：发现 2 个配置错误",
-		"  ❌ .env 配置：缺少 VOLC_EMBEDDING_API_KEY",
-	].join("\n");
-
-	const { result, quotaWarning } = await runAgent(memoryWorkspace, bootPrompt);
-	const trimmed = result.trim();
-	const finalResult = quotaWarning ? `${quotaWarning}\n\n---\n\n${trimmed}` : trimmed;
-
-	// 如果有需要推送的内容且有活跃会话
-	if (finalResult && !/^(无输出|HEARTBEAT_OK)$/i.test(trimmed) && lastActiveChatId) {
-		// 根据结果内容判断严重程度
-		const hasError = /[❌⚠️🔔]/.test(trimmed);
-		const color = hasError ? "red" : "wathet";
-		const title = hasError ? "⚠️ 启动自检 - 发现问题" : "✅ 启动自检";
-		
-		await sendCard(lastActiveChatId, finalResult, { title, color });
-	}
-		console.log("[启动] .cursor/BOOT.md 自检完成");
-	} catch (e) {
-		console.warn(`[启动] .cursor/BOOT.md 执行失败: ${e}`);
-	}
-}, 8000);
+// 已禁用：agent 进程初始化太慢，会阻塞启动
+console.log("[启动] BOOT.md 自检已禁用（避免启动阻塞）");

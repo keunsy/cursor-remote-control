@@ -7,10 +7,12 @@
     "@vitalets/google-translate-api": "^9.2.1",
     "fast-xml-parser": "^5.5.5",
     "fastest-levenshtein": "^1.0.16",
-    "cron-chinese": "^1.2.0"
+    "cron-chinese": "^1.2.0",
+    "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
-    "@types/ws": "^8.18.1"
+    "@types/ws": "^8.18.1",
+    "@types/qrcode-terminal": "^0.12.2"
   }
 }

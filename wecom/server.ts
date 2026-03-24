@@ -494,14 +494,24 @@ ${Object.entries(projectsConfig.projects).map(([k, v]) => `│    /${k} → ${v.
 └──────────────────────────────────────────────────┘
 `);
 
-// 启动前校验
-if (!config.WECOM_BOT_ID?.trim() || !config.WECOM_BOT_SECRET?.trim()) {
-	console.error('[致命] 企业微信机器人未配置，无法建立连接。');
-	console.error('  请在 wecom/.env 中设置:');
-	console.error('    WECOM_BOT_ID=你的BotID');
-	console.error('    WECOM_BOT_SECRET=你的Secret');
-	console.error('  参考: cp .env.example .env 后编辑，或查看 README');
-	process.exit(1);
+// 启动前校验：检查配置是否有效（不是空值或占位符）
+function isValidConfig(value: string | undefined): boolean {
+	if (!value?.trim()) return false;
+	const placeholders = ['your_wecom_bot_id', 'your_wecom_bot_secret', 'your_bot_id', 'your_secret'];
+	return !placeholders.includes(value.toLowerCase().trim());
+}
+
+if (!isValidConfig(config.WECOM_BOT_ID) || !isValidConfig(config.WECOM_BOT_SECRET)) {
+	console.error('\n┌──────────────────────────────────────────────────┐');
+	console.error('│  ⚠️  企业微信机器人未正确配置，服务不会启动      │');
+	console.error('└──────────────────────────────────────────────────┘\n');
+	console.error('如需使用企业微信集成，请在 wecom/.env 中配置:');
+	console.error('  1. 复制模板: cp wecom/.env.example wecom/.env');
+	console.error('  2. 编辑 .env 文件，填入真实的机器人凭据:');
+	console.error('     WECOM_BOT_ID=your_actual_bot_id');
+	console.error('     WECOM_BOT_SECRET=your_actual_bot_secret');
+	console.error('\n如不需要企业微信集成，可以忽略此提示。\n');
+	process.exit(0); // 使用 exit(0) 表示正常退出，不是错误
 }
 
 const wsClient = new AiBot.WSClient({
@@ -1142,58 +1152,8 @@ heartbeat.start();
 console.log(`[心跳] 已启动，默认关闭（发送 /心跳 开启）`);
 
 // ── 启动自检（.cursor/BOOT.md）───────────────────────
-setTimeout(async () => {
-	const bootPath = resolve(memoryWorkspace, ".cursor/BOOT.md");
-	try {
-		if (!existsSync(bootPath)) return;
-		const content = readFileSync(bootPath, "utf-8").trim();
-		if (!content) return;
-
-	console.log("[启动] 检测到 .cursor/BOOT.md，执行启动自检...");
-
-	const bootPrompt = [
-		"你正在执行启动自检。严格按以下清单执行：",
-		"",
-		content,
-		"",
-		"**输出要求**：",
-		"- 如果一切正常，只回复 'HEARTBEAT_OK'",
-		"- 如果发现问题，必须在问题前加上 ⚠️ 或 ❌ 标识",
-		"- 需要关注的配置项用 🔔 标识",
-		"- 格式示例：",
-		"  ✅ 记忆系统：正常",
-		"  ⚠️ 定时任务：发现 2 个配置错误",
-		"  ❌ .env 配置：缺少 VOLC_EMBEDDING_API_KEY",
-	].join("\n");
-
-	const { result, quotaWarning } = await runAgent(memoryWorkspace, bootPrompt);
-	const trimmed = result.trim();
-	const finalResult = quotaWarning ? `${quotaWarning}\n\n---\n\n${trimmed}` : trimmed;
-
-	// 如果有需要推送的内容且有活跃会话
-	if (finalResult && !/^(无输出|HEARTBEAT_OK)$/i.test(trimmed) && lastActiveSession) {
-		try {
-			// 根据结果内容判断严重程度
-			const hasError = /[❌⚠️🔔]/.test(trimmed);
-			const title = hasError ? '⚠️ 启动自检 - 发现问题' : '✅ 启动自检';
-			
-			await wsClient.sendMessage(lastActiveSession.chatid, {
-				msgtype: 'markdown',
-				markdown: {
-					content: `**${title}**\n\n${finalResult.slice(0, 3000)}`,
-				},
-			});
-			console.log("[启动] 自检结果已推送到企业微信");
-		} catch (err) {
-			console.warn('[启动] 自检推送失败:', err);
-		}
-	}
-
-		console.log("[启动] .cursor/BOOT.md 自检完成");
-	} catch (e) {
-		console.warn(`[启动] .cursor/BOOT.md 执行失败: ${e}`);
-	}
-}, BOOT_DELAY_MS);
+// 已禁用：agent 进程初始化太慢，会阻塞启动
+console.log("[启动] BOOT.md 自检已禁用（避免启动阻塞）");
 
 // 初始连接
 await reconnectManager.connectWithRetry(connectToWecom, {

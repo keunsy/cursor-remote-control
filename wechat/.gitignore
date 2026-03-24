@@ -1,0 +1,18 @@
+# 环境变量
+.env
+
+# 微信登录凭证
+.wechat_token.json
+.wechat_sync_buf
+
+# 依赖
+node_modules/
+bun.lockb
+
+# 日志
+*.log
+
+# 临时文件
+*.tmp
+*.swp
+.DS_Store

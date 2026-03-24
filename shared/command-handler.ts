@@ -1,7 +1,7 @@
 /**
  * 统一命令处理器 — 三平台共享
  *
- * 抽取飞书、钉钉、企业微信的共同命令处理逻辑，
+ * 抽取飞书、钉钉、企业微信、个人微信的共同命令处理逻辑，
  * 通过适配器模式处理平台差异。
  */
 
@@ -40,7 +40,7 @@ export interface PlatformAdapter {
 // ──────────────────────────────────────────────────
 
 export interface CommandContext {
-	platform: "feishu" | "dingtalk" | "wecom";
+	platform: "feishu" | "dingtalk" | "wecom" | "wechat";
 	projectsConfig: any;
 	defaultWorkspace: string;
 	memoryWorkspace: string;
@@ -105,7 +105,14 @@ export class CommandHandler {
 	// ──────────────────────────────────────────────────
 
 	async handleHelp(): Promise<void> {
-		const platformName = this.ctx.platform === "feishu" ? "飞书" : this.ctx.platform === "dingtalk" ? "钉钉" : "企业微信";
+		const platformName =
+			this.ctx.platform === "feishu"
+				? "飞书"
+				: this.ctx.platform === "dingtalk"
+					? "钉钉"
+					: this.ctx.platform === "wechat"
+						? "微信个人号"
+						: "企业微信";
 		const projects = Object.keys(this.ctx.projectsConfig.projects).map(k => `\`${k}\``).join("、");
 
 		const helpText = [
@@ -194,6 +201,8 @@ export class CommandHandler {
 			credentialPreview = config.WECOM_BOT_ID ? `\`...${config.WECOM_BOT_ID.slice(-8)}\`` : "**未设置**";
 		} else if (this.ctx.platform === "feishu") {
 			credentialPreview = config.FEISHU_APP_ID ? `\`...${config.FEISHU_APP_ID.slice(-8)}\`` : "**未设置**";
+		} else if (this.ctx.platform === "wechat") {
+			credentialPreview = "**微信 ilink Bot（扫码登录）**";
 		} else {
 			credentialPreview = config.DINGTALK_APP_KEY ? `\`...${config.DINGTALK_APP_KEY.slice(-8)}\`` : "**未设置**";
 		}
@@ -229,7 +238,14 @@ export class CommandHandler {
 		const hbStatus = heartbeat.getStatus();
 		const hbText = hbStatus.enabled ? `每 ${Math.round(hbStatus.everyMs / 60000)} 分钟` : "未启用";
 
-		const platformLabel = this.ctx.platform === "wecom" ? "BotID" : this.ctx.platform === "feishu" ? "AppID" : "AppKey";
+		const platformLabel =
+			this.ctx.platform === "wecom"
+				? "BotID"
+				: this.ctx.platform === "feishu"
+					? "AppID"
+					: this.ctx.platform === "wechat"
+						? "微信"
+						: "AppKey";
 
 		const statusText = [
 			`**${platformLabel}：** ${credentialPreview}`,
@@ -1196,7 +1212,8 @@ export class CommandHandler {
 
 		const stats = statSync(apkPath);
 		const fileSize = stats.size;
-		const maxSize = this.ctx.platform === "wecom" ? 20 * 1024 * 1024 : 30 * 1024 * 1024;
+		const maxSize =
+			this.ctx.platform === "wecom" ? 20 * 1024 * 1024 : 30 * 1024 * 1024;
 		const modTime = new Date(stats.mtime).toLocaleString("zh-CN");
 
 		if (fileSize > maxSize) {
@@ -1257,7 +1274,8 @@ export class CommandHandler {
 
 		const stats = statSync(expandedPath);
 		const fileSize = stats.size;
-		const maxSize = this.ctx.platform === "wecom" ? 20 * 1024 * 1024 : 30 * 1024 * 1024;
+		const maxSize =
+			this.ctx.platform === "wecom" ? 20 * 1024 * 1024 : 30 * 1024 * 1024;
 
 		if (fileSize > maxSize) {
 			const limit = this.ctx.platform === "wecom" ? "20MB" : "30MB";

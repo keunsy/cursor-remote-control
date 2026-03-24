@@ -1,15 +1,27 @@
 /**
  * 统一 Agent 执行器
  * 
- * 三平台（飞书/钉钉/企微）共用的 Cursor Agent CLI 执行器
+ * 四平台（飞书/钉钉/企微/微信）共用的 Cursor Agent CLI 执行器
  * 提供：超时保护、并发限制、僵尸清理、进度回调
  */
 
 import { spawn, type ChildProcess } from 'child_process';
-import { resolve } from 'path';
+import { resolve, basename } from 'path';
+
+/** 从各平台子目录启动时 cwd 在 feishu|dingtalk|wecom|wechat，定时任务 JSON 应在仓库根目录 */
+const CRON_JSON_AT_REPO_ROOT = new Set(['feishu', 'dingtalk', 'wecom', 'wechat']);
+
+function resolveCronJobsJsonPath(platform: string): string {
+	const name = `cron-jobs-${platform}.json`;
+	const cwd = process.cwd();
+	if (CRON_JSON_AT_REPO_ROOT.has(basename(cwd))) {
+		return resolve(cwd, '..', name);
+	}
+	return resolve(cwd, name);
+}
 
 const AGENT_BIN = process.env.AGENT_BIN || resolve(process.env.HOME || '', '.local/bin/agent');
-const DEFAULT_TIMEOUT = 60 * 60 * 1000; // 60 分钟
+const DEFAULT_TIMEOUT = 30 * 60 * 1000; // 30 分钟（平衡执行时间和防卡死）
 const DEFAULT_MAX_CONCURRENT = 10; // 最多 10 个并发任务
 const PROGRESS_INTERVAL = 2000; // 2 秒
 
@@ -29,7 +41,7 @@ export interface AgentExecutorOptions {
 	model: string;
 	prompt: string;
 	sessionId?: string;
-	platform?: 'feishu' | 'dingtalk' | 'wecom';
+	platform?: 'feishu' | 'dingtalk' | 'wecom' | 'wechat';
 	webhook?: string;
 	
 	// 回调函数
@@ -84,10 +96,19 @@ export class AgentExecutor {
 			throw new Error(`并发任务数已达上限 (${this.maxConcurrent})，请稍后再试或使用 /终止 命令停止其他任务`);
 		}
 		
+		// 1.5 workspace：禁止 undefined/null/字面量 "undefined" 传入 spawn（会被转成路径 .../wechat/undefined）
+		const rawWs = options.workspace;
+		if (rawWs == null || typeof rawWs !== 'string' || rawWs.trim() === '' || rawWs.trim() === 'undefined') {
+			throw new Error(
+				`Workspace 无效（${String(rawWs)}）。请检查 projects.json 中 default_project 是否对应有效 path。`
+			);
+		}
+		const workspaceAbs = resolve(rawWs.trim());
+		
 		// 2. 构建 CLI 参数
 		const args = [
 			'-p', '--force', '--trust', '--approve-mcps',
-			'--workspace', options.workspace,
+			'--workspace', workspaceAbs,
 			'--model', options.model,
 			'--output-format', 'stream-json',
 			'--stream-partial-output',
@@ -114,10 +135,9 @@ export class AgentExecutor {
 			env.CURSOR_WEBHOOK = options.webhook;
 		}
 		
-		// 设置定时任务文件路径
+		// 设置定时任务文件路径（与各平台 server 中 resolve(ROOT, ...) 一致，避免 cwd 在子目录时指错文件）
 		if (options.platform) {
-			const cronFile = `cron-jobs-${options.platform}.json`;
-			env.CURSOR_CRON_FILE = resolve(process.cwd(), cronFile);
+			env.CURSOR_CRON_FILE = resolveCronJobsJsonPath(options.platform);
 		}
 		
 		// 4. 启动进程
@@ -132,7 +152,7 @@ export class AgentExecutor {
 				return;
 			}
 			
-			const lockKey = `${options.workspace}:${child.pid}`;
+			const lockKey = `${workspaceAbs}:${child.pid}`;
 			const startTime = Date.now();
 			let done = false;
 			let manuallyKilled = false; // 标记是否被手动终止
@@ -178,7 +198,7 @@ export class AgentExecutor {
 					} catch {}
 					reject(new Error('MANUALLY_STOPPED')); // 特殊标记，告诉调用方这是手动终止
 				},
-				workspace: options.workspace,
+				workspace: workspaceAbs,
 				startTime,
 			});
 			

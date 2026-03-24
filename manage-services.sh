@@ -14,6 +14,7 @@ SERVICES=(
     "com.cursor-feishu"
     "com.dingtalk-cursor-claw"
     "com.wecom-cursor-claw"
+    "com.wechat-cursor-claw"
 )
 
 # 检测是否已安装为 launchd 服务
@@ -39,7 +40,7 @@ detect_mode() {
     fi
     
     # 检查是否有手动启动的进程
-    if pgrep -f "cursor-remote-control/(feishu|dingtalk|wecom)" > /dev/null 2>&1; then
+    if pgrep -f "cursor-remote-control/(feishu|dingtalk|wecom|wechat)" > /dev/null 2>&1; then
         echo "manual"
         return
     fi
@@ -56,7 +57,7 @@ install_launchd() {
     # 检查每个子项目的 service.sh
     local installed=0
     
-    for dir in feishu dingtalk wecom; do
+    for dir in feishu dingtalk wecom wechat; do
         if [ -f "$PROJECT_ROOT/$dir/service.sh" ]; then
             echo "  安装 $dir 服务..."
             cd "$PROJECT_ROOT/$dir"
@@ -131,8 +132,8 @@ stop_launchd() {
     sleep 2
     
     # 强制清理残留进程
-    ps aux | grep -E "bun run.*/(dingtalk|feishu|wecom)/" | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null || true
-    ps aux | grep -E "caffeinate.*/(dingtalk|feishu|wecom)/" | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null || true
+    ps aux | grep -E "bun run.*/(dingtalk|feishu|wecom|wechat)/" | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null || true
+    ps aux | grep -E "caffeinate.*/(dingtalk|feishu|wecom|wechat)/" | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null || true
     
     echo "  ✅ 所有服务已停止"
 }
@@ -154,6 +155,10 @@ start_manual() {
     nohup bun run start-with-keepawake.ts > /tmp/wecom-cursor.log 2>&1 &
     echo "  ✅ 企业微信服务已启动 (PID: $!)"
     
+    cd "$PROJECT_ROOT/wechat"
+    nohup bun run start-with-keepawake.ts > /tmp/wechat-cursor.log 2>&1 &
+    echo "  ✅ 微信个人号服务已启动 (PID: $!)"
+    
     sleep 3
     echo ""
     echo "✅ 所有服务已启动"
@@ -165,10 +170,10 @@ start_manual() {
 stop_manual() {
     echo "🛑 停止所有服务..."
     
-    pkill -9 -f "cursor-remote-control/(feishu|dingtalk|wecom)" 2>/dev/null || true
+    pkill -9 -f "cursor-remote-control/(feishu|dingtalk|wecom|wechat)" 2>/dev/null || true
     sleep 2
     
-    REMAINING=$(pgrep -f "cursor-remote-control/(feishu|dingtalk|wecom)" 2>/dev/null | wc -l || echo "0")
+    REMAINING=$(pgrep -f "cursor-remote-control/(feishu|dingtalk|wecom|wechat)" 2>/dev/null | wc -l || echo "0")
     if [[ "$REMAINING" -eq 0 ]]; then
         echo "  ✅ 所有服务已停止"
     else
@@ -250,6 +255,7 @@ show_status() {
     FEISHU_PID=$(pgrep -f 'feishu/start.ts' | head -1 || echo "")
     DINGTALK_PID=$(pgrep -f 'dingtalk/start.ts' | head -1 || echo "")
     WECOM_PID=$(pgrep -f 'wecom/start.ts' | grep -v keepawake | head -1 || echo "")
+    WECHAT_PID=$(pgrep -f 'wechat/start.ts' | grep -v keepawake | head -1 || echo "")
     
     if [[ -n "$FEISHU_PID" ]]; then
         FEISHU_CAFF=$(pgrep -f "caffeinate.*feishu" | head -1 || echo "")
@@ -272,6 +278,13 @@ show_status() {
         echo "  🔴 企业微信: 未运行"
     fi
     
+    if [[ -n "$WECHAT_PID" ]]; then
+        WECHAT_CAFF=$(pgrep -f "caffeinate.*wechat" | head -1 || echo "")
+        echo "  🟢 微信个人号: PID $WECHAT_PID (caffeinate: $WECHAT_CAFF)"
+    else
+        echo "  🔴 微信个人号: 未运行"
+    fi
+    
     echo ""
     echo "【防休眠】"
     CAFF_COUNT=$(pmset -g assertions | grep -c "caffeinate" || echo "0")
@@ -282,6 +295,7 @@ show_status() {
     echo "  飞书:     tail -f /tmp/feishu-cursor.log"
     echo "  钉钉:     tail -f /tmp/dingtalk-cursor.log"
     echo "  企业微信: tail -f /tmp/wecom-cursor.log"
+    echo "  微信:     tail -f /tmp/wechat-cursor.log"
 }
 
 # ========== 清理重复进程 ==========
@@ -291,7 +305,7 @@ clean_duplicates() {
     echo ""
     
     # 获取所有进程 PID
-    all_pids=$(ps aux | grep -E "bun run.*/(dingtalk|feishu|wecom)/" | grep -v grep | awk '{print $2}' | sort)
+    all_pids=$(ps aux | grep -E "bun run.*/(dingtalk|feishu|wecom|wechat)/" | grep -v grep | awk '{print $2}' | sort)
     
     if [ -z "$all_pids" ]; then
         echo "没有运行中的进程"
@@ -354,10 +368,13 @@ show_logs() {
         wecom)
             tail -f /tmp/wecom-cursor.log
             ;;
+        wechat)
+            tail -f /tmp/wechat-cursor.log
+            ;;
         *)
             echo "❌ 未知服务: $service"
             echo ""
-            echo "可用服务: feishu, dingtalk, wecom"
+            echo "可用服务: feishu, dingtalk, wecom, wechat"
             exit 1
             ;;
     esac
@@ -382,7 +399,7 @@ show_help() {
     echo ""
     echo "维护命令:"
     echo "  clean               清理重复进程"
-    echo "  logs <service>      查看日志（feishu/dingtalk/wecom）"
+    echo "  logs <service>      查看日志（feishu/dingtalk/wecom/wechat）"
     echo ""
     echo "示例:"
     echo "  bash manage-services.sh status          # 查看状态"
@@ -427,7 +444,7 @@ case "${1:-}" in
             echo "❌ 请指定服务名称"
             echo ""
             echo "用法: bash manage-services.sh logs <service>"
-            echo "可用服务: feishu, dingtalk, wecom"
+            echo "可用服务: feishu, dingtalk, wecom, wechat"
             exit 1
         fi
         show_logs "$2"
