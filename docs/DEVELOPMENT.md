@@ -111,7 +111,7 @@ bun run server.ts
 
 # 钉钉服务
 cd dingtalk
-bun run server-minimal.ts
+bun run server.ts
 ```
 
 **优点**：
@@ -196,7 +196,7 @@ cursor-remote-control/
 
 ### 1. 消息处理流程
 
-**文件**：`feishu/server.ts` 或 `dingtalk/server-minimal.ts`
+**文件**：`feishu/server.ts` 或 `dingtalk/server.ts` 或 `wecom/server.ts` 或 `wechat/server.ts`
 
 ```typescript
 async function handleMessage(message: MessageEvent) {
