@@ -236,17 +236,14 @@ bash service.sh install
 
 #### 同时使用多个渠道
 
-三个服务可以同时运行，互不干扰：
+所有平台服务可以同时运行，互不干扰：
 
 ```bash
-# 安装飞书
+# 安装各平台服务
 cd feishu && bash service.sh install && cd ..
-
-# 安装钉钉
 cd dingtalk && bash service.sh install && cd ..
-
-# 安装企业微信
 cd wecom && bash service.sh install && cd ..
+# wechat 直接运行: cd wechat && bun run start.ts
 
 # 使用统一管理脚本
 bash manage-services.sh status
