@@ -1405,7 +1405,7 @@ function getSessionHistory(workspace: string, limit = 10): SessionEntry[] {
 // 同一 session 的消息串行执行；不同 session（即使同工作区）可并行
 const sessionLocks = new Map<string, Promise<void>>();
 const sessionQueueDepth = new Map<string, number>(); // 追踪每个 session 的排队深度
-const MAX_QUEUE_DEPTH = 3; // 最多允许 3 个任务排队
+const MAX_QUEUE_DEPTH = 10; // 最多允许 10 个任务排队（避免多发消息触发限制）
 
 async function withSessionLock<T>(lockKey: string, fn: () => Promise<T>): Promise<T> {
 	// 先设置好 release，避免提前抛异常导致 finally 中 release 未定义
