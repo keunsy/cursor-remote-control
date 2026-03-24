@@ -572,14 +572,14 @@ A: 可以！所有平台服务独立运行，互不干扰，共享 `projects.jso
 
 ## 技术栈
 
-| 层 | 飞书 | 钉钉 | 企业微信 |
-|---|------|------|---------|
-| 运行时 | Bun 1.x + TypeScript | Bun 1.x + TypeScript | Bun 1.x + TypeScript |
-| SDK | @larksuiteoapi/node-sdk | dingtalk-stream | @wecom/aibot-node-sdk |
-| 连接方式 | WebSocket 长连接 | Stream 长连接 | WebSocket 长连接 |
-| 流式回复 | 轮询刷新 | ❌ 不支持 | 主动推送 ⭐ |
-| 文件发送 | ✅ (30MB) | ✅ (30MB) 🆕 | ✅ (20MB) ⭐ |
-| 新闻推送 | ✅ | ✅ | ✅ ⭐ |
+| 层 | 飞书 | 钉钉 | 企业微信 | 微信个人号 |
+|---|------|------|---------|---------|
+| 运行时 | Bun 1.x + TypeScript | Bun 1.x + TypeScript | Bun 1.x + TypeScript | Bun 1.x + TypeScript |
+| SDK | @larksuiteoapi/node-sdk | dingtalk-stream | @wecom/aibot-node-sdk | ilink bot API (HTTP) |
+| 连接方式 | WebSocket 长连接 | Stream 长连接 | WebSocket 长连接 | HTTP 长轮询 (35s) |
+| 流式回复 | 轮询刷新 | ❌ 不支持 | 主动推送 ⭐ | 正在输入状态 |
+| 文件发送 | ✅ (30MB) | ✅ (30MB) 🆕 | ✅ (20MB) ⭐ | ❌ 不支持 |
+| 新闻推送 | ✅ | ✅ | ✅ ⭐ | ✅ |
 | 飞连 VPN | ✅ | ✅ | ✅ ⭐ |
 | 数据库 | SQLite（向量索引 + FTS5） | SQLite（向量索引 + FTS5） | SQLite（向量索引 + FTS5） |
 | 语音 | 火山引擎 → whisper-cpp | 火山引擎 → whisper-cpp | 火山引擎 → whisper-cpp |
