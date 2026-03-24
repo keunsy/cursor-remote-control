@@ -4,9 +4,9 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg)](https://www.typescriptlang.org/)
 [![Bun](https://img.shields.io/badge/Bun-1.x-333333.svg)](https://bun.sh)
 
-> 基于 [feishu-cursor-claw](https://github.com/nongjun/feishu-cursor-claw) 改进，支持飞书、钉钉、企业微信三个平台。
+> 基于 [feishu-cursor-claw](https://github.com/nongjun/feishu-cursor-claw) 改进，支持飞书、钉钉、企业微信、微信个人号四个平台。
 
-通过飞书、钉钉、企业微信远程控制 Cursor AI Agent 的中继服务。
+通过飞书、钉钉、企业微信、微信个人号远程控制 Cursor AI Agent 的中继服务。
 
 在手机上发消息，你的 Mac 就自动写代码、审文档、执行任务。将 Cursor 变成你的**私人 AI 战略合伙人**，随时随地通过 IM 调用。
 
@@ -18,10 +18,12 @@
 
 ```
 手机飞书 ──WebSocket──→ feishu/server.ts ────┐
+                                             │
+手机钉钉 ──Stream─────→ dingtalk/server.ts ───┤
                                              ├──→ Cursor CLI ──→ 本地 Cursor IDE
-手机钉钉 ──Stream─────→ dingtalk/server.ts ───┤          │
+手机企业微信 ─WebSocket→ wecom/server.ts ──────┤          │
                                              │          │
-手机企业微信 ─WebSocket→ wecom/server.ts ──────┘          │
+手机微信 ──HTTP Poll──→ wechat/server.ts ─────┘          │
                                                          │
         ┌────────────────────────────────────────────────┘
         │
@@ -38,6 +40,7 @@
 - 飞书：WebSocket 长连接模式，本地服务主动连接飞书服务器
 - 钉钉：Stream 长连接模式，本地服务主动连接钉钉服务器
 - 企业微信：WebSocket 长连接模式，本地服务主动连接企业微信服务器
+- 微信个人号：HTTP 长轮询模式，基于腾讯官方 ilink bot API
 - 无需公网 IP，无需端口映射
 
 **2. 消息处理**
@@ -113,17 +116,24 @@ cursor-remote-control/
 │   ├── service.sh               # 企业微信服务管理脚本
 │   └── README.md                # 企业微信详细文档
 │
+├── wechat/                      # 微信个人号服务（独立）
+│   ├── server.ts                # 微信主服务
+│   ├── wechat-helper.ts         # 微信工具函数
+│   ├── start.ts                 # 启动脚本
+│   └── README.md                # 微信详细文档
+│
 ├── projects.json                # 项目路由配置（共享）
 ├── cron-jobs-feishu.json        # 飞书定时任务
 ├── cron-jobs-dingtalk.json      # 钉钉定时任务
 ├── cron-jobs-wecom.json         # 企业微信定时任务
+├── cron-jobs-wechat.json        # 微信定时任务
 ├── manage-services.sh           # 统一服务管理脚本
 └── docs/                        # 通用文档
 ```
 
 ## 功能特性
 
-- 🚀 **三渠道支持**: 飞书、钉钉、企业微信独立部署，可同时运行
+- 🚀 **四渠道支持**: 飞书、钉钉、企业微信、微信个人号独立部署，可同时运行
 - 🧠 **记忆系统**: OpenClaw 完整实现（混合搜索 + 时间衰减 + MMR 去重 + 自动 Flush）⭐
 - ⏰ **定时任务**: AI 创建的 Cron 任务，自动执行并推送通知
 - 📰 **热点新闻推送**: 定时抓取多平台热榜并推送（微博/知乎/百度等）
