@@ -334,7 +334,7 @@ cp projects.json.example projects.json
 # 编辑 projects.json，配置你的工作区
 ```
 
-配置示例（三个平台共享）：
+配置示例（所有平台共享）：
 
 ```json
 {
@@ -347,7 +347,7 @@ cp projects.json.example projects.json
 }
 ```
 
-使用方式（三个平台通用）：
+使用方式（所有平台通用）：
 - `docs: 帮我整理文档` → 路由到文档工作区
 - `切换到 mycode` → 持久切换到代码项目
 
