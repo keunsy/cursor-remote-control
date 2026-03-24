@@ -48,7 +48,6 @@ export interface CommandContext {
 	scheduler: Scheduler;
 	memory: MemoryManager | null;
 	heartbeat: HeartbeatRunner;
-	activeAgents: Map<string, any>;
 	busySessions: Set<string>;
 	sessionsStore: Map<string, any>;
 	getCurrentProject: (defaultWs: string) => string | null;
@@ -58,7 +57,7 @@ export interface CommandContext {
 	getActiveSessionId: (workspace: string) => string | null;
 	switchToSession: (workspace: string, sessionId: string) => boolean;
 	rootDir: string;
-	agentExecutor?: AgentExecutor; // 统一 Agent 执行器（可选，用于新架构）
+	agentExecutor?: AgentExecutor; // 统一 Agent 执行器
 }
 
 // ──────────────────────────────────────────────────
@@ -193,7 +192,7 @@ export class CommandHandler {
 	// ──────────────────────────────────────────────────
 
 	async handleStatus(): Promise<void> {
-		const { config, projectsConfig, memoryWorkspace, memory, scheduler, heartbeat, activeAgents, sessionsStore, agentExecutor } = this.ctx;
+		const { config, projectsConfig, memoryWorkspace, memory, scheduler, heartbeat, sessionsStore, agentExecutor } = this.ctx;
 
 		// 平台特定的配置预览
 		let credentialPreview = "";
@@ -254,7 +253,7 @@ export class CommandHandler {
 			`**记忆：** ${memStatus}`,
 			`**调度：** ${schedText}`,
 			`**心跳：** ${hbText}`,
-			`**活跃任务：** ${agentExecutor ? agentExecutor.getActiveAgents().length : activeAgents.size} 个运行中`,
+			`**活跃任务：** ${agentExecutor ? agentExecutor.getActiveAgents().length : 0} 个运行中`,
 			`**工作区：** ${memoryWorkspace}`,
 			"",
 			"**项目路由：**",
@@ -272,7 +271,7 @@ export class CommandHandler {
 	// ──────────────────────────────────────────────────
 
 	async handleNew(args?: string): Promise<void> {
-		const { projectsConfig, activeAgents, archiveAndResetSession, getSessionHistory, agentExecutor } = this.ctx;
+		const { projectsConfig, archiveAndResetSession, getSessionHistory, agentExecutor } = this.ctx;
 
 		const trimmed = args?.trim();
 		if (trimmed && trimmed !== "--all") {
@@ -287,7 +286,7 @@ export class CommandHandler {
 			const projects = Object.entries(projectsConfig.projects);
 			
 			// 检查是否有任何运行中的任务
-			const activeList = agentExecutor ? agentExecutor.getActiveAgents() : Array.from(activeAgents.values());
+			const activeList = agentExecutor ? agentExecutor.getActiveAgents() : [];
 			const runningProjects: string[] = [];
 			
 			for (const agent of activeList) {
@@ -326,9 +325,7 @@ export class CommandHandler {
 		const workspace = this.ctx.projectsConfig.projects[currentProject]?.path || this.ctx.defaultWorkspace;
 
 		// Bug 修复: 检查是否有正在运行的任务
-		const activeList = agentExecutor ? agentExecutor.getActiveAgents() : Array.from(activeAgents.entries()).map(([lk, agent]) => ({ 
-			key: lk, workspace: agent.workspace, pid: agent.pid, runningTime: 0 
-		}));
+		const activeList = agentExecutor ? agentExecutor.getActiveAgents() : [];
 		
 		const hasRunning = activeList.some(agent => agent.workspace === workspace);
 		if (hasRunning) {
@@ -366,7 +363,7 @@ export class CommandHandler {
 	// ──────────────────────────────────────────────────
 
 	async handleStop(projectHint?: string): Promise<void> {
-		const { projectsConfig, activeAgents, busySessions, sessionsStore, agentExecutor } = this.ctx;
+		const { projectsConfig, busySessions, sessionsStore, agentExecutor } = this.ctx;
 
 		const projectNameForWorkspace = (wsPath: string): string | null => {
 			for (const [name, info] of Object.entries(projectsConfig.projects) as [string, any][]) {
@@ -396,7 +393,7 @@ export class CommandHandler {
 
 		// 批量终止所有任务
 		if (projectHint?.trim() === '--all') {
-			const activeList = agentExecutor ? agentExecutor.getActiveAgents() : Array.from(activeAgents.values());
+			const activeList = agentExecutor ? agentExecutor.getActiveAgents() : [];
 			if (activeList.length === 0) {
 				await this.adapter.reply("当前没有正在运行的任务。");
 				return;
@@ -404,25 +401,13 @@ export class CommandHandler {
 			
 			const killedTasks: string[] = [];
 			if (agentExecutor) {
-				// 使用新的 executor
 				for (const agent of activeList) {
 					const projectName = projectNameForWorkspace(agent.workspace) || "未知项目";
 					killedTasks.push(`✅ **${projectName}**: 已终止 (PID: ${agent.pid}, 运行 ${agent.runningTime}s)`);
 					console.log(`[指令] 批量终止 agent pid=${agent.pid} project=${projectName}`);
 				}
 				agentExecutor.killAll();
-				activeAgents.clear();
 				busySessions.clear();
-			} else {
-				// 兼容旧模式
-				for (const [lk, agent] of activeAgents.entries()) {
-					const projectName = getProjectNameByLockKey(lk) || "未知项目";
-					agent.kill();
-					activeAgents.delete(lk);
-					busySessions.delete(lk);
-					killedTasks.push(`✅ **${projectName}**: 已终止 (PID: ${agent.pid})`);
-					console.log(`[指令] 批量终止 agent pid=${agent.pid} project=${projectName} session=${lk}`);
-				}
 			}
 			
 			await this.adapter.reply(
@@ -441,34 +426,10 @@ export class CommandHandler {
 			const wsPath = projectsConfig.projects[projectHint].path;
 			
 			if (agentExecutor) {
-				// 使用新的 executor
 				const killed = agentExecutor.killAgent(wsPath);
 				if (killed) {
-					// 清理关联状态
-					activeAgents.clear();
 					busySessions.clear();
 					await this.adapter.reply(`✅ 已终止项目 **${projectHint}** 的任务。\n\n发送新消息将继续在当前会话中对话。`);
-				} else {
-					await this.adapter.reply(`项目 **${projectHint}** 没有正在运行的任务。`);
-				}
-			} else {
-				// 兼容旧模式
-				const matchedTasks: Array<{ lockKey: string; agent: any }> = [];
-				for (const [lk, agent] of activeAgents.entries()) {
-					if (agent.workspace === wsPath) {
-						matchedTasks.push({ lockKey: lk, agent });
-					}
-				}
-				
-				if (matchedTasks.length > 0) {
-					for (const { lockKey: lk, agent } of matchedTasks) {
-						agent.kill();
-						activeAgents.delete(lk);
-						busySessions.delete(lk);
-						console.log(`[指令] 终止 agent pid=${agent.pid} project=${projectHint} session=${lk}`);
-					}
-					const countText = matchedTasks.length > 1 ? `${matchedTasks.length} 个任务` : "任务";
-					await this.adapter.reply(`已终止项目 **${projectHint}** 的${countText}。\n\n发送新消息将继续在当前会话中对话。`);
 				} else {
 					await this.adapter.reply(`项目 **${projectHint}** 没有正在运行的任务。`);
 				}
@@ -477,9 +438,7 @@ export class CommandHandler {
 		}
 
 		// 获取活跃任务列表
-		const activeList = agentExecutor ? agentExecutor.getActiveAgents() : Array.from(activeAgents.entries()).map(([lk, agent]) => ({ 
-			key: lk, workspace: agent.workspace, pid: agent.pid, runningTime: 0 
-		}));
+		const activeList = agentExecutor ? agentExecutor.getActiveAgents() : [];
 		
 		if (activeList.length === 0) {
 			await this.adapter.reply("当前没有正在运行的任务。");
@@ -490,22 +449,11 @@ export class CommandHandler {
 			const agent = activeList[0]!;
 			const projectName = agentExecutor 
 				? projectNameForWorkspace(agent.workspace) || "当前项目"
-				: getProjectNameByLockKey((agent as { key?: string }).key ?? "") || "当前项目";
+				: "当前项目";
 			
 			if (agentExecutor) {
 				agentExecutor.killAgent(agent.workspace);
-				activeAgents.clear();
 				busySessions.clear();
-			} else {
-				const firstPair = [...activeAgents][0];
-				if (!firstPair) {
-					await this.adapter.reply("当前没有正在运行的任务。");
-					return;
-				}
-				const [lk, a] = firstPair;
-				a.kill();
-				activeAgents.delete(lk);
-				busySessions.delete(lk);
 			}
 			console.log(`[指令] 终止 agent pid=${agent.pid}`);
 			await this.adapter.reply(`✅ 已终止 **${projectName}** 的任务。`);
@@ -513,10 +461,8 @@ export class CommandHandler {
 		}
 
 		const tasks = activeList.map((agent, i) => {
-			const projectName = agentExecutor
-				? projectNameForWorkspace(agent.workspace) || "未知项目"
-				: getProjectNameByLockKey((agent as any).key) || "未知项目";
-			const timeHint = agentExecutor ? `运行 ${agent.runningTime}s` : "";
+			const projectName = projectNameForWorkspace(agent.workspace) || "未知项目";
+			const timeHint = `运行 ${agent.runningTime}s`;
 			return `${i + 1}. **${projectName}**\n   PID: ${agent.pid} ${timeHint}`;
 		});
 
@@ -572,47 +518,23 @@ export class CommandHandler {
 				: '';
 
 			// 检查是否有正在运行的 Agent（需要热重启）
-			const { activeAgents, agentExecutor } = this.ctx;
-			const activeList = agentExecutor ? agentExecutor.getActiveAgents() : Array.from(activeAgents.entries());
+			const { agentExecutor } = this.ctx;
+			const activeList = agentExecutor ? agentExecutor.getActiveAgents() : [];
 			
-			if (activeList.length > 0) {
-				// 有正在运行的任务，执行热重启
-				let restartMsg = '';
-				if (agentExecutor) {
-					console.log(`[热重启] 终止所有 Agent (${activeList.length}个), model=${prevModel}`);
-					agentExecutor.killAll();
-					activeAgents.clear();
-					this.ctx.busySessions.clear();
-					restartMsg = '\n\n⚠️ **已重启正在运行的任务**（将使用新模型继续）';
-				} else {
-					for (const [lockKey, agent] of activeList as any[]) {
-						try {
-							console.log(`[热重启] 终止旧 Agent (pid=${agent.pid}), model=${prevModel}`);
-							agent.kill();
-							activeAgents.delete(lockKey);
-							this.ctx.busySessions.delete(lockKey);
-							restartMsg = '\n\n⚠️ **已重启正在运行的任务**（将使用新模型继续）';
-						} catch (err) {
-							console.error('[热重启] 终止进程失败:', err);
-						}
-					}
-				}
-				
-				await this.adapter.reply(
-					`✅ **已切换模型（全局）**\n\n` +
-					`**之前：** \`${prevModel}\`\n` +
-					`**现在：** \`${targetModel.id}\`${fallbackInfo}${restartMsg}\n\n` +
-					`✨ 已更新全局配置，三个平台（飞书/钉钉/企微）同步生效。`
-				);
-			} else {
-				// 没有运行中的任务
-				await this.adapter.reply(
-					`✅ **已切换模型（全局）**\n\n` +
-					`**之前：** \`${prevModel}\`\n` +
-					`**现在：** \`${targetModel.id}\`${fallbackInfo}\n\n` +
-					`✨ 已更新全局配置，三个平台（飞书/钉钉/企微）同步生效。`
-				);
+			let restartMsg = '';
+			if (activeList.length > 0 && agentExecutor) {
+				console.log(`[热重启] 终止所有 Agent (${activeList.length}个), model=${prevModel}`);
+				agentExecutor.killAll();
+				this.ctx.busySessions.clear();
+				restartMsg = '\n\n⚠️ **已重启正在运行的任务**（将使用新模型继续）';
 			}
+			
+			await this.adapter.reply(
+				`✅ **已切换模型（全局）**\n\n` +
+				`**之前：** \`${prevModel}\`\n` +
+				`**现在：** \`${targetModel.id}\`${fallbackInfo}${restartMsg}\n\n` +
+				`✨ 已更新全局配置，三个平台（飞书/钉钉/企微）同步生效。`
+			);
 		} catch (error) {
 			console.error("[模型切换] 写入全局配置失败", error);
 			await this.adapter.reply(`❌ 切换失败\n\n${error instanceof Error ? error.message : String(error)}`);

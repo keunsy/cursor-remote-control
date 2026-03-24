@@ -582,29 +582,45 @@ class WechatClient {
 	}
 
 	/**
-	 * 发送"正在输入中"状态（显示输入提示）
-	 * @param toUserId 目标用户ID
-	 * @param contextToken 上下文token
-	 * @param text 可选的提示文本（如"思考中..."）
+	 * 获取用户会话配置（包含 typing_ticket）
 	 */
-	public async sendTypingIndicator(toUserId: string, contextToken: string, text: string = '⏳ 思考中...'): Promise<any> {
-		return this.request('/ilink/bot/sendmessage', {
+	private async getConfig(userId: string): Promise<any> {
+		return this.request('/ilink/bot/getconfig', {
 			base_info: { 
 				channel_version: CHANNEL_VERSION
 			},
-			msg: {
-				from_user_id: '',
-				to_user_id: toUserId,
-				client_id: `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
-				message_type: MESSAGE_TYPE_BOT,
-				message_state: MESSAGE_STATE_GENERATING,  // 关键：状态设为 1（生成中）
-				item_list: [{ 
-					type: MESSAGE_ITEM_TEXT, 
-					text_item: { text }
-				}],
-				context_token: contextToken
-			}
+			ilink_user_id: userId
 		});
+	}
+
+	/**
+	 * 发送"正在输入中"状态（显示在微信顶部）
+	 * @param userId 目标用户ID
+	 * @returns Promise
+	 */
+	public async sendTypingIndicator(userId: string): Promise<any> {
+		try {
+			// 1. 先获取 typing_ticket
+			const config = await this.getConfig(userId);
+			const typingTicket = config?.typing_ticket;
+			
+			if (!typingTicket) {
+				console.warn('[Typing] 未获取到 typing_ticket');
+				return { ok: false, error: 'no_typing_ticket' };
+			}
+
+			// 2. 发送 typing 状态
+			return this.request('/ilink/bot/sendtyping', {
+				base_info: { 
+					channel_version: CHANNEL_VERSION
+				},
+				ilink_user_id: userId,
+				typing_ticket: typingTicket
+			});
+		} catch (error) {
+			console.warn('[Typing] 发送失败:', error);
+			return { ok: false, error };
+		}
 	}
 
 	public async sendTextMessage(toUserId: string, text: string, contextToken?: string): Promise<any> {
@@ -1362,13 +1378,12 @@ async function startWechatServer() {
 
 			let lockKey = getLockKey(workspace);
 			if (busySessions.has(lockKey)) {
-				// 显示"正在输入中"而不是发送普通文本
-				try {
-					await client.sendTypingIndicator(uid, contextToken, '⏳ 排队中，请稍候...');
-				} catch (_e) {
-					// Typing indicator 失败时回退到普通文本
-					await sendWechatText(uid, '⏳ 当前会话有任务进行中，请稍候…', contextToken);
-				}
+				// 显示"正在输入中"（微信顶部）
+				await client.sendTypingIndicator(uid).catch(() => {
+					// Typing indicator 失败不影响流程
+				});
+				// 同时发送排队提示消息
+				await sendWechatText(uid, '⏳ 当前会话有任务进行中，请稍候…', contextToken);
 				const maxWait = 5 * 60 * 1000;
 				const startWait = Date.now();
 				while (busySessions.has(lockKey)) {
@@ -1390,13 +1405,10 @@ async function startWechatServer() {
 					memory.appendSessionLog(workspace, 'user', message, config.CURSOR_MODEL);
 				}
 
-				// 发送"正在输入中"状态（类似 OpenClaw）
-				try {
-					await client.sendTypingIndicator(uid, contextToken, '⏳ 思考中...');
-				} catch (typingErr) {
-					// 输入提示失败不影响主流程
-					console.warn('[输入提示] 发送失败:', typingErr);
-				}
+				// 发送"正在输入中"状态（微信顶部显示）
+				await client.sendTypingIndicator(uid).catch((err) => {
+					console.warn('[输入提示] 发送失败:', err);
+				});
 
 				const taskStart = Date.now();
 				const ex = await execAgentWithFallback(

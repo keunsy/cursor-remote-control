@@ -190,23 +190,25 @@ bash service.sh uninstall  # 卸载自启动
 
 ---
 
-## 与飞书/钉钉共存
+## 与飞书/钉钉/微信共存
 
-企业微信、飞书、钉钉三个服务可以同时运行，互不干扰：
+企业微信、飞书、钉钉、微信个人号四个服务可以同时运行，互不干扰：
 
 | 服务 | 标签 | 日志路径 | SDK |
 |------|------|---------|-----|
 | 飞书 | com.cursor-feishu | /tmp/feishu-cursor.log | @larksuiteoapi/node-sdk |
 | 钉钉 | com.dingtalk-cursor-claw | /tmp/dingtalk-cursor.log | dingtalk-stream |
 | 企业微信 | com.wecom-cursor-claw | /tmp/wecom-cursor.log | @wecom/aibot-node-sdk |
+| 微信个人号 | - | 直接运行 | ilink bot API |
 
 **共享配置**（位于根目录）：
-- `projects.json` - 项目路由配置
-- `.memory.sqlite` - 记忆向量数据库
+- `projects.json` - 项目路由配置（四平台通用）
+- `.memory.sqlite` - 记忆向量数据库（四平台共享）
 
 **独立配置**：
 - `wecom/.env` - 企业微信凭据
 - `../cron-jobs-wecom.json` - 企业微信定时任务（项目根目录）
+- `../cron-jobs-wechat.json` - 微信定时任务（项目根目录）
 
 ---
 
