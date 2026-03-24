@@ -1184,7 +1184,6 @@ async function startWechatServer() {
 				scheduler,
 				memory: memory ?? null,
 				heartbeat,
-				activeAgents,
 				busySessions,
 				sessionsStore,
 				getCurrentProject: (ws: string) => getCurrentProject(ws) || null,
@@ -1410,24 +1409,18 @@ async function startWechatServer() {
 						platform: 'wechat',
 						webhook: uid,
 						sessionId: session.agentId,
-						onSessionId: (sid: string) => {
-							session.agentId = sid;
-							setActiveSession(workspace, sid, message.slice(0, 40));
-							const oldLockKey = lockKey;
-							const newLockKey = `session:${sid}`;
-							if (oldLockKey !== newLockKey) {
-								const ag = activeAgents.get(oldLockKey);
-								if (ag) {
-									activeAgents.delete(oldLockKey);
-									activeAgents.set(newLockKey, ag);
-								}
-								if (busySessions.has(oldLockKey)) {
-									busySessions.delete(oldLockKey);
-									busySessions.add(newLockKey);
-								}
-								lockKey = newLockKey;
-							}
-						},
+					onSessionId: (sid: string) => {
+						session.agentId = sid;
+						setActiveSession(workspace, sid, message.slice(0, 40));
+						// Bug 修复: sessionId 创建后，需更新 busySessions 的 key
+						const oldLockKey = lockKey;
+						const newLockKey = `session:${sid}`;
+						if (oldLockKey !== newLockKey && busySessions.has(oldLockKey)) {
+							busySessions.delete(oldLockKey);
+							busySessions.add(newLockKey);
+							lockKey = newLockKey;
+						}
+					},
 						onProgress: (p) => {
 							if (p.elapsed > 0 && Math.floor(p.elapsed) % 15 === 0) {
 								console.log(`[Agent] ${formatElapsed(Math.floor(p.elapsed))} ${p.phase}`);
@@ -1488,7 +1481,6 @@ async function startWechatServer() {
 		const active = agentExecutor.getActiveAgents();
 		if (active.length > 0) {
 			agentExecutor.killAll();
-			activeAgents.clear();
 			busySessions.clear();
 		}
 		unwatchFile(ENV_PATH);

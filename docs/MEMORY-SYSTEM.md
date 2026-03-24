@@ -740,7 +740,7 @@ MEMORY_MMR_LAMBDA=1.0  # 纯相关性，不考虑多样性
   "memory_workspace": "mycode",  // 记忆工作区（可选）
   "projects": {
     "mycode": {
-      "path": "/Users/user/projects/mycode",
+      "path": "/path/to/your/project",
       "description": "我的主项目"
     }
   }

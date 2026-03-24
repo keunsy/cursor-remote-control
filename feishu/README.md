@@ -747,7 +747,7 @@ nohup bun run server.ts > /tmp/feishu-cursor.log 2>&1 &  # 后台运行
 | 飞书无响应 | 服务未启动或崩溃 | `bash service.sh status` 检查；`bash service.sh restart` 重启 |
 | `API Key 无效` | .env 中有占位符 key | 运行 `agent login` 登录，然后注释掉 .env 中的 `CURSOR_API_KEY` |
 | `团队配额已用完` | 使用 opus-4.6-thinking 模型 | 改用 `auto` 或 `opus-4.6` 模型（编辑 .env 中的 `CURSOR_MODEL`） |
-| `permission denied /Users/user` | projects.json 用户名错误 | 把 projects.json 中的 `/Users/user` 改为你的实际用户名 |
+| `permission denied to access path` | projects.json 用户名错误 | 检查 projects.json 中的路径是否正确 |
 | `agent: command not found` | Agent CLI 未安装 | 运行 `curl https://cursor.com/install -fsS \| bash` |
 | `bun: command not found` | Bun 未安装 | 运行 `curl -fsSL https://bun.sh/install \| bash` |
 | 语音识别乱码 | whisper 质量低 | 配置火山引擎 STT（VOLC_STT_APP_ID 和 VOLC_STT_ACCESS_TOKEN） |

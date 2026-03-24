@@ -234,7 +234,7 @@ bash service.sh uninstall  # 卸载自启动
 | 企业微信无响应 | 服务未启动或异常 | `cd wecom && bash service.sh restart` |
 | `API Key 无效` | .env 中有无效占位符 | 运行 `agent login` 登录，注释掉 .env 中的 `CURSOR_API_KEY` |
 | `团队配额已用完` | 使用高消耗模型 | 改用 `auto` 模型（编辑 .env 中的 `CURSOR_MODEL=auto`） |
-| `permission denied /Users/user` | projects.json 路径错误 | 把 projects.json 中的 `/Users/user` 改为实际用户名 |
+| `permission denied to access path` | projects.json 路径错误 | 检查 projects.json 中的路径是否正确 |
 | `agent: command not found` | Agent CLI 未安装 | `curl https://cursor.com/install -fsS \| bash` |
 | `bun: command not found` | Bun 未安装 | `curl -fsSL https://bun.sh/install \| bash` |
 | WebSocket 连接失败 | BotID/Secret 错误 | 检查 .env 中的配置是否正确 |

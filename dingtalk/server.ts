@@ -634,7 +634,6 @@ process.on('SIGINT', async () => {
 	if (active.length > 0) {
 		console.log(`[退出] 正在终止 ${active.length} 个运行中的任务...`);
 		agentExecutor.killAll();
-		activeAgents.clear();
 		busySessions.clear();
 	}
 
@@ -1331,7 +1330,6 @@ async function handleMessage(msg: any) {
 		scheduler,
 		memory: memory || null,
 		heartbeat,
-		activeAgents,
 		busySessions,
 		sessionsStore,
 		getCurrentProject: (ws: string) => {
@@ -1656,20 +1654,13 @@ async function handleMessage(msg: any) {
 			onSessionId: (sid) => {
 				session.agentId = sid;
 				setActiveSession(workspace, sid, message.slice(0, 40));
-				// Bug 修复: sessionId 创建后，需更新 activeAgents 和 busySessions 的 key
+				// Bug 修复: sessionId 创建后，需更新 busySessions 的 key
 				const oldLockKey = lockKey;
 				const newLockKey = `session:${sid}`;
-				if (oldLockKey !== newLockKey) {
-					const agent = activeAgents.get(oldLockKey);
-					if (agent) {
-						activeAgents.delete(oldLockKey);
-						activeAgents.set(newLockKey, agent);
-					}
-					if (busySessions.has(oldLockKey)) {
-						busySessions.delete(oldLockKey);
-						busySessions.add(newLockKey);
-					}
-					lockKey = newLockKey; // 更新闭包变量，让 finally 使用新 key
+				if (oldLockKey !== newLockKey && busySessions.has(oldLockKey)) {
+					busySessions.delete(oldLockKey);
+					busySessions.add(newLockKey);
+					lockKey = newLockKey;
 					console.log(`[lockKey] 更新: ${oldLockKey} → ${newLockKey}`);
 				}
 			},

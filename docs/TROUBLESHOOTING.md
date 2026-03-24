@@ -302,7 +302,7 @@ bash service.sh restart
 
 ### 4. 项目路由相关
 
-#### 问题：`permission denied /Users/user`
+#### 问题：`permission denied to access path`
 
 **原因**：`projects.json` 中的路径错误（占位符未替换）
 
@@ -312,7 +312,7 @@ bash service.sh restart
 # 编辑 projects.json
 nano projects.json
 
-# 将 /Users/user 改为实际用户名
+# 将路径改为实际用户的主目录
 {
   "projects": {
     "mycode": {
@@ -631,7 +631,7 @@ ERROR: Invalid API Key
 解决：注释掉 .env 中的 CURSOR_API_KEY，使用 agent login
 
 # 2. 项目路径不存在
-ERROR: ENOENT: no such file or directory, access '/Users/user/...'
+ERROR: ENOENT: no such file or directory, access to project path
 解决：修正 projects.json 中的路径
 
 # 3. 网络超时

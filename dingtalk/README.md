@@ -371,7 +371,7 @@ VOLC_EMBEDDING_MODEL=doubao-embedding-vision-250615
 | 钉钉无响应 | 服务未启动或异常 | `cd dingtalk && bash service.sh restart` |
 | `API Key 无效` | .env 中有无效占位符 | 运行 `agent login` 登录，注释掉 .env 中的 `CURSOR_API_KEY` |
 | `团队配额已用完` | 使用高消耗模型 | 改用 `auto` 模型（编辑 .env 中的 `CURSOR_MODEL=auto`） |
-| `permission denied /Users/user` | projects.json 路径错误 | 把 projects.json 中的 `/Users/user` 改为实际用户名 |
+| `permission denied to access path` | projects.json 路径错误 | 检查 projects.json 中的路径是否正确 |
 | 语音识别失败 | whisper 未安装 | `brew install whisper-cpp` 或配置火山引擎 STT |
 | `agent: command not found` | Agent CLI 未安装 | `curl https://cursor.com/install -fsS \| bash` |
 | `bun: command not found` | Bun 未安装 | `curl -fsSL https://bun.sh/install \| bash` |
