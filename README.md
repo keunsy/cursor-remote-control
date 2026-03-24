@@ -88,7 +88,7 @@
 
 ```
 cursor-remote-control/
-├── shared/                      # 共享模块（三个平台共用）
+├── shared/                      # 共享模块（所有平台共用）
 │   ├── memory.ts                # 记忆管理器 v2（SQLite + 向量 + FTS5）
 │   ├── memory-tool.ts           # 记忆 CLI（统一版本，供 Agent 调用）
 │   ├── scheduler.ts             # 定时任务调度
