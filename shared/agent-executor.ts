@@ -216,31 +216,47 @@ export class AgentExecutor {
 				reject(new Error(`Agent运行超时 (${elapsed}分钟)，已强制终止。如需更长时间，请分批处理或使用 /终止 手动停止。`));
 			}, this.timeout);
 			
-			// 状态收集
-			let stderr = '';
-			let resultText = '';
-			let sessionId: string | undefined = options.sessionId;
-			let assistantBuf = '';
-			let lastSegment = '';
-			let toolSummary: string[] = [];
-			let lineBuf = '';
-			let phase: AgentProgress['phase'] = 'thinking';
-			let lastProgressTime = 0;
-			let sessionLockAcquired = false;
+		// 状态收集
+		let stderr = '';
+		let resultText = '';
+		let sessionId: string | undefined = options.sessionId;
+		let assistantBuf = '';
+		let lastSegment = '';
+		let toolSummary: string[] = [];
+		let lineBuf = '';
+		let phase: AgentProgress['phase'] = 'thinking';
+		let lastProgressTime = 0;
+		let sessionLockAcquired = false;
+		let lastOutputTime = Date.now(); // 追踪最后一次输出时间
 			
-			// 进度更新定时器
-			progressTimer = setInterval(() => {
-				if (done) return;
-				const now = Date.now();
-				if (options.onProgress && now - lastProgressTime >= PROGRESS_INTERVAL) {
-					lastProgressTime = now;
-					options.onProgress({
-						elapsed: Math.round((now - startTime) / 1000),
-						phase,
-						snippet: getSnippet(),
-					});
-				}
-			}, 1000);
+		// 进度更新 + 无输出超时检测定时器
+		const IDLE_TIMEOUT = 5 * 60 * 1000; // 5 分钟无输出超时
+		progressTimer = setInterval(() => {
+			if (done) return;
+			const now = Date.now();
+			
+			// 检查是否长时间无输出（可能卡住）
+			const idleTime = now - lastOutputTime;
+			if (idleTime > IDLE_TIMEOUT) {
+				console.warn(`[AgentExecutor] 进程 ${Math.floor(idleTime / 1000 / 60)} 分钟无输出，可能卡住，强制终止 ${lockKey}`);
+				cleanup();
+				try {
+					child.kill('SIGKILL');
+				} catch {}
+				reject(new Error(`任务 ${Math.floor(idleTime / 1000 / 60)} 分钟无响应，已强制终止。可能原因：\n- 等待外部服务响应\n- 陷入死循环\n- 卡在用户输入`));
+				return;
+			}
+			
+			// 进度更新
+			if (options.onProgress && now - lastProgressTime >= PROGRESS_INTERVAL) {
+				lastProgressTime = now;
+				options.onProgress({
+					elapsed: Math.round((now - startTime) / 1000),
+					phase,
+					snippet: getSnippet(),
+				});
+			}
+		}, 1000);
 			
 			function getSnippet(): string {
 				const lines = assistantBuf.split('\n').filter(l => l.trim());
@@ -309,13 +325,14 @@ export class AgentExecutor {
 				}
 			}
 			
-			// 监听输出
-			child.stdout!.on('data', (chunk: Buffer) => {
-				lineBuf += chunk.toString();
-				const lines = lineBuf.split('\n');
-				lineBuf = lines.pop()!;
-				for (const line of lines) processLine(line);
-			});
+		// 监听输出
+		child.stdout!.on('data', (chunk: Buffer) => {
+			lastOutputTime = Date.now(); // 更新最后输出时间
+			lineBuf += chunk.toString();
+			const lines = lineBuf.split('\n');
+			lineBuf = lines.pop()!;
+			for (const line of lines) processLine(line);
+		});
 			
 			child.stderr!.on('data', (chunk: Buffer) => {
 				stderr += chunk.toString();
