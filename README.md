@@ -4,9 +4,9 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg)](https://www.typescriptlang.org/)
 [![Bun](https://img.shields.io/badge/Bun-1.x-333333.svg)](https://bun.sh)
 
-> 基于 [feishu-cursor-claw](https://github.com/nongjun/feishu-cursor-claw) 改进，支持飞书、钉钉、企业微信、微信个人号四个平台。
+> 基于 [feishu-cursor-claw](https://github.com/nongjun/feishu-cursor-claw) 改进，支持飞书、钉钉、企业微信、微信个人号等多平台。
 
-通过飞书、钉钉、企业微信、微信个人号远程控制 Cursor AI Agent 的中继服务。
+通过 IM 平台（飞书、钉钉、企业微信、微信等）远程控制 Cursor AI Agent 的中继服务。
 
 在手机上发消息，你的 Mac 就自动写代码、审文档、执行任务。将 Cursor 变成你的**私人 AI 战略合伙人**，随时随地通过 IM 调用。
 

@@ -2722,13 +2722,6 @@ if (!isValidConfig(config.FEISHU_APP_ID) || !isValidConfig(config.FEISHU_APP_SEC
 	process.exit(0); // 使用 exit(0) 表示正常退出，不是错误
 }
 
-const ws = new Lark.WSClient({
-	appId: config.FEISHU_APP_ID,
-	appSecret: config.FEISHU_APP_SECRET,
-	domain: Lark.Domain.Feishu,
-	loggerLevel: Lark.LoggerLevel.info,
-});
-
 // ── 启动 ─────────────────────────────────────────
 const list = Object.entries(projectsConfig.projects)
 	.map(([k, v]) => `  ${k} → ${v.path}`)
@@ -2742,7 +2735,7 @@ console.log(`
 ├──────────────────────────────────────────────────┤
 │  模型: ${config.CURSOR_MODEL}
 │  Key:  ...${config.CURSOR_API_KEY.slice(-8)}
-│  连接: 飞书 WebSocket 长连接
+│  连接: 飞书 WebSocket 长连接 + Supervisor 重连
 │  收件: ${INBOX_DIR}
 │  语音: ${sttEngine}
 │  记忆: ${memEngine}
@@ -2772,23 +2765,61 @@ scheduler.start().catch((e) => console.warn(`[scheduler] start failed: ${e}`));
 
 heartbeat.start();
 
-// 直接启动飞书 WebSocket，SDK 自带重连机制
-// 移除外部 ReconnectManager 避免双重重连冲突
-try {
-	ws.start({ eventDispatcher: dispatcher });
-	console.log("✅ 飞书 WebSocket 已启动（SDK 自动管理连接和重连）");
-} catch (err) {
-	console.error("❌ 飞书 WebSocket 启动失败:", err);
-	process.exit(1);
+// ── 飞书 WebSocket 启动（简化版，避免复杂性）─────
+// 参考：OpenClaw 的教训，但采用更简单的方案
+// 修复：
+// 1. 异步启动 + 超时检测（捕获连接错误）
+// 2. 启动重试机制（参考钉钉/企微）
+// 3. 启动成功后，完全依赖 SDK 自己的重连机制
+
+const ws = new Lark.WSClient({
+	appId: config.FEISHU_APP_ID,
+	appSecret: config.FEISHU_APP_SECRET,
+	domain: Lark.Domain.Feishu,
+	loggerLevel: Lark.LoggerLevel.info,
+});
+
+// 启动重试循环（类似钉钉/企微）
+let startRetries = 10; // 增加到 10 次（共 ~5 分钟）
+while (startRetries > 0) {
+	try {
+		// 异步启动 + 30 秒超时检测（避免僵尸连接）
+		await Promise.race([
+			ws.start({ eventDispatcher: dispatcher }),
+			new Promise<void>((_, reject) => 
+				setTimeout(() => reject(new Error('WebSocket 启动超时 (30s)')), 30000)
+			),
+		]);
+		
+		console.log("✅ 飞书 WebSocket 已连接（SDK 自动管理重连）");
+		break; // 启动成功，退出循环
+		
+	} catch (err) {
+		startRetries--;
+		const errMsg = err instanceof Error ? err.message : String(err);
+		
+		if (startRetries === 0) {
+			console.error('❌ 飞书 WebSocket 连接启动失败（已重试 10 次）:', errMsg);
+			console.error('请检查网络连接和飞书凭据（FEISHU_APP_ID / FEISHU_APP_SECRET）');
+			process.exit(1);
+		}
+		
+		// 指数退避：10s, 20s, 40s, 60s, 60s, ...
+		const delayMs = Math.min(10000 * Math.pow(2, 10 - startRetries - 1), 60000);
+		console.warn(
+			`[飞书] 连接失败，${Math.round(delayMs / 1000)}秒后重试 ` +
+			`(剩余 ${startRetries} 次): ${errMsg}`
+		);
+		
+		await new Promise(r => setTimeout(r, delayMs));
+	}
 }
 
-// 网络恢复监控已禁用：
-// 实践证明频繁的主动重连反而导致消息丢失和连接不稳定
-// 飞书 SDK 自带断线重连机制，已足够可靠
-// if (process.platform === "darwin") {
-// 	const { startNetworkRecoveryMonitor } = await import("../shared/network-recovery.js");
-// 	startNetworkRecoveryMonitor({ ... });
-// }
+// 注意：启动成功后，SDK 内部有自己的重连机制
+// 如果 SDK 重连也失败，服务会断开，但进程不会退出
+// 这是预期行为，因为：
+// 1. launchd 会监控进程并重启（如果配置了 KeepAlive）
+// 2. 避免因短暂网络问题导致服务频繁重启
 
 // ── 启动自检（.cursor/BOOT.md）───────────────────────
 // 已禁用：agent 进程初始化太慢，会阻塞启动
