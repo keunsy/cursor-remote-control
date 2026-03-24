@@ -1101,26 +1101,21 @@ function isBillingError(text: string): boolean {
 // 如需更长时间，可通过 /终止 后重新提问或分批处理
 const MAX_AGENT_TIMEOUT = 30 * 60 * 1000; // 30分钟
 
-const childPids = new Set<number>();
-// lockKey → 正在运行的 agent 子进程（用于 /stop 终止）
-const activeAgents = new Map<string, { pid: number | undefined; kill: () => void; workspace: string }>();
-
 // 统一 Agent 执行器（超时保护、并发限制、僵尸清理）
 const agentExecutor = new AgentExecutor({
 	timeout: MAX_AGENT_TIMEOUT,
-	maxConcurrent: 10, // 提高并发限制
+	maxConcurrent: 10,
 });
 
 // 优雅退出
 process.on("SIGINT", async () => {
 	console.log("\n[退出] 正在清理资源...");
 
-	// 终止所有运行中的 Agent 进程（使用统一执行器）
+	// 终止所有运行中的 Agent 进程
 	const active = agentExecutor.getActiveAgents();
 	if (active.length > 0) {
 		console.log(`[退出] 正在终止 ${active.length} 个运行中的任务...`);
 		agentExecutor.killAll();
-		activeAgents.clear();
 		busySessions.clear();
 	}
 
@@ -2178,7 +2173,6 @@ async function handleInner(
 		scheduler,
 		memory: memory || null,
 		heartbeat,
-		activeAgents,
 		busySessions,
 		sessionsStore,
 		getCurrentProject: (ws: string) => getCurrentProject(ws) || null,

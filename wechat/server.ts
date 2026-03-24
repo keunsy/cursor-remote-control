@@ -267,6 +267,8 @@ const MESSAGE_ITEM_VIDEO = 5;
 
 const MESSAGE_TYPE_USER = 1;  // 单聊
 const MESSAGE_TYPE_BOT = 2;   // Bot 回复
+const MESSAGE_STATE_NEW = 0;  // 新消息
+const MESSAGE_STATE_GENERATING = 1;  // 生成中（显示"正在输入中"）
 const MESSAGE_STATE_FINISH = 2;  // 消息完成状态
 
 interface TextItem {
@@ -578,6 +580,32 @@ class WechatClient {
 		// 客户端超时 = 服务器超时 + 5秒（避免客户端先超时）
 		const clientTimeoutMs = (timeout + 5) * 1000;
 		return this.request('/ilink/bot/getupdates', body, clientTimeoutMs);
+	}
+
+	/**
+	 * 发送"正在输入中"状态（显示输入提示）
+	 * @param toUserId 目标用户ID
+	 * @param contextToken 上下文token
+	 * @param text 可选的提示文本（如"思考中..."）
+	 */
+	public async sendTypingIndicator(toUserId: string, contextToken: string, text: string = '⏳ 思考中...'): Promise<any> {
+		return this.request('/ilink/bot/sendmessage', {
+			base_info: { 
+				channel_version: CHANNEL_VERSION
+			},
+			msg: {
+				from_user_id: '',
+				to_user_id: toUserId,
+				client_id: `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+				message_type: MESSAGE_TYPE_BOT,
+				message_state: MESSAGE_STATE_GENERATING,  // 关键：状态设为 1（生成中）
+				item_list: [{ 
+					type: MESSAGE_ITEM_TEXT, 
+					text_item: { text }
+				}],
+				context_token: contextToken
+			}
+		});
 	}
 
 	public async sendTextMessage(toUserId: string, text: string, contextToken?: string): Promise<any> {
@@ -1336,7 +1364,12 @@ async function startWechatServer() {
 
 			let lockKey = getLockKey(workspace);
 			if (busySessions.has(lockKey)) {
-				await sendWechatText(uid, '⏳ 当前会话有任务进行中，请稍候…', contextToken);
+				// 显示"正在输入中"而不是发送普通文本
+				try {
+					await client.sendTypingIndicator(uid, contextToken, '⏳ 排队中，请稍候...');
+				} catch (e) {
+					await sendWechatText(uid, '⏳ 当前会话有任务进行中，请稍候…', contextToken);
+				}
 				const maxWait = 5 * 60 * 1000;
 				const startWait = Date.now();
 				while (busySessions.has(lockKey)) {
@@ -1356,6 +1389,14 @@ async function startWechatServer() {
 				busySessions.add(lockKey);
 				if (memory) {
 					memory.appendSessionLog(workspace, 'user', message, config.CURSOR_MODEL);
+				}
+
+				// 发送"正在输入中"状态（类似 OpenClaw）
+				try {
+					await client.sendTypingIndicator(uid, contextToken, '⏳ 思考中...');
+				} catch (typingErr) {
+					// 输入提示失败不影响主流程
+					console.warn('[输入提示] 发送失败:', typingErr);
 				}
 
 				const taskStart = Date.now();
