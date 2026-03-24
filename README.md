@@ -580,10 +580,10 @@ A: 可以！所有平台服务独立运行，互不干扰，共享 `projects.jso
 | 流式回复 | 轮询刷新 | ❌ 不支持 | 主动推送 ⭐ | 正在输入状态 |
 | 文件发送 | ✅ (30MB) | ✅ (30MB) 🆕 | ✅ (20MB) ⭐ | ❌ 不支持 |
 | 新闻推送 | ✅ | ✅ | ✅ ⭐ | ✅ |
-| 飞连 VPN | ✅ | ✅ | ✅ ⭐ |
-| 数据库 | SQLite（向量索引 + FTS5） | SQLite（向量索引 + FTS5） | SQLite（向量索引 + FTS5） |
-| 语音 | 火山引擎 → whisper-cpp | 火山引擎 → whisper-cpp | 火山引擎 → whisper-cpp |
-| 部署 | macOS launchd | macOS launchd | macOS launchd |
+| 飞连 VPN | ✅ | ✅ | ✅ ⭐ | ❌ 不需要 |
+| 数据库 | SQLite（向量索引 + FTS5） | SQLite（向量索引 + FTS5） | SQLite（向量索引 + FTS5） | SQLite（向量索引 + FTS5） |
+| 语音 | 火山引擎 → whisper-cpp | 火山引擎 → whisper-cpp | 火山引擎 → whisper-cpp | 火山引擎 → whisper-cpp |
+| 部署 | macOS launchd | macOS launchd | macOS launchd | 直接运行 (bun run start.ts) |
 
 **共享模块**（`shared/` 目录）：
 - 项目路由配置 (`projects.json`)
