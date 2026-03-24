@@ -111,7 +111,7 @@ CURSOR_MODEL=auto  # 钉钉单独使用 auto，其他平台仍使用 config/mode
 
 ## 📊 当前配置
 
-三个平台统一使用：
+所有平台统一使用：
 
 ```
 ✅ 钉钉:     opus-4.6
