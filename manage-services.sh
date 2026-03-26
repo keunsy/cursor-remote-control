@@ -39,8 +39,8 @@ detect_mode() {
         done
     fi
     
-    # 检查是否有手动启动的进程
-    if pgrep -f "cursor-remote-control/(feishu|dingtalk|wecom|wechat)" > /dev/null 2>&1; then
+    # 检查是否有手动启动的进程（精确匹配 start.ts 和 server.ts）
+    if pgrep -f "bun run.*(feishu|dingtalk|wecom|wechat)/(start|server)" > /dev/null 2>&1; then
         echo "manual"
         return
     fi

@@ -27,6 +27,7 @@ import { FeilianController, type OperationResult } from '../shared/feilian-contr
 import { fetchNews } from '../shared/news-fetcher.js';
 import { getHealthStatus } from '../shared/news-sources/monitoring.js';
 import { CommandHandler, type PlatformAdapter, type CommandContext } from '../shared/command-handler.js';
+import { ProcessLock } from '../shared/process-lock.js';
 import { humanizeCronInChinese } from 'cron-chinese';
 import {
 	getSession,
@@ -44,6 +45,14 @@ import {
 	getCurrentProject,
 	setCurrentProject,
 } from './wechat-helper.js';
+
+// ── 进程锁（防止多实例运行）──────────────────────
+const processLock = new ProcessLock("wechat");
+if (!processLock.acquire()) {
+	console.error("\n❌ 微信服务已在运行，无法启动第二个实例");
+	console.error("💡 如需重启，请先停止现有进程: pkill -f 'wechat/server.ts'");
+	process.exit(1);
+}
 
 const HOME = process.env.HOME!;
 const ROOT = pathResolve(import.meta.dirname, '..');
@@ -63,6 +72,12 @@ const MAX_MESSAGE_CHUNK = 3800;
 const SESSION_EXPIRED_ERRCODE = -14;
 const CHANNEL_VERSION = 'cursor-remote-control/1.0';
 
+// Typing 状态配置（参考 OpenClaw）
+const TYPING_STATUS_TYPING = 1;
+const TYPING_STATUS_CANCEL = 2;
+const TYPING_KEEPALIVE_INTERVAL_MS = 5000; // 每 5 秒刷新一次
+const TYPING_MAX_DURATION_MS = 5 * 60 * 1000; // 最多维持 5 分钟
+
 mkdirSync(INBOX_DIR, { recursive: true });
 
 // 清理 inbox
@@ -72,6 +87,100 @@ for (const f of readdirSync(INBOX_DIR)) {
 	try {
 		if (Date.now() - statSync(p).mtimeMs > DAY_MS) unlinkSync(p);
 	} catch {}
+}
+
+/**
+ * 将 Markdown 文本转换为纯文本（完全按照 OpenClaw 实现）
+ * 微信个人号不支持 Markdown，需要转换为纯文本
+ * 
+ * 策略：简洁处理，只移除 Markdown 语法，不添加装饰符号
+ * 参考：OpenClaw 的 markdownToPlainText 实现
+ */
+/**
+ * 将 Markdown 转为纯文本（完全按照 OpenClaw 微信实现）
+ * 
+ * 特点：
+ * - 保留列表标记（-、*、数字等）
+ * - 零依赖，纯正则实现
+ * - 移除代码块围栏、图片、链接格式、表格格式
+ * - 移除粗体、斜体、标题、行内代码、水平线
+ */
+function markdownToPlainText(text: string): string {
+	let result = text;
+	
+	// === OpenClaw 微信专用处理 ===
+	// 1. 代码块：移除围栏，保留内容
+	result = result.replace(/```[^\n]*\n?([\s\S]*?)```/g, (_, code: string) => code.trim());
+	
+	// 2. 图片：完全移除
+	result = result.replace(/!\[[^\]]*\]\([^)]*\)/g, '');
+	
+	// 3. 链接：只保留显示文本
+	result = result.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1');
+	
+	// 4. 表格：移除分隔符行，管道符转空格
+	result = result.replace(/^\|[\s:|-]+\|$/gm, '');
+	result = result.replace(/^\|(.+)\|$/gm, (_, inner: string) => {
+		return inner.split('|').map(cell => cell.trim()).join('  ');
+	});
+	
+	// === OpenClaw 通用 stripMarkdown（8 步） ===
+	// 5. 移除粗体
+	result = result.replace(/\*\*(.+?)\*\*/g, '$1');
+	result = result.replace(/__(.+?)__/g, '$1');
+	
+	// 6. 移除斜体
+	result = result.replace(/\*(.+?)\*/g, '$1');
+	result = result.replace(/_(.+?)_/g, '$1');
+	
+	// 7. 移除标题前缀
+	result = result.replace(/^#+\s?(.*)$/gm, '$1');
+	
+	// 8. 移除水平线
+	result = result.replace(/^[-*_]{3,}$/gm, '');
+	
+	// 9. 移除行内代码
+	result = result.replace(/`([^`]+)`/g, '$1');
+	
+	// 10. 压缩多个换行为最多两个
+	result = result.replace(/\n{3,}/g, '\n\n');
+	
+	return result.trim();
+}
+
+// ── Typing Keepalive（参考 OpenClaw） ───────────────
+/**
+ * 启动 typing 状态保活（每 5 秒刷新一次，最多维持 5 分钟）
+ * @param client 微信客户端实例
+ * @param userId 用户 ID
+ * @returns 清理函数
+ */
+function startTypingKeepalive(client: WechatClient, userId: string): () => void {
+	const startTime = Date.now();
+	
+	// 立即发送一次
+	client.sendTypingIndicator(userId, TYPING_STATUS_TYPING).catch(() => {});
+	
+	// 定时刷新
+	const intervalId = setInterval(() => {
+		const elapsed = Date.now() - startTime;
+		
+		// 超过最大时长，停止刷新
+		if (elapsed > TYPING_MAX_DURATION_MS) {
+			clearInterval(intervalId);
+			return;
+		}
+		
+		// 刷新 typing 状态
+		client.sendTypingIndicator(userId, TYPING_STATUS_TYPING).catch(() => {});
+	}, TYPING_KEEPALIVE_INTERVAL_MS);
+	
+	// 返回清理函数
+	return () => {
+		clearInterval(intervalId);
+		// 发送取消状态
+		client.sendTypingIndicator(userId, TYPING_STATUS_CANCEL).catch(() => {});
+	};
 }
 
 // 全局异常处理
@@ -591,20 +700,31 @@ class WechatClient {
 		});
 	}
 
+	// typing_ticket 缓存（避免重复获取）
+	private typingTicketCache = new Map<string, string>();
+
 	/**
-	 * 发送"正在输入中"状态（显示在微信顶部）
+	 * 发送"正在输入中"状态（参考 OpenClaw 实现）
 	 * @param userId 目标用户ID
+	 * @param status 状态：1=正在输入，2=取消输入
 	 * @returns Promise
 	 */
-	public async sendTypingIndicator(userId: string): Promise<any> {
+	public async sendTypingIndicator(userId: string, status: number = TYPING_STATUS_TYPING): Promise<any> {
 		try {
-			// 1. 先获取 typing_ticket
-			const config = await this.getConfig(userId);
-			const typingTicket = config?.typing_ticket;
+			// 1. 从缓存获取或首次获取 typing_ticket
+			let typingTicket = this.typingTicketCache.get(userId);
 			
 			if (!typingTicket) {
-				console.warn('[Typing] 未获取到 typing_ticket');
-				return { ok: false, error: 'no_typing_ticket' };
+				const config = await this.getConfig(userId);
+				typingTicket = config?.typing_ticket;
+				
+				if (!typingTicket) {
+					console.warn('[Typing] 未获取到 typing_ticket');
+					return { ok: false, error: 'no_typing_ticket' };
+				}
+				
+				// 缓存 ticket
+				this.typingTicketCache.set(userId, typingTicket);
 			}
 
 			// 2. 发送 typing 状态
@@ -613,7 +733,8 @@ class WechatClient {
 					channel_version: CHANNEL_VERSION
 				},
 				ilink_user_id: userId,
-				typing_ticket: typingTicket
+				typing_ticket: typingTicket,
+				status
 			});
 		} catch (error) {
 			console.warn('[Typing] 发送失败:', error);
@@ -1040,10 +1161,13 @@ async function startWechatServer() {
 	let lastWechatUserId: string | undefined;
 
 	const sendWechatText = async (toUserId: string, body: string, ctxTok: string) => {
-		for (let off = 0; off < body.length; off += MAX_MESSAGE_CHUNK) {
-			const chunk = body.slice(off, off + MAX_MESSAGE_CHUNK);
+		// 微信个人号不支持 Markdown，转换为纯文本（OpenClaw 简洁风格）
+		const plainText = markdownToPlainText(body);
+		
+		for (let off = 0; off < plainText.length; off += MAX_MESSAGE_CHUNK) {
+			const chunk = plainText.slice(off, off + MAX_MESSAGE_CHUNK);
 			await client.sendTextMessage(toUserId, chunk, ctxTok);
-			if (off + MAX_MESSAGE_CHUNK < body.length) {
+			if (off + MAX_MESSAGE_CHUNK < plainText.length) {
 				await new Promise((r) => setTimeout(r, 300));
 			}
 		}
@@ -1376,24 +1500,28 @@ async function startWechatServer() {
 
 			let lockKey = getLockKey(workspace);
 			if (busySessions.has(lockKey)) {
-				// 显示"正在输入中"（微信顶部）
-				await client.sendTypingIndicator(uid).catch(() => {
-					// Typing indicator 失败不影响流程
-				});
-				// 同时发送排队提示消息
-				await sendWechatText(uid, '⏳ 当前会话有任务进行中，请稍候…', contextToken);
-				const maxWait = 5 * 60 * 1000;
-				const startWait = Date.now();
-				while (busySessions.has(lockKey)) {
-					if (Date.now() - startWait > maxWait) {
-						await sendWechatText(
-							uid,
-							'❌ 排队超时，请使用 `/终止` 或稍后再试。',
-							contextToken,
-						);
-						return;
+				// 启动排队时的 typing keepalive
+				const stopQueueTyping = startTypingKeepalive(client, uid);
+				
+				try {
+					// 发送排队提示消息
+					await sendWechatText(uid, '⏳ 当前会话有任务进行中，请稍候…', contextToken);
+					const maxWait = 5 * 60 * 1000;
+					const startWait = Date.now();
+					while (busySessions.has(lockKey)) {
+						if (Date.now() - startWait > maxWait) {
+							await sendWechatText(
+								uid,
+								'❌ 排队超时，请使用 `/终止` 或稍后再试。',
+								contextToken,
+							);
+							return;
+						}
+						await new Promise((r) => setTimeout(r, 1000));
 					}
-					await new Promise((r) => setTimeout(r, 1000));
+				} finally {
+					// 排队结束，停止 typing
+					stopQueueTyping();
 				}
 			}
 
@@ -1403,13 +1531,12 @@ async function startWechatServer() {
 					memory.appendSessionLog(workspace, 'user', message, config.CURSOR_MODEL);
 				}
 
-				// 发送"正在输入中"状态（微信顶部显示）
-				await client.sendTypingIndicator(uid).catch((err) => {
-					console.warn('[输入提示] 发送失败:', err);
-				});
-
-				const taskStart = Date.now();
-				const ex = await execAgentWithFallback(
+				// 启动 typing keepalive（每 5 秒刷新，最多维持 5 分钟）
+				const stopTyping = startTypingKeepalive(client, uid);
+				
+				try {
+					const taskStart = Date.now();
+					const ex = await execAgentWithFallback(
 					agentExecutor,
 					workspace,
 					config.CURSOR_MODEL || DEFAULT_MODEL,
@@ -1473,6 +1600,10 @@ async function startWechatServer() {
 						`❌ **执行失败**\n\n\`\`\`\n${errMsg.slice(0, 500)}\n\`\`\`\n\n发送 \`/帮助\` 查看命令。`,
 						contextToken,
 					);
+				}
+				} finally {
+					// 停止 typing keepalive
+					stopTyping();
 				}
 			} finally {
 				busySessions.delete(lockKey);

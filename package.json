@@ -5,9 +5,9 @@
   "type": "module",
   "dependencies": {
     "@vitalets/google-translate-api": "^9.2.1",
+    "cron-chinese": "^1.2.0",
     "fast-xml-parser": "^5.5.5",
     "fastest-levenshtein": "^1.0.16",
-    "cron-chinese": "^1.2.0",
     "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {

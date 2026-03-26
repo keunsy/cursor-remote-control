@@ -3,8 +3,13 @@
  * 使用 caffeinate 防止系统因锁屏进入低功耗状态
  * 
  * 使用方式：
- * 1. 在服务目录下创建符号链接：ln -s ../shared/start-with-keepawake.ts .
- * 2. launchd 配置指向该符号链接
+ * 1. 复制到各服务目录（feishu/dingtalk/wecom/wechat）
+ * 2. launchd 配置指向该副本
+ * 
+ * 注意：
+ * - 此文件在各平台目录中有副本（非符号链接）
+ * - 有意的设计：依赖 process.cwd() 和 WorkingDirectory
+ * - 修改时请同步更新所有副本
  * 
  * caffeinate 参数说明：
  * -d: 防止显示器休眠（允许显示器关闭，但系统保持唤醒）

@@ -23,6 +23,7 @@ import { getHealthStatus } from '../shared/news-sources/monitoring.js';
 import { humanizeCronInChinese } from 'cron-chinese';
 import { CommandHandler, type PlatformAdapter, type CommandContext } from '../shared/command-handler.js';
 import { AgentExecutor } from '../shared/agent-executor.js';
+import { ProcessLock } from '../shared/process-lock.js';
 // import { ReconnectManager } from '../shared/reconnect-manager.js';  // 已移除，SDK 自带重连
 import {
 	getSession, setActiveSession, archiveAndResetSession,
@@ -32,6 +33,14 @@ import {
 	getCurrentProject, setCurrentProject,
 } from './wecom-helper.js';
 import { getAvailableModelChain, shouldFallback, isQuotaExhausted, addToBlacklist, isBlacklisted, DEFAULT_MODEL } from '../shared/models-config.js';
+
+// ── 进程锁（防止多实例运行）──────────────────────
+const processLock = new ProcessLock("wecom");
+if (!processLock.acquire()) {
+	console.error("\n❌ 企业微信服务已在运行，无法启动第二个实例");
+	console.error("💡 如需重启，请先停止现有进程: bash service.sh restart");
+	process.exit(1);
+}
 
 const HOME = process.env.HOME!;
 const ROOT = resolve(import.meta.dirname, '..');

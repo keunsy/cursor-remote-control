@@ -63,17 +63,15 @@ PEOF
 cmd_install() {
     echo "📦 安装开机自启动..."
     generate_plist
-    launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || true
-    # 确保服务立即启动
-    launchctl kickstart -k "gui/$(id -u)/$LABEL" 2>/dev/null || true
+    # 使用 load -w 而不是 bootstrap（兼容性更好）
+    launchctl load -w "$PLIST" 2>&1
     echo "  ✅ 服务已安装并启动"
     echo "  📝 日志: tail -f $LOG_FILE"
 }
 
 cmd_uninstall() {
     echo "🗑  卸载自启动..."
-    launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-    launchctl disable "gui/$(id -u)/$LABEL" 2>/dev/null || true
+    launchctl unload -w "$PLIST" 2>/dev/null || true
     rm -f "$PLIST"
     echo "  ✅ 服务已卸载"
 }
@@ -90,34 +88,28 @@ cmd_start() {
 cmd_stop() {
     echo "🛑 停止服务..."
     
-    # 先通过 launchd 停止
-    launchctl kill SIGTERM "gui/$(id -u)/$LABEL" 2>/dev/null && echo "  ✅ launchd 服务已停止" || echo "  ⚠️  launchd 服务未在运行"
+    # 先通过 launchd 停止（会触发 SIGTERM，进程锁会自动清理）
+    if launchctl print "gui/$(id -u)/$LABEL" &>/dev/null; then
+        launchctl kill SIGTERM "gui/$(id -u)/$LABEL" 2>/dev/null
+        echo "  ✅ 已发送停止信号"
+        # 等待进程优雅退出
+        sleep 2
+    else
+        echo "  ⚠️  launchd 服务未在运行"
+    fi
     
-    # 等待进程退出
-    sleep 1
-    
-    # 收集所有相关 PID（基于完整路径匹配）
-    declare -a PIDS=()
-    
-    # 1. 路径匹配
-    while IFS= read -r pid; do
-        [[ -n "$pid" ]] && PIDS+=("$pid")
-    done < <(pgrep -f "cursor-remote-control/feishu" 2>/dev/null || true)
-    
-    # 2. lsof 查找工作目录匹配的进程
-    while IFS= read -r pid; do
-        [[ -n "$pid" ]] && PIDS+=("$pid")
-    done < <(lsof +D "$BOT_DIR" 2>/dev/null | awk 'NR>1 {print $2}' | sort -u || true)
-    
-    # 去重并清理
-    PIDS=($(printf "%s\n" "${PIDS[@]}" | sort -u))
+    # 仅清理确实残留的进程（通过精确路径匹配 start.ts 和 server.ts）
+    local PIDS=($(pgrep -f "bun run.*feishu/(start|server)" 2>/dev/null || true))
     
     if [[ ${#PIDS[@]} -gt 0 ]]; then
-        echo "  🔪 清理 ${#PIDS[@]} 个残留进程: ${PIDS[*]}"
+        echo "  🔪 清理 ${#PIDS[@]} 个残留进程"
         for pid in "${PIDS[@]}"; do
             kill -9 "$pid" 2>/dev/null || true
         done
     fi
+    
+    # 清理进程锁文件（如果存在）
+    rm -f /tmp/cursor-feishu.pid 2>/dev/null || true
     
     echo "  ✅ 服务已完全停止"
 }

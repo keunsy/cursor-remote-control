@@ -58,10 +58,8 @@ function install_service() {
     # 创建 plist
     create_plist
     
-    # 使用现代 launchctl 命令加载服务
-    launchctl bootstrap "gui/$(id -u)" "$PLIST_PATH" 2>/dev/null || true
-    # 确保服务立即启动
-    launchctl kickstart -k "gui/$(id -u)/${SERVICE_NAME}" 2>/dev/null || true
+    # 使用 load -w 而不是 bootstrap（兼容性更好）
+    launchctl load -w "$PLIST_PATH" 2>&1
     
     echo "✅ 服务已安装并启动"
     echo "   标签: ${SERVICE_NAME}"
@@ -75,9 +73,8 @@ function uninstall_service() {
     echo "🗑️  正在卸载企业微信服务..."
     
     if [ -f "$PLIST_PATH" ]; then
-        # 使用现代 launchctl 命令卸载服务
-        launchctl bootout "gui/$(id -u)/${SERVICE_NAME}" 2>/dev/null || true
-        launchctl disable "gui/$(id -u)/${SERVICE_NAME}" 2>/dev/null || true
+        # 使用 unload -w 而不是 bootout（兼容性更好）
+        launchctl unload -w "$PLIST_PATH" 2>/dev/null || true
         rm -f "$PLIST_PATH"
         echo "✅ 服务已卸载"
     else
@@ -97,12 +94,28 @@ function start_service() {
 function stop_service() {
     echo "⏹️  正在停止企业微信服务..."
     
-    # 停止 launchd 服务
-    launchctl unload "$PLIST_PATH" 2>/dev/null || true
+    # 停止 launchd 服务（优雅退出，会自动清理进程锁）
+    if launchctl list | grep -q "$SERVICE_NAME"; then
+        launchctl unload "$PLIST_PATH" 2>/dev/null || true
+        echo "  ✅ 已发送停止信号"
+        # 等待进程优雅退出
+        sleep 2
+    else
+        echo "  ⚠️  launchd 服务未在运行"
+    fi
     
-    # 强制杀死所有相关进程
-    pkill -f "bun.*wecom.*start" || true
-    pkill -f "caffeinate.*bun.*start" || true
+    # 仅清理确实残留的进程（通过精确路径匹配）
+    local PIDS=($(pgrep -f "bun run.*wecom/(start|server)" 2>/dev/null || true))
+    
+    if [[ ${#PIDS[@]} -gt 0 ]]; then
+        echo "  🔪 清理 ${#PIDS[@]} 个残留进程"
+        for pid in "${PIDS[@]}"; do
+            kill -9 "$pid" 2>/dev/null || true
+        done
+    fi
+    
+    # 清理进程锁文件（如果存在）
+    rm -f /tmp/cursor-wecom.pid 2>/dev/null || true
     
     echo "✅ 服务已停止"
 }
