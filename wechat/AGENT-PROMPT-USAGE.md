@@ -28,7 +28,7 @@ bash test-agent-prompt.sh
     "kind": "at",
     "at": "2026-03-26T10:00:00+08:00"
   },
-  "message": "{\"type\":\"agent-prompt\",\"prompt\":\"请查询北京今天的天气情况，并给出简短的穿衣建议（100字以内）。\"}",
+  "message": "{\"type\":\"agent-prompt\",\"prompt\":\"请用联网搜索查询北京市当日实时天气预报。回复必须严格按：☁️ 标题行；五条 - 天气/温度/体感/降水/风力；体感一行含穿衣建议；最后单独一段一两句总结。缺数据写「—」。勿改成纯散文。\",\"options\":{\"timeoutMs\":240000}}",
   "workspace": "/Users/user/work/cursor/cursor-remote-control",
   "platform": "wechat",
   "webhook": "YOUR_WECHAT_USER_ID",
@@ -105,7 +105,7 @@ bash test-agent-prompt.sh
     "expr": "0 8 * * *",
     "tz": "Asia/Shanghai"
   },
-  "message": "{\"type\":\"agent-prompt\",\"prompt\":\"请查询北京今日天气、气温区间、是否降雨，并给出穿衣与是否带伞的简短建议（不超过 200 字）。\"}",
+  "message": "{\"type\":\"agent-prompt\",\"prompt\":\"请用联网搜索查询北京市当日实时天气预报（气温、阴晴、风力、降水概率等）。输出版式：☁️ 北京（可带区县）今日天气（M月d日）；然后 - 天气 / - 温度 / - 体感（含穿衣） / - 降水 / - 风力 五条列表；最后单独一段总结。缺数据写「—」，勿整段散文。\"}",
   "workspace": "/Users/user/work/cursor/cursor-remote-control",
   "platform": "wechat",
   "webhook": "wxid_xxx",

@@ -807,6 +807,7 @@ class WechatMonitor {
 	private dedupCache = new Map<string, number>();
 	private readonly DEDUP_TTL_MS = 5 * 60 * 1000;
 	private contextTokens = new Map<string, string>();
+	private longPollTimeoutSec = LONG_POLL_TIMEOUT_SEC;  // 动态调整的长轮询超时（秒）
 
 	constructor(
 		private client: WechatClient,
@@ -861,21 +862,53 @@ class WechatMonitor {
 	private async poll() {
 		while (this.isRunning) {
 			try {
-				const res = await this.client.getUpdates(this.getUpdatesBuf, LONG_POLL_TIMEOUT_SEC);
+				const res = await this.client.getUpdates(this.getUpdatesBuf, this.longPollTimeoutSec);
 				
-				// 检查 Session 过期（错误码 -14）
-				if (res.errcode === SESSION_EXPIRED_ERRCODE) {
-					console.error('❌ Session 已过期，暂停 1 小时后重试');
-					await new Promise(resolve => setTimeout(resolve, 60 * 60 * 1000));
-					this.errorCount = 0;
+				// 优化 1：动态调整长轮询超时（参考 OpenClaw）
+				if (res.longpolling_timeout_ms != null && res.longpolling_timeout_ms > 0) {
+					this.longPollTimeoutSec = Math.floor(res.longpolling_timeout_ms / 1000);
+					console.log(`[轮询] 服务端建议超时时间已更新: ${this.longPollTimeoutSec}秒`);
+				}
+				
+				// 优化 2：统一错误检查（参考 OpenClaw）
+				const isApiError = 
+					(res.ret !== undefined && res.ret !== 0) || 
+					(res.errcode !== undefined && res.errcode !== 0);
+				
+				if (isApiError) {
+					// 检查 Session 过期（错误码 -14，同时检查 ret 和 errcode）
+					const isSessionExpired = 
+						res.errcode === SESSION_EXPIRED_ERRCODE || 
+						res.ret === SESSION_EXPIRED_ERRCODE;
+					
+					if (isSessionExpired) {
+						console.error('❌ Session 已过期，暂停 1 小时后重试');
+						await new Promise(resolve => setTimeout(resolve, 60 * 60 * 1000));
+						this.errorCount = 0;  // Session 过期重置计数
+						continue;
+					}
+					
+					// 其他 API 错误计入失败次数
+					this.errorCount++;
+					console.warn(
+						`[API 错误] getUpdates 失败 (${this.errorCount}/${this.MAX_ERROR_COUNT}): ret=${res.ret}, errcode=${res.errcode}, errmsg=${res.errmsg ?? ''}`
+					);
+					
+					if (this.errorCount >= this.MAX_ERROR_COUNT) {
+						console.error(`⚠️ 连续失败 ${this.MAX_ERROR_COUNT} 次，等待 30 秒后重置计数器继续监听...`);
+						await new Promise(resolve => setTimeout(resolve, 30000));
+						this.errorCount = 0;
+						continue;
+					}
+					
+					// 失败次数未达上限，短暂等待后重试
+					const backoffMs = Math.min(1000 * Math.pow(2, this.errorCount), 30000);
+					console.log(`⏳ ${backoffMs}ms 后重试...`);
+					await new Promise(resolve => setTimeout(resolve, backoffMs));
 					continue;
 				}
 				
-				// 检查其他业务错误
-				if (res.ret && res.ret !== 0 && res.errmsg) {
-					console.warn(`[API 警告] getUpdates 返回 ret=${res.ret}, errcode=${res.errcode}, errmsg=${res.errmsg}`);
-				}
-				
+				// 成功接收响应，保存同步游标
 				if (res.get_updates_buf) {
 					this.saveSyncBuf(res.get_updates_buf);
 				}
@@ -944,8 +977,6 @@ class WechatMonitor {
 						}
 					}
 				}
-
-				this.errorCount = 0;
 				
 			} catch (e: any) {
 				this.errorCount++;
@@ -959,10 +990,12 @@ class WechatMonitor {
 					break;
 				}
 
+				// 参考 OpenClaw 设计：连续失败达到上限后，等待 backoff 后重置计数器继续监听（而非彻底停止）
 				if (this.errorCount >= this.MAX_ERROR_COUNT) {
-					console.error('❌ 连续失败次数过多，停止监听');
-					this.isRunning = false;
-					break;
+					console.error(`⚠️ 连续失败 ${this.MAX_ERROR_COUNT} 次，等待 30 秒后重置计数器继续监听...`);
+					await new Promise(resolve => setTimeout(resolve, 30000));
+					this.errorCount = 0;  // ← 重置计数器，继续监听
+					continue;
 				}
 
 				const backoffMs = Math.min(1000 * Math.pow(2, this.errorCount), 30000);

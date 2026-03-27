@@ -53,7 +53,7 @@ generate_plist() {
 	<string>$LOG_FILE</string>
 
 	<key>ProcessType</key>
-	<string>Background</string>
+	<string>Interactive</string>
 </dict>
 </plist>
 PEOF

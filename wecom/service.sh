@@ -47,6 +47,8 @@ function create_plist() {
         <key>PATH</key>
         <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:${HOME}/.bun/bin:${HOME}/.local/bin</string>
     </dict>
+    <key>ProcessType</key>
+    <string>Interactive</string>
 </dict>
 </plist>
 EOF
