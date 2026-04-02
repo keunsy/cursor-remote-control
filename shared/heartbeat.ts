@@ -34,6 +34,7 @@ export class HeartbeatRunner {
   private config: HeartbeatConfig;
   private onExecute: (prompt: string) => Promise<string>;
   private onDelivery: (content: string) => Promise<void>;
+  private shouldRun?: () => boolean;
   private log: (msg: string) => void;
 
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -44,11 +45,14 @@ export class HeartbeatRunner {
     config: HeartbeatConfig;
     onExecute: (prompt: string) => Promise<string>;
     onDelivery: (content: string) => Promise<void>;
+    /** Optional gate: return false to skip this heartbeat without calling Agent */
+    shouldRun?: () => boolean;
     log?: (msg: string) => void;
   }) {
     this.config = { ...opts.config };
     this.onExecute = opts.onExecute;
     this.onDelivery = opts.onDelivery;
+    this.shouldRun = opts.shouldRun;
     this.log = opts.log ?? ((msg: string) => console.log(`[heartbeat] ${msg}`));
   }
 
@@ -75,6 +79,14 @@ export class HeartbeatRunner {
   async runOnce(): Promise<HeartbeatResult> {
     if (!this.isWithinActiveHours()) {
       const reason = "outside-active-hours";
+      this.state.lastStatus = "skipped";
+      this.state.consecutiveSkips++;
+      this.log(`skipped: ${reason}`);
+      return { status: "skipped", reason };
+    }
+
+    if (this.shouldRun && !this.shouldRun()) {
+      const reason = "insufficient-session-activity";
       this.state.lastStatus = "skipped";
       this.state.consecutiveSkips++;
       this.log(`skipped: ${reason}`);

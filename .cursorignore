@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+.npm/
+*.tgz
+
+# Build outputs
+dist/
+build/
+*.js.map
+
+# Logs and databases
+*.log
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Cursor and runtime files
+.cursor/sessions/
+.cursor/cache/
+.memory.sqlite*
+**/mcps/
+
+# Platform specific
+.DS_Store
+.wechat_sync_buf
+.sessions.json
+
+# Git
+.git/

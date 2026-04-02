@@ -2,6 +2,7 @@
 .env
 .env.local
 .env.*.local
+wechat/.wechat_context_tokens.json
 
 # 依赖
 node_modules/

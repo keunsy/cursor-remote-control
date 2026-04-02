@@ -289,7 +289,49 @@ const scheduler = new Scheduler({
 	storePath: cronStorePath,
 	defaultWorkspace,
 	onExecute: async (job: CronJob) => {
-		// 新闻推送任务：动态抓取并格式化
+		// 新格式：优先使用 task 字段
+		if (job.task) {
+			switch (job.task.type) {
+				case 'fetch-news': {
+					const topN = job.task.options?.topN ?? 15;
+					console.log(`[scheduler] fetching news (新格式), topN=${topN}`);
+					const { messages } = await fetchNews({ topN, platform: "feishu" });
+					console.log(`[scheduler] news fetched, ${messages.length} batch(es)`);
+					if (messages.length > 1) {
+						return { status: "ok" as const, result: JSON.stringify({ chunks: messages }) };
+					}
+					return { status: "ok" as const, result: messages[0] ?? "" };
+				}
+				
+				case 'agent-prompt': {
+					try {
+						console.log(`[scheduler] 执行 Agent (新格式): ${job.task.prompt.slice(0, 100)}`);
+						const workspace = job.workspace || defaultWorkspace;
+						const model = job.model || config.CURSOR_MODEL || DEFAULT_MODEL;
+						const chatId = job.webhook || lastActiveChatId;
+						
+						const { result } = await runAgent(workspace, job.task.prompt, {
+							context: { chatId: chatId || '' }
+						});
+						
+						return { status: 'ok' as const, result };
+					} catch (err) {
+						console.error('[scheduler] Agent 执行失败:', err);
+						const errMsg = err instanceof Error ? err.message : String(err);
+						return { 
+							status: 'error' as const, 
+							error: errMsg,
+							result: `❌ Agent 执行失败\n\n${errMsg}`
+						};
+					}
+				}
+				
+				case 'text':
+					return { status: 'ok' as const, result: job.task.content };
+			}
+		}
+		
+		// 旧格式：向后兼容 message 字段
 		const msg = job.message;
 		const isNews =
 			msg === "fetch-news" ||
@@ -304,7 +346,7 @@ const scheduler = new Scheduler({
 						topN = parsed.options?.topN ?? 15;
 					} catch {}
 				}
-				console.log(`[scheduler] fetching news, topN=${topN}`);
+				console.log(`[scheduler] fetching news (旧格式), topN=${topN}`);
 				const { messages } = await fetchNews({ topN, platform: "feishu" });
 				console.log(`[scheduler] news fetched, ${messages.length} batch(es)`);
 				if (messages.length > 1) {
@@ -317,9 +359,40 @@ const scheduler = new Scheduler({
 				return { status: "error" as const, error: String(err), result: fallback };
 			}
 		}
+		
+		// Agent 执行任务（旧格式）
+		const isAgentPrompt = typeof msg === 'string' && msg.startsWith('{"type":"agent-prompt"');
+		if (isAgentPrompt) {
+			try {
+				const parsed = JSON.parse(msg) as {
+					type: 'agent-prompt';
+					prompt: string;
+					options?: { timeoutMs?: number };
+				};
+				console.log(`[scheduler] 执行 Agent (旧格式): ${parsed.prompt.slice(0, 100)}`);
+				const workspace = job.workspace || defaultWorkspace;
+				const model = job.model || config.CURSOR_MODEL || DEFAULT_MODEL;
+				const chatId = job.webhook || lastActiveChatId;
+				
+				const { result } = await runAgent(workspace, parsed.prompt, {
+					context: { chatId: chatId || '' }
+				});
+				
+				return { status: 'ok' as const, result };
+			} catch (err) {
+				console.error('[scheduler] Agent 执行失败:', err);
+				const errMsg = err instanceof Error ? err.message : String(err);
+				return { 
+					status: 'error' as const, 
+					error: errMsg,
+					result: `❌ Agent 执行失败\n\n${errMsg}`
+				};
+			}
+		}
+		
 		// 普通提醒任务
 		console.log(`[scheduler] task triggered: ${job.name}`);
-		return { status: "ok" as const, result: job.message };
+		return { status: "ok" as const, result: msg };
 	},
 	onDelivery: async (job: CronJob, result: string) => {
 		// 优先使用任务中保存的 chatId（确保发送到创建任务的平台）
@@ -373,11 +446,31 @@ const scheduler = new Scheduler({
 });
 
 // ── 心跳系统 ──────────────────────────────────────
+const MIN_SESSION_LINES_FOR_HEARTBEAT = 10;
+
 const heartbeat = new HeartbeatRunner({
 	config: {
 		enabled: true,
-		everyMs: 30 * 60 * 1000,
-		workspaceDir: memoryWorkspace, // 修复：使用 memoryWorkspace 避免污染工作项目
+		everyMs: 24 * 60 * 60 * 1000, // 每天一次
+		workspaceDir: memoryWorkspace,
+	},
+	shouldRun: () => {
+		try {
+			const today = new Date().toISOString().slice(0, 10);
+			const logPath = resolve(memoryWorkspace, `.cursor/sessions/${today}.jsonl`);
+			if (!existsSync(logPath)) return false;
+			const stat = statSync(logPath);
+			if (stat.size < 500) return false; // 文件太小，内容不足
+			const content = readFileSync(logPath, "utf-8");
+			const lines = content.split("\n").filter(Boolean);
+			if (lines.length < MIN_SESSION_LINES_FOR_HEARTBEAT) {
+				console.log(`[心跳] 今日会话仅 ${lines.length} 条（阈值 ${MIN_SESSION_LINES_FOR_HEARTBEAT}），跳过`);
+				return false;
+			}
+			return true;
+		} catch {
+			return false;
+		}
 	},
 	onExecute: async (prompt: string) => {
 		memory?.appendSessionLog(memoryWorkspace, "user", "[心跳检查] " + prompt.slice(0, 200), config.CURSOR_MODEL);

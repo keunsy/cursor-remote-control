@@ -1829,7 +1829,48 @@ const scheduler = new Scheduler({
 	storePath: cronStorePath,
 	defaultWorkspace,
 	onExecute: async (job: CronJob) => {
-		// 新闻推送任务：动态抓取并格式化
+		// 新格式：优先使用 task 字段
+		if (job.task) {
+			switch (job.task.type) {
+				case 'fetch-news': {
+					const topN = job.task.options?.topN ?? 15;
+					console.log(`[scheduler] fetching news (新格式), topN=${topN}`);
+					const { messages } = await fetchNews({ topN, platform: "dingtalk" });
+					console.log(`[scheduler] news fetched, ${messages.length} batch(es)`);
+					if (messages.length > 1) {
+						return { status: "ok" as const, result: JSON.stringify({ chunks: messages }) };
+					}
+					return { status: "ok" as const, result: messages[0] ?? "" };
+				}
+				
+				case 'agent-prompt': {
+					try {
+						console.log(`[scheduler] 执行 Agent (新格式): ${job.task.prompt.slice(0, 100)}`);
+						const workspace = job.workspace || defaultWorkspace;
+						const model = job.model || config.CURSOR_MODEL || DEFAULT_MODEL;
+						
+						const { result } = await runAgent(workspace, job.task.prompt, {
+							skipCard: true
+						});
+						
+						return { status: 'ok' as const, result };
+					} catch (err) {
+						console.error('[scheduler] Agent 执行失败:', err);
+						const errMsg = err instanceof Error ? err.message : String(err);
+						return { 
+							status: 'error' as const, 
+							error: errMsg,
+							result: `❌ Agent 执行失败\n\n${errMsg}`
+						};
+					}
+				}
+				
+				case 'text':
+					return { status: 'ok' as const, result: job.task.content };
+			}
+		}
+		
+		// 旧格式：向后兼容 message 字段
 		const msg = job.message;
 		const isNews =
 			msg === "fetch-news" ||
@@ -1844,7 +1885,7 @@ const scheduler = new Scheduler({
 						topN = parsed.options?.topN ?? 15;
 					} catch {}
 				}
-				console.log(`[scheduler] fetching news, topN=${topN}`);
+				console.log(`[scheduler] fetching news (旧格式), topN=${topN}`);
 				const { messages } = await fetchNews({ topN, platform: "dingtalk" });
 				console.log(`[scheduler] news fetched, ${messages.length} batch(es)`);
 				if (messages.length > 1) {
@@ -1857,9 +1898,39 @@ const scheduler = new Scheduler({
 				return { status: "error" as const, error: String(err), result: fallback };
 			}
 		}
+		
+		// Agent 执行任务（旧格式）
+		const isAgentPrompt = typeof msg === 'string' && msg.startsWith('{"type":"agent-prompt"');
+		if (isAgentPrompt) {
+			try {
+				const parsed = JSON.parse(msg) as {
+					type: 'agent-prompt';
+					prompt: string;
+					options?: { timeoutMs?: number };
+				};
+				console.log(`[scheduler] 执行 Agent (旧格式): ${parsed.prompt.slice(0, 100)}`);
+				const workspace = job.workspace || defaultWorkspace;
+				const model = job.model || config.CURSOR_MODEL || DEFAULT_MODEL;
+				
+				const { result } = await runAgent(workspace, parsed.prompt, {
+					skipCard: true
+				});
+				
+				return { status: 'ok' as const, result };
+			} catch (err) {
+				console.error('[scheduler] Agent 执行失败:', err);
+				const errMsg = err instanceof Error ? err.message : String(err);
+				return { 
+					status: 'error' as const, 
+					error: errMsg,
+					result: `❌ Agent 执行失败\n\n${errMsg}`
+				};
+			}
+		}
+		
 		// 普通提醒任务
 		console.log(`[scheduler] task triggered: ${job.name}`);
-		return { status: 'ok' as const, result: job.message };
+		return { status: 'ok' as const, result: msg };
 	},
 	onDelivery: async (job: CronJob, result: string) => {
 		// 优先使用任务中保存的 webhook（确保发送到创建任务的平台）

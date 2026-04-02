@@ -21,13 +21,25 @@ export type CronSchedule =
 	| { kind: "every"; everyMs: number }
 	| { kind: "cron"; expr: string; tz?: string };
 
+/** 任务执行内容（新格式，类型安全） */
+export type CronTaskPayload =
+	| { type: 'text'; content: string }
+	| { type: 'agent-prompt'; prompt: string; options?: { timeoutMs?: number } }
+	| { type: 'fetch-news'; options?: { topN?: number } };
+
 export type CronJob = {
 	id: string;
 	name: string;
 	enabled: boolean;
 	deleteAfterRun?: boolean;
 	schedule: CronSchedule;
+	
+	// 新格式：结构化任务内容（推荐使用，优先级高）
+	task?: CronTaskPayload;
+	
+	// 旧格式：字符串消息（必填以保持向后兼容，当 task 存在时忽略）
 	message: string;
+	
 	workspace?: string;
 	model?: string;
 	platform?: 'feishu' | 'dingtalk' | 'wecom' | 'wechat';  // 创建任务的平台

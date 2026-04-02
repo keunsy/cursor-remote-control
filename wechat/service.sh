@@ -27,7 +27,7 @@ generate_plist() {
 	<array>
 		<string>$BUN_BIN</string>
 		<string>run</string>
-		<string>$BOT_DIR/start-with-keepawake.ts</string>
+		<string>start-with-keepawake.ts</string>
 	</array>
 
 	<key>WorkingDirectory</key>
@@ -53,7 +53,7 @@ generate_plist() {
 	<string>$LOG_FILE</string>
 
 	<key>ProcessType</key>
-	<string>Interactive</string>
+	<string>Background</string>
 </dict>
 </plist>
 PEOF

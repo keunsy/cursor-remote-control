@@ -48,7 +48,7 @@ function create_plist() {
         <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:${HOME}/.bun/bin:${HOME}/.local/bin</string>
     </dict>
     <key>ProcessType</key>
-    <string>Interactive</string>
+    <string>Background</string>
 </dict>
 </plist>
 EOF

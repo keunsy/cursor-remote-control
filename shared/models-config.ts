@@ -43,6 +43,8 @@ export interface ModelConfig {
 
 interface GlobalModelConfig {
 	defaultModel: string;
+	/** 首选模型 — 新月份黑名单重置时自动恢复 defaultModel 到此值 */
+	preferredModel?: string;
 	blacklistResetCron: string;
 	models?: ModelConfig[];
 }
@@ -113,6 +115,12 @@ const globalConfig = loadGlobalConfig();
  * 具体可选值请查看配置文件中的 models 列表
  */
 export const DEFAULT_MODEL = globalConfig.defaultModel;
+
+/**
+ * 首选模型 — 新月份黑名单重置时自动恢复 defaultModel 到此值
+ * 如未配置，则不做恢复（保持 defaultModel 不变）
+ */
+export const PREFERRED_MODEL = globalConfig.preferredModel || '';
 
 /**
  * 黑名单重置 Cron 表达式（从 config/model-config.json 读取）
@@ -368,7 +376,7 @@ export interface BlacklistConfig {
 
 /** 全局配置（可通过环境变量或配置文件覆盖） */
 let blacklistConfig: BlacklistConfig = {
-	resetDay: 1,    // 每月1号
+	resetDay: 2,    // 每月2号（与 blacklistResetCron 保持一致）
 	resetHour: 0,   // 00:00
 };
 
@@ -386,6 +394,27 @@ export function configureBlacklist(config: BlacklistConfig): void {
 }
 
 /**
+ * 新月份重置时，自动将 config/model-config.json 的 defaultModel 恢复到 preferredModel
+ */
+function restorePreferredModel(): void {
+	if (!PREFERRED_MODEL) return;
+
+	try {
+		const fs = require('node:fs');
+		const raw = fs.readFileSync(MODEL_CONFIG_PATH, 'utf-8');
+		const cfg = JSON.parse(raw);
+		if (cfg.defaultModel === PREFERRED_MODEL) return;
+
+		const prev = cfg.defaultModel;
+		cfg.defaultModel = PREFERRED_MODEL;
+		fs.writeFileSync(MODEL_CONFIG_PATH, JSON.stringify(cfg, null, 2) + '\n', 'utf-8');
+		console.log(`[新月份] defaultModel 已自动恢复: ${prev} → ${PREFERRED_MODEL}`);
+	} catch (err) {
+		console.error('[新月份] 恢复 defaultModel 失败:', err);
+	}
+}
+
+/**
  * 加载黑名单（启动时调用）
  */
 function loadBlacklist(): ModelBlacklist {
@@ -398,6 +427,7 @@ function loadBlacklist(): ModelBlacklist {
 			const now = Date.now();
 			if (now >= data.nextResetTime) {
 				console.log(`[模型黑名单] 已到重置时间，清空黑名单`);
+				restorePreferredModel();
 				return createFreshBlacklist();
 			}
 			
@@ -492,6 +522,7 @@ export function isBlacklisted(modelId: string): boolean {
 	// 检查是否到重置时间
 	if (Date.now() >= blacklist.nextResetTime) {
 		console.log('[模型黑名单] 到达重置时间，自动清空');
+		restorePreferredModel();
 		blacklist = createFreshBlacklist();
 		saveBlacklist();
 		return false;

@@ -13,6 +13,7 @@
 ```json
 {
   "defaultModel": "opus-4.6",           // 默认使用的模型
+  "preferredModel": "opus-4.6",         // 首选模型（新月份自动恢复）
   "blacklistResetCron": "0 0 1 * *",    // 黑名单重置时间（每月1号）
   "models": [                            // 可用模型列表
     {
@@ -34,6 +35,14 @@
 - `opus-4.6` — 最强模型（推荐）
 - `opus-4.6-thinking` — 长思考链版本
 - `auto` — 自动选择（兜底模型）
+
+### preferredModel
+
+**首选模型**（可选），新月份黑名单重置时自动将 `defaultModel` 恢复到此值。
+
+**工作原理**：当月中因配额用尽通过 `/模型 auto` 降级后，到了新月份（由 `blacklistResetCron` 控制），系统会自动将 `defaultModel` 恢复到 `preferredModel`，无需手动切回。
+
+若不设置此字段，则新月份仅清空黑名单，不改变 `defaultModel`。
 
 ### blacklistResetCron
 

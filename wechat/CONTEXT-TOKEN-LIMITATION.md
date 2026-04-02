@@ -1,5 +1,9 @@
 # 微信 context_token 限制说明
 
+> **✅ 已实现持久化**：`context_token` 现已支持磁盘持久化（`.wechat_context_tokens.json`），服务重启后自动恢复，解决了服务重启后需要重新发消息的问题。
+
+---
+
 ## 问题本质
 
 `context_token` 是微信个人号 ilinkai bot API 的**强制要求**，无法绕过。

@@ -45,6 +45,13 @@ import {
 	getCurrentProject,
 	setCurrentProject,
 } from './wechat-helper.js';
+import {
+	downloadAndDecryptMedia,
+	uploadImageToCdn,
+	uploadVideoToCdn,
+	uploadFileToCdn,
+	downloadRemoteImage,
+} from './lib/media-handler.js';
 
 // ── 进程锁（防止多实例运行）──────────────────────
 const processLock = new ProcessLock("wechat");
@@ -61,6 +68,7 @@ const PROJECTS_PATH = pathResolve(ROOT, 'projects.json');
 const INBOX_DIR = pathResolve(ROOT, 'inbox');
 const TOKEN_FILE = pathResolve(import.meta.dirname, '.wechat_token.json');
 const SYNC_BUF_FILE = pathResolve(import.meta.dirname, '.wechat_sync_buf');
+const CONTEXT_TOKEN_FILE = pathResolve(import.meta.dirname, '.wechat_context_tokens.json');
 const BOOT_DELAY_MS = 8000;
 
 // 微信 API 配置
@@ -381,28 +389,49 @@ interface TextItem {
 	text: string;
 }
 
+interface CDNMedia {
+	encrypt_query_param?: string;
+	aes_key?: string;
+	encrypt_type?: number;
+	full_url?: string;
+}
+
 interface ImageItem {
-	media?: {
-		encrypt_query_param?: string;
-		aes_key?: string;
-	};
-	thumb_media?: any;
+	media?: CDNMedia;
+	thumb_media?: CDNMedia;
+	aeskey?: string; // Raw AES-128 key as hex string (16 bytes)
+	url?: string;
+	mid_size?: number;
+	thumb_size?: number;
+	thumb_height?: number;
+	thumb_width?: number;
+	hd_size?: number;
 }
 
 interface VoiceItem {
-	media?: any;
+	media?: CDNMedia;
+	duration?: number;
 	text?: string;
 }
 
 interface FileItem {
-	media?: any;
+	media?: CDNMedia;
 	file_name?: string;
 	len?: string;
+	md5?: string;
 }
 
 interface VideoItem {
-	media?: any;
-	thumb_media?: any;
+	media?: CDNMedia;
+	thumb_media?: CDNMedia;
+	aeskey?: string;
+	url?: string;
+	video_size?: number; // 视频密文大小
+	duration?: number;
+	thumb_size?: number;
+	thumb_height?: number;
+	thumb_width?: number;
+	hd_size?: number;
 }
 
 interface RefMessage {
@@ -598,7 +627,7 @@ class WechatClient {
 	constructor(
 		private token: string,
 		private accountId: string,
-		private baseUrl: string = WECHAT_BASE_URL
+		public baseUrl: string = WECHAT_BASE_URL
 	) {}
 
 	private async request(endpoint: string, body: any, timeoutMs?: number): Promise<any> {
@@ -744,7 +773,7 @@ class WechatClient {
 
 	public async sendTextMessage(toUserId: string, text: string, contextToken?: string): Promise<any> {
 		if (!contextToken) {
-			throw new Error(`缺少 context_token，无法发送消息给 ${toUserId}`);
+			console.warn(`[微信] contextToken missing for to=${toUserId}, sending without context (may fail at API level)`);
 		}
 		
 		// 文本分片
@@ -770,7 +799,7 @@ class WechatClient {
 							type: MESSAGE_ITEM_TEXT, 
 							text_item: { text: chunk }
 						}],
-						context_token: contextToken
+						context_token: contextToken ?? undefined
 					}
 				});
 				await new Promise(resolve => setTimeout(resolve, 200));
@@ -792,8 +821,38 @@ class WechatClient {
 					type: MESSAGE_ITEM_TEXT, 
 					text_item: { text }
 				}],
-				context_token: contextToken
+				context_token: contextToken ?? undefined
 			}
+		});
+	}
+
+	/**
+	 * 通用消息发送方法（支持图片、视频、文件等）
+	 */
+	public async sendMessage(params: {
+		to_user_id: string;
+		context_token?: string;
+		item_list: Array<{
+			type: number;
+			text_item?: { text: string };
+			image_item?: any;
+			video_item?: any;
+			file_item?: any;
+		}>;
+	}): Promise<any> {
+		return await this.request('/ilink/bot/sendmessage', {
+			base_info: {
+				channel_version: CHANNEL_VERSION,
+			},
+			msg: {
+				from_user_id: '',
+				to_user_id: params.to_user_id,
+				client_id: `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+				message_type: MESSAGE_TYPE_BOT,
+				message_state: MESSAGE_STATE_FINISH,
+				item_list: params.item_list,
+				context_token: params.context_token ?? undefined,
+			},
 		});
 	}
 }
@@ -814,6 +873,7 @@ class WechatMonitor {
 		private onMessage: (msg: WeixinMessage) => Promise<void>
 	) {
 		this.loadSyncBuf();
+		this.loadContextTokens();
 	}
 
 	private loadSyncBuf() {
@@ -839,8 +899,53 @@ class WechatMonitor {
 		}
 	}
 
+	/** 从磁盘加载 context_token（服务重启后恢复会话） */
+	private loadContextTokens() {
+		if (existsSync(CONTEXT_TOKEN_FILE)) {
+			try {
+				const data: Record<string, string> = JSON.parse(readFileSync(CONTEXT_TOKEN_FILE, 'utf-8'));
+				let count = 0;
+				for (const [userId, token] of Object.entries(data)) {
+					if (typeof token === 'string' && token) {
+						this.contextTokens.set(userId, token);
+						count++;
+					}
+				}
+				if (count > 0) {
+					console.log(`[监听] 加载 ${count} 个用户的 context_token`);
+				}
+			} catch (e) {
+				console.warn('[监听] context_token 加载失败:', e);
+			}
+		}
+	}
+
+	/** 保存 context_token 到磁盘（立即持久化） */
+	private saveContextTokens() {
+		try {
+			const data: Record<string, string> = {};
+			for (const [userId, token] of this.contextTokens) {
+				data[userId] = token;
+			}
+			writeFileSync(CONTEXT_TOKEN_FILE, JSON.stringify(data, null, 2), 'utf-8');
+		} catch (e) {
+			console.error('[监听] context_token 保存失败:', e);
+		}
+	}
+
 	public getContextToken(userId: string): string | undefined {
 		return this.contextTokens.get(userId);
+	}
+
+	/** 获取所有 context_token（用于同步到全局 Map） */
+	public getAllContextTokens(): Map<string, string> {
+		return new Map(this.contextTokens);
+	}
+
+	/** 设置 context_token 并立即持久化 */
+	public setContextToken(userId: string, token: string): void {
+		this.contextTokens.set(userId, token);
+		this.saveContextTokens();
 	}
 
 	public async start() {
@@ -966,12 +1071,12 @@ class WechatMonitor {
 							}
 							this.dedupCache.set(dedupKey, now);
 
-							// 保存 context_token（回复消息时必需）
-							if (msg.context_token && msg.from_user_id) {
-								this.contextTokens.set(msg.from_user_id, msg.context_token);
-							}
-							
-							await this.onMessage(msg);
+						// 保存 context_token（回复消息时必需，立即持久化）
+						if (msg.context_token && msg.from_user_id) {
+							this.setContextToken(msg.from_user_id, msg.context_token);
+						}
+						
+						await this.onMessage(msg);
 						} catch (e) {
 							console.error('处理消息失败:', e);
 						}
@@ -1011,8 +1116,58 @@ class WechatMonitor {
 		if (!msg.item_list || msg.item_list.length === 0) {
 			return '';
 		}
-		const textItems = msg.item_list.filter(item => item.type === MESSAGE_ITEM_TEXT);
-		return textItems.map(item => item.text_item?.text || '').join('');
+		
+		// 递归提取 item_list 中的文本（支持引用消息）
+		const extractFromItemList = (itemList: MessageItem[]): string => {
+			for (const item of itemList) {
+				if (item.type === MESSAGE_ITEM_TEXT && item.text_item?.text) {
+					const text = item.text_item.text;
+					const ref = item.ref_msg;
+					
+					// 没有引用，直接返回
+					if (!ref) return text;
+					
+					// 引用的是媒体（图片/视频/文件），只返回当前文本
+					// 媒体会在后续流程中单独处理和显示
+					if (ref.message_item && WechatMonitor.isMediaItem(ref.message_item)) {
+						return text;
+					}
+					
+					// 引用的是文本消息，构建引用上下文
+					const refParts: string[] = [];
+					
+					// 添加引用标题（如果有）
+					if (ref.title) {
+						refParts.push(ref.title);
+					}
+					
+					// 递归提取被引用消息的文本内容
+					if (ref.message_item) {
+						const refBody = extractFromItemList([ref.message_item]);
+						if (refBody) {
+							refParts.push(refBody);
+						}
+					}
+					
+					// 如果有引用内容，格式化为 [引用: xxx]\n当前文本
+					if (refParts.length > 0) {
+						return `[引用: ${refParts.join(' | ')}]\n${text}`;
+					}
+					
+					return text;
+				}
+			}
+			return '';
+		};
+		
+		return extractFromItemList(msg.item_list);
+	}
+	
+	/** 判断消息项是否为媒体类型（图片/视频/文件） */
+	private static isMediaItem(item: MessageItem): boolean {
+		return item.type === MESSAGE_ITEM_IMAGE || 
+		       item.type === MESSAGE_ITEM_VIDEO || 
+		       item.type === MESSAGE_ITEM_FILE;
 	}
 }
 
@@ -1193,7 +1348,7 @@ async function startWechatServer() {
 	const wechatContextTokens = new Map<string, string>();
 	let lastWechatUserId: string | undefined;
 
-	const sendWechatText = async (toUserId: string, body: string, ctxTok: string) => {
+	const sendWechatText = async (toUserId: string, body: string, ctxTok?: string) => {
 		// 微信个人号不支持 Markdown，转换为纯文本（OpenClaw 简洁风格）
 		const plainText = markdownToPlainText(body);
 		
@@ -1203,6 +1358,166 @@ async function startWechatServer() {
 			if (off + MAX_MESSAGE_CHUNK < plainText.length) {
 				await new Promise((r) => setTimeout(r, 300));
 			}
+		}
+	};
+
+	/**
+	 * 发送图片消息到微信
+	 * 
+	 * @param toUserId 接收用户 ID
+	 * @param imagePath 本地图片文件路径（绝对路径）
+	 * @param ctxTok context_token
+	 */
+	const sendWechatImage = async (
+		toUserId: string,
+		imagePath: string,
+		ctxTok: string | undefined,
+	) => {
+		console.log(`[发送图片] ${imagePath}`);
+
+		try {
+			// 1. 上传图片到 CDN
+			const uploaded = await uploadImageToCdn({
+				filePath: imagePath,
+				toUserId,
+				token,
+				baseUrl: client.baseUrl,
+				cdnBaseUrl: WECHAT_CDN_BASE_URL,
+			});
+
+			if (!uploaded) {
+				await sendWechatText(toUserId, '❌ 图片上传失败（可能文件过大或格式不支持）', ctxTok);
+				return;
+			}
+
+			console.log(`[发送图片] CDN 上传成功，准备发送消息`);
+
+			// 2. 构造图片消息并发送
+			await client.sendMessage({
+				to_user_id: toUserId,
+				context_token: ctxTok,
+				item_list: [
+					{
+						type: MESSAGE_ITEM_IMAGE,
+						image_item: {
+							media: {
+								encrypt_query_param: uploaded.downloadParam,
+								aes_key: uploaded.aeskeyBase64,
+							},
+							hd_size: uploaded.fileSize,
+							mid_size: uploaded.fileSizeCiphertext,
+						},
+					},
+				],
+			});
+
+			console.log('✅ 图片消息已发送');
+		} catch (err) {
+			const errMsg = err instanceof Error ? err.message : String(err);
+			console.error('[发送图片] 失败:', errMsg);
+			await sendWechatText(toUserId, `❌ 图片发送失败: ${errMsg.slice(0, 100)}`, ctxTok);
+		}
+	};
+
+	const sendWechatVideo = async (
+		toUserId: string,
+		videoPath: string,
+		ctxTok: string | undefined,
+	) => {
+		console.log(`[发送视频] ${videoPath}`);
+
+		try {
+			// 1. 上传视频到 CDN
+			const uploaded = await uploadVideoToCdn({
+				filePath: videoPath,
+				toUserId,
+				token,
+				baseUrl: client.baseUrl,
+				cdnBaseUrl: WECHAT_CDN_BASE_URL,
+			});
+
+			if (!uploaded) {
+				await sendWechatText(toUserId, '❌ 视频上传失败（可能文件过大或格式不支持）', ctxTok);
+				return;
+			}
+
+			console.log(`[发送视频] CDN 上传成功，准备发送消息`);
+
+			// 2. 构造视频消息并发送
+			await client.sendMessage({
+				to_user_id: toUserId,
+				context_token: ctxTok,
+				item_list: [
+					{
+						type: MESSAGE_ITEM_VIDEO,
+						video_item: {
+							media: {
+								encrypt_query_param: uploaded.downloadParam,
+								aes_key: uploaded.aeskeyBase64,
+							},
+							video_size: uploaded.fileSizeCiphertext,
+						},
+					},
+				],
+			});
+
+			console.log('✅ 视频消息已发送');
+		} catch (err) {
+			const errMsg = err instanceof Error ? err.message : String(err);
+			console.error('[发送视频] 失败:', errMsg);
+			await sendWechatText(toUserId, `❌ 视频发送失败: ${errMsg.slice(0, 100)}`, ctxTok);
+		}
+	};
+
+	const sendWechatFile = async (
+		toUserId: string,
+		filePath: string,
+		ctxTok: string | undefined,
+	) => {
+		const fileName = filePath.split('/').pop() || 'unknown';
+		console.log(`[发送文件] ${fileName} (${filePath})`);
+
+		try {
+			// 1. 上传文件到 CDN
+			const uploaded = await uploadFileToCdn({
+				filePath,
+				toUserId,
+				token,
+				baseUrl: client.baseUrl,
+				cdnBaseUrl: WECHAT_CDN_BASE_URL,
+			});
+
+			if (!uploaded) {
+				await sendWechatText(toUserId, `❌ 文件 "${fileName}" 上传失败（可能文件过大或格式不支持）`, ctxTok);
+				return;
+			}
+
+			console.log(`[发送文件] CDN 上传成功，准备发送消息`);
+
+			// 2. 构造文件消息并发送
+			await client.sendMessage({
+				to_user_id: toUserId,
+				context_token: ctxTok,
+				item_list: [
+					{
+						type: MESSAGE_ITEM_FILE,
+						file_item: {
+							media: {
+								encrypt_query_param: uploaded.downloadParam,
+								aes_key: uploaded.aeskeyBase64,
+							},
+							file_name: fileName,
+							len: String(uploaded.fileSize),
+						},
+					},
+				],
+			});
+
+			console.log('✅ 文件消息已发送');
+		} catch (err) {
+			const errMsg = err instanceof Error ? err.message : String(err);
+			console.error('[发送文件] 失败:', errMsg);
+			await sendWechatText(toUserId, `❌ 文件 "${fileName}" 发送失败: ${errMsg.slice(0, 100)}`, ctxTok);
 		}
 	};
 
@@ -1229,8 +1544,7 @@ async function startWechatServer() {
 			}
 			const tok = wechatContextTokens.get(uid);
 			if (!tok) {
-				console.warn('[心跳] 无 context_token，请让用户先发一条消息');
-				return;
+				console.warn('[心跳] contextToken missing, attempting to send without context (may fail at API level)');
 			}
 			await sendWechatText(uid, `💓 **心跳检查**\n\n${content.slice(0, 3000)}`, tok);
 		},
@@ -1242,7 +1556,56 @@ async function startWechatServer() {
 		storePath: cronStorePath,
 		defaultWorkspace,
 		onExecute: async (job: CronJob) => {
+			// 新格式：优先使用 task 字段
+			if (job.task) {
+				switch (job.task.type) {
+					case 'fetch-news': {
+						const topN = job.task.options?.topN ?? 15;
+						const { messages } = await fetchNews({ topN, platform: 'wechat' });
+						if (messages.length > 1) {
+							return { status: 'ok' as const, result: JSON.stringify({ chunks: messages }) };
+						}
+						return { status: 'ok' as const, result: messages[0] ?? '' };
+					}
+					
+					case 'agent-prompt': {
+						try {
+							console.log(`[定时任务] 执行 Agent (新格式): ${job.task.prompt.slice(0, 100)}`);
+							const workspace = job.workspace || defaultWorkspace;
+							const model = job.model || config.CURSOR_MODEL || DEFAULT_MODEL;
+							
+							const result = await execAgentWithFallback(
+								agentExecutor,
+								workspace,
+								model,
+								job.task.prompt,
+								{
+									platform: 'wechat',
+									webhook: job.webhook,
+								}
+							);
+							
+							return { status: 'ok' as const, result: result.result };
+						} catch (err) {
+							console.error('[定时任务] Agent 执行失败:', err);
+							const errMsg = err instanceof Error ? err.message : String(err);
+							return { 
+								status: 'error' as const, 
+								error: errMsg,
+								result: `❌ Agent 执行失败\n\n${errMsg}`
+							};
+						}
+					}
+					
+					case 'text':
+						return { status: 'ok' as const, result: job.task.content };
+				}
+			}
+			
+			// 旧格式：向后兼容 message 字段
 			const msg = job.message;
+			
+			// 1. 新闻推送任务（旧格式）
 			const isNews =
 				msg === 'fetch-news' ||
 				msg === '{"type":"fetch-news"}' ||
@@ -1263,7 +1626,46 @@ async function startWechatServer() {
 				}
 				return { status: 'ok' as const, result: messages[0] ?? '' };
 			}
-			return { status: 'ok' as const, result: job.message };
+			
+			// 2. Agent 执行任务（旧格式）
+			const isAgentPrompt = typeof msg === 'string' && msg.startsWith('{"type":"agent-prompt"');
+			if (isAgentPrompt) {
+				try {
+					const parsed = JSON.parse(msg) as {
+						type: 'agent-prompt';
+						prompt: string;
+						options?: { timeoutMs?: number };
+					};
+					console.log(`[定时任务] 执行 Agent (旧格式): ${parsed.prompt.slice(0, 100)}`);
+					
+					const workspace = job.workspace || defaultWorkspace;
+					const model = job.model || config.CURSOR_MODEL || DEFAULT_MODEL;
+					
+					const result = await execAgentWithFallback(
+						agentExecutor,
+						workspace,
+						model,
+						parsed.prompt,
+						{
+							platform: 'wechat',
+							webhook: job.webhook,
+						}
+					);
+					
+					return { status: 'ok' as const, result: result.result };
+				} catch (err) {
+					console.error('[定时任务] Agent 执行失败:', err);
+					const errMsg = err instanceof Error ? err.message : String(err);
+					return { 
+						status: 'error' as const, 
+						error: errMsg,
+						result: `❌ Agent 执行失败\n\n${errMsg}`
+					};
+				}
+			}
+			
+			// 3. 普通消息（直接发送）
+			return { status: 'ok' as const, result: msg };
 		},
 		onDelivery: async (job: CronJob, result: string) => {
 			if (job.platform && job.platform !== 'wechat') {
@@ -1277,8 +1679,7 @@ async function startWechatServer() {
 			}
 			const tok = wechatContextTokens.get(uid);
 			if (!tok) {
-				console.warn('[定时] 无 context_token（请让用户先发一条消息激活会话）');
-				return;
+				console.warn('[定时] contextToken missing, attempting to send without context (may fail at API level)');
 			}
 			let chunks: string[];
 			try {
@@ -1317,26 +1718,295 @@ async function startWechatServer() {
 
 	const monitor = new WechatMonitor(client, async (msg: WeixinMessage) => {
 		try {
-			const uid = msg.from_user_id;
-			if (!uid) {
-				console.warn('[微信] 消息缺少 from_user_id，跳过');
-				return;
-			}
-			const text = WechatMonitor.extractText(msg);
-			if (!text.trim()) {
-				console.log(`[微信] 忽略空消息 from ${uid}`);
-				return;
-			}
-			console.log(`[微信] 收到消息: ${text.substring(0, 50)}...`);
+		const uid = msg.from_user_id;
+		if (!uid) {
+			console.warn('[微信] 消息缺少 from_user_id，跳过');
+			return;
+		}
+		
+		let text = WechatMonitor.extractText(msg);
+		
+		// ── 处理图片消息 ────────────────────────────
+		const imageItems = msg.item_list?.filter(item => item.type === MESSAGE_ITEM_IMAGE) || [];
+		let imageContext = '';
+		
+		if (imageItems.length > 0) {
+			console.log(`📷 收到 ${imageItems.length} 张图片`);
+			
+			for (const item of imageItems) {
+				const img = item.image_item as ImageItem | undefined;
+				if (!img?.media) {
+					console.warn('[图片] 缺少 media 信息，跳过');
+					continue;
+				}
 
-			const contextToken = monitor.getContextToken(uid) || msg.context_token;
-			if (!contextToken) {
-				console.warn('[微信] 缺少 context_token，无法回复');
-				return;
-			}
+				// 获取 AES key（优先使用 aeskey 字段，fallback 到 media.aes_key）
+				const aesKeyBase64 = img.aeskey
+					? Buffer.from(img.aeskey, 'hex').toString('base64')
+					: img.media.aes_key;
 
+				if (!aesKeyBase64) {
+					console.warn('[图片] 缺少 AES key，跳过');
+					continue;
+				}
+
+				// 下载并解密图片
+				try {
+					const imagePath = await downloadAndDecryptMedia({
+						encryptQueryParam: img.media.encrypt_query_param,
+						fullUrl: img.media.full_url,
+						aesKeyBase64,
+						cdnBaseUrl: WECHAT_CDN_BASE_URL,
+						saveDir: INBOX_DIR,
+						label: 'image',
+						extension: 'jpg',
+					});
+
+					if (imagePath) {
+						imageContext += `\n[用户发送了图片: file://${imagePath}]`;
+						console.log(`✅ 图片已保存并传递给 Agent: ${imagePath}`);
+					} else {
+						console.error('[图片] 下载失败');
+						imageContext += '\n[用户尝试发送图片，但下载失败]';
+					}
+				} catch (err) {
+					console.error('[图片] 处理异常:', err);
+					imageContext += '\n[用户尝试发送图片，但处理失败]';
+				}
+			}
+		}
+		
+		// ── 处理视频消息 ────────────────────────────
+		const videoItems = msg.item_list?.filter(item => item.type === MESSAGE_ITEM_VIDEO) || [];
+		let videoContext = '';
+		
+		if (videoItems.length > 0) {
+			console.log(`🎬 收到 ${videoItems.length} 个视频`);
+			
+			for (const item of videoItems) {
+				const video = item.video_item as VideoItem | undefined;
+				if (!video?.media) {
+					console.warn('[视频] 缺少 media 信息，跳过');
+					continue;
+				}
+
+				const aesKeyBase64 = video.media.aes_key;
+				if (!aesKeyBase64) {
+					console.warn('[视频] 缺少 AES key，跳过');
+					continue;
+				}
+
+				// 下载并解密视频
+				try {
+					const videoPath = await downloadAndDecryptMedia({
+						encryptQueryParam: video.media.encrypt_query_param,
+						fullUrl: video.media.full_url,
+						aesKeyBase64,
+						cdnBaseUrl: WECHAT_CDN_BASE_URL,
+						saveDir: INBOX_DIR,
+						label: 'video',
+						extension: 'mp4',
+					});
+
+					if (videoPath) {
+						videoContext += `\n[用户发送了视频: file://${videoPath}]`;
+						console.log(`✅ 视频已保存并传递给 Agent: ${videoPath}`);
+					} else {
+						console.error('[视频] 下载失败');
+						videoContext += '\n[用户尝试发送视频，但下载失败]';
+					}
+				} catch (err) {
+					console.error('[视频] 处理异常:', err);
+					videoContext += '\n[用户尝试发送视频，但处理失败]';
+				}
+			}
+		}
+
+		// ── 处理文件消息 ────────────────────────────
+		const fileItems = msg.item_list?.filter(item => item.type === MESSAGE_ITEM_FILE) || [];
+		let fileContext = '';
+		
+		if (fileItems.length > 0) {
+			console.log(`📎 收到 ${fileItems.length} 个文件`);
+			
+			for (const item of fileItems) {
+				const file = item.file_item as FileItem | undefined;
+				if (!file?.media) {
+					console.warn('[文件] 缺少 media 信息，跳过');
+					continue;
+				}
+
+				const aesKeyBase64 = file.media.aes_key;
+				if (!aesKeyBase64) {
+					console.warn('[文件] 缺少 AES key，跳过');
+					continue;
+				}
+
+				// 从文件名推断扩展名
+				const fileName = file.file_name || 'unknown';
+				const fileNameMatch = fileName.match(/\.([a-z0-9]+)$/i);
+				const ext = fileNameMatch?.[1] || 'bin';
+
+				// 下载并解密文件
+				try {
+					const filePath = await downloadAndDecryptMedia({
+						encryptQueryParam: file.media.encrypt_query_param,
+						fullUrl: file.media.full_url,
+						aesKeyBase64,
+						cdnBaseUrl: WECHAT_CDN_BASE_URL,
+						saveDir: INBOX_DIR,
+						label: 'file',
+						extension: ext,
+					});
+
+					if (filePath) {
+						fileContext += `\n[用户发送了文件 "${fileName}": file://${filePath}]`;
+						console.log(`✅ 文件已保存并传递给 Agent: ${filePath}`);
+					} else {
+						console.error('[文件] 下载失败');
+						fileContext += `\n[用户尝试发送文件 "${fileName}"，但下载失败]`;
+					}
+				} catch (err) {
+					console.error('[文件] 处理异常:', err);
+					fileContext += `\n[用户尝试发送文件 "${fileName}"，但处理失败]`;
+				}
+			}
+		}
+		
+		// ── 处理引用消息中的媒体 ────────────────────────────
+		// 如果主消息没有媒体，检查是否引用了包含媒体的消息
+		if (imageItems.length === 0 && videoItems.length === 0 && fileItems.length === 0) {
+			const textItemsWithRef = msg.item_list?.filter(
+				item => item.type === MESSAGE_ITEM_TEXT && item.ref_msg?.message_item
+			) || [];
+			
+			for (const item of textItemsWithRef) {
+				const refItem = item.ref_msg?.message_item;
+				if (!refItem) continue;
+				
+				// 引用的是图片
+				if (refItem.type === MESSAGE_ITEM_IMAGE && refItem.image_item?.media) {
+					console.log('📷 检测到引用的图片消息');
+					const img = refItem.image_item;
+					const media = img.media;
+					if (!media) continue;
+					
+					const aesKeyBase64 = img.aeskey
+						? Buffer.from(img.aeskey, 'hex').toString('base64')
+						: media.aes_key;
+					
+					if (aesKeyBase64) {
+						try {
+							const imagePath = await downloadAndDecryptMedia({
+								encryptQueryParam: media.encrypt_query_param,
+								fullUrl: media.full_url,
+								aesKeyBase64,
+								cdnBaseUrl: WECHAT_CDN_BASE_URL,
+								saveDir: INBOX_DIR,
+								label: 'ref-image',
+								extension: 'jpg',
+							});
+							
+							if (imagePath) {
+								imageContext += `\n[用户引用了图片: file://${imagePath}]`;
+								console.log(`✅ 引用的图片已保存: ${imagePath}`);
+							}
+						} catch (err) {
+							console.error('[引用图片] 处理异常:', err);
+							imageContext += '\n[用户引用了图片，但下载失败]';
+						}
+					}
+				}
+				
+				// 引用的是视频
+				else if (refItem.type === MESSAGE_ITEM_VIDEO && refItem.video_item?.media) {
+					console.log('🎬 检测到引用的视频消息');
+					const video = refItem.video_item;
+					const media = video.media;
+					if (!media) continue;
+					
+					if (media.aes_key) {
+						try {
+							const videoPath = await downloadAndDecryptMedia({
+								encryptQueryParam: media.encrypt_query_param,
+								fullUrl: media.full_url,
+								aesKeyBase64: media.aes_key,
+								cdnBaseUrl: WECHAT_CDN_BASE_URL,
+								saveDir: INBOX_DIR,
+								label: 'ref-video',
+								extension: 'mp4',
+							});
+							
+							if (videoPath) {
+								videoContext += `\n[用户引用了视频: file://${videoPath}]`;
+								console.log(`✅ 引用的视频已保存: ${videoPath}`);
+							}
+						} catch (err) {
+							console.error('[引用视频] 处理异常:', err);
+							videoContext += '\n[用户引用了视频，但下载失败]';
+						}
+					}
+				}
+				
+				// 引用的是文件
+				else if (refItem.type === MESSAGE_ITEM_FILE && refItem.file_item?.media) {
+					console.log('📎 检测到引用的文件消息');
+					const file = refItem.file_item;
+					const media = file.media;
+					if (!media) continue;
+					
+					const fileName = file.file_name || 'unknown';
+					
+					if (media.aes_key) {
+						const fileNameMatch = fileName.match(/\.([a-z0-9]+)$/i);
+						const ext = fileNameMatch?.[1] || 'bin';
+						
+						try {
+							const filePath = await downloadAndDecryptMedia({
+								encryptQueryParam: media.encrypt_query_param,
+								fullUrl: media.full_url,
+								aesKeyBase64: media.aes_key,
+								cdnBaseUrl: WECHAT_CDN_BASE_URL,
+								saveDir: INBOX_DIR,
+								label: 'ref-file',
+								extension: ext,
+							});
+							
+							if (filePath) {
+								fileContext += `\n[用户引用了文件 "${fileName}": file://${filePath}]`;
+								console.log(`✅ 引用的文件已保存: ${filePath}`);
+							}
+						} catch (err) {
+							console.error('[引用文件] 处理异常:', err);
+							fileContext += `\n[用户引用了文件 "${fileName}"，但下载失败]`;
+						}
+					}
+				}
+			}
+		}
+		
+		// 合并文本和媒体上下文
+		if (imageContext || videoContext || fileContext) {
+			const mediaContext = imageContext + videoContext + fileContext;
+			text = text ? `${text}${mediaContext}` : mediaContext.trim();
+		}
+		
+		if (!text.trim()) {
+			console.log(`[微信] 忽略空消息 from ${uid}`);
+			return;
+		}
+		
+		console.log(`[微信] 收到消息: ${text.substring(0, 50)}...`);
+
+		const contextToken = monitor.getContextToken(uid) || msg.context_token;
+		if (!contextToken) {
+			console.warn('[微信] contextToken missing, attempting to send without context (may fail at API level)');
+		}
+
+		if (contextToken) {
 			wechatContextTokens.set(uid, contextToken);
-			lastWechatUserId = uid;
+		}
+		lastWechatUserId = uid;
 
 			const session = getSession(uid, defaultWorkspace);
 
@@ -1613,31 +2283,129 @@ async function startWechatServer() {
 					memory.appendSessionLog(workspace, 'assistant', cleanOutput.slice(0, 3000), config.CURSOR_MODEL);
 				}
 
-				await fixCronJobsLocationWechat(workspace, uid);
-				scheduler.reload().catch(() => {});
+			await fixCronJobsLocationWechat(workspace, uid);
+			scheduler.reload().catch(() => {});
 
-				if (cleanOutput) {
+			// ── 处理回复内容（文本 + 可能的图片）────────────────
+			if (cleanOutput) {
+				// 检测 MEDIA: / MEDIA_VIDEO: / MEDIA_FILE: 指令
+				const mediaRegex = /^(MEDIA(?:_VIDEO|_FILE)?):(.+)$/gm;
+				const mediaMatches = Array.from(cleanOutput.matchAll(mediaRegex));
+				
+				if (mediaMatches.length > 0) {
+					// 有媒体文件要发送
+					const textPart = cleanOutput.replace(/^MEDIA(?:_VIDEO|_FILE)?:.+$/gm, '').trim();
+					
+					// 先发送文本（如果有）
+					if (textPart) {
+						await sendWechatText(uid, textPart, contextToken);
+						await new Promise(r => setTimeout(r, 300));
+					}
+					
+				// 再发送媒体文件
+				for (let i = 0; i < mediaMatches.length; i++) {
+					const match = mediaMatches[i];
+					if (!match || !match[1] || !match[2]) continue;
+					
+					const mediaType = match[1]; // "MEDIA", "MEDIA_VIDEO", "MEDIA_FILE"
+					const mediaPath = match[2].trim();
+					
+					// 跳过空路径
+					if (!mediaPath) {
+						console.warn(`[${mediaType}] 跳过空路径`);
+						continue;
+					}
+					
+					// 支持本地文件和远程 URL
+					let localPath = mediaPath;
+					
+					// 如果是远程 URL，先下载
+					if (mediaPath.startsWith('http://') || mediaPath.startsWith('https://')) {
+						console.log(`[${mediaType}] 检测到远程 URL: ${mediaPath}`);
+						const downloaded = await downloadRemoteImage({
+							url: mediaPath,
+							saveDir: INBOX_DIR,
+						});
+						
+						if (!downloaded) {
+							await sendWechatText(uid, `❌ ${mediaType} 下载失败: ${mediaPath}`, contextToken);
+							continue;
+						}
+						localPath = downloaded;
+					} else {
+						// 本地路径：支持相对路径（相对于 workspace）
+						if (!mediaPath.startsWith('/')) {
+							localPath = pathResolve(workspace, mediaPath);
+							console.log(`[${mediaType}] 相对路径转换: ${mediaPath} → ${localPath}`);
+						}
+					}
+					
+					// 检查本地文件是否存在
+					if (!existsSync(localPath)) {
+						await sendWechatText(uid, `❌ 文件不存在: ${localPath}`, contextToken);
+						continue;
+					}
+					
+					// 根据类型上传并发送
+					const finalToken = monitor.getContextToken(uid) || contextToken || undefined;
+					const isRemoteDownload = mediaPath.startsWith('http://') || mediaPath.startsWith('https://');
+					
+					try {
+						if (mediaType === 'MEDIA_VIDEO') {
+							await sendWechatVideo(uid, localPath, finalToken);
+						} else if (mediaType === 'MEDIA_FILE') {
+							await sendWechatFile(uid, localPath, finalToken);
+						} else {
+							await sendWechatImage(uid, localPath, finalToken);
+						}
+						
+					// 发送成功后清理临时下载的远程文件
+					if (isRemoteDownload && localPath.includes('/inbox/weixin-remote-')) {
+						try {
+							unlinkSync(localPath);
+							console.log(`[清理] 已删除临时文件: ${localPath}`);
+						} catch {}
+					}
+				} catch (err) {
+					// 即使发送失败，也清理临时文件
+					if (isRemoteDownload && localPath.includes('/inbox/weixin-remote-')) {
+						try {
+							unlinkSync(localPath);
+						} catch {}
+					}
+					console.error(`[${mediaType}] 发送失败，继续处理下一个:`, err);
+				}
+				
+				// 多个媒体文件时添加间隔
+				if (i < mediaMatches.length - 1) {
+					await new Promise(r => setTimeout(r, 500));
+				}
+				}
+				} else {
+					// 纯文本回复
 					await sendWechatText(uid, cleanOutput, contextToken);
-				} else {
-					await sendWechatText(uid, '✅ 任务已完成（无输出）', contextToken);
 				}
-				console.log(`[完成] workspace=${workspace} elapsed=${formatElapsed(Math.round((Date.now() - taskStart) / 1000))}`);
-			} catch (error) {
-				const errMsg = error instanceof Error ? error.message : String(error);
-				if (errMsg === 'MANUALLY_STOPPED') {
-					console.log('[手动终止]', lockKey);
-				} else {
-					console.error('[失败]', errMsg.slice(0, 200));
-					await sendWechatText(
-						uid,
-						`❌ **执行失败**\n\n\`\`\`\n${errMsg.slice(0, 500)}\n\`\`\`\n\n发送 \`/帮助\` 查看命令。`,
-						contextToken,
-					);
-				}
-				} finally {
-					// 停止 typing keepalive
-					stopTyping();
-				}
+			} else {
+				await sendWechatText(uid, '✅ 任务已完成（无输出）', contextToken);
+			}
+			
+			console.log(`[完成] workspace=${workspace} elapsed=${formatElapsed(Math.round((Date.now() - taskStart) / 1000))}`);
+		} catch (error) {
+			const errMsg = error instanceof Error ? error.message : String(error);
+			if (errMsg === 'MANUALLY_STOPPED') {
+				console.log('[手动终止]', lockKey);
+			} else {
+				console.error('[失败]', errMsg.slice(0, 200));
+				await sendWechatText(
+					uid,
+					`❌ **执行失败**\n\n\`\`\`\n${errMsg.slice(0, 500)}\n\`\`\`\n\n发送 \`/帮助\` 查看命令。`,
+					contextToken,
+				);
+			}
+		} finally {
+			// 停止 typing keepalive
+			stopTyping();
+		}
 			} finally {
 				busySessions.delete(lockKey);
 			}
@@ -1645,6 +2413,14 @@ async function startWechatServer() {
 			console.error('[微信] 消息处理外层异常:', err);
 		}
 	});
+
+	// 从持久化存储中恢复的 context_token 同步到全局 Map（用于心跳和定时任务）
+	for (const [userId, token] of monitor.getAllContextTokens()) {
+		wechatContextTokens.set(userId, token);
+	}
+	if (wechatContextTokens.size > 0) {
+		console.log(`[启动] 已恢复 ${wechatContextTokens.size} 个用户的 context_token`);
+	}
 
 	console.log('\n✅ 微信服务已启动！');
 	console.log(`📱 当前模型: ${config.CURSOR_MODEL}`);
