@@ -10,7 +10,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, readdirSync, statSync, watchFile, unwatchFile } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
 import {
-	DEFAULT_MODEL,
+	getDefaultModel,
 	getAvailableModelChain,
 	shouldFallback,
 	isQuotaExhausted,
@@ -19,10 +19,10 @@ import {
 } from '../shared/models-config.js';
 import * as qrcodeTerminal from 'qrcode-terminal';
 
-import { AgentExecutor, type AgentProgress } from '../shared/agent-executor.js';
+import { AgentExecutor, writeFeedbackGateResponse, type AgentProgress, type FeedbackGateRequest } from '../shared/agent-executor.js';
 import { Scheduler, type CronJob } from '../shared/scheduler.js';
 import { MemoryManager } from '../shared/memory.js';
-import { HeartbeatRunner } from '../shared/heartbeat.js';
+import { HeartbeatRunner, getHeartbeatGlobalConfig, createSessionActivityGate, isHeartbeatEnabled } from '../shared/heartbeat.js';
 import { FeilianController, type OperationResult } from '../shared/feilian-control.js';
 import { fetchNews } from '../shared/news-fetcher.js';
 import { getHealthStatus } from '../shared/news-sources/monitoring.js';
@@ -225,7 +225,7 @@ function loadEnv(): EnvConfig {
 	}
 	return {
 		CURSOR_API_KEY: env.CURSOR_API_KEY || '',
-		CURSOR_MODEL: env.CURSOR_MODEL || DEFAULT_MODEL,
+		CURSOR_MODEL: env.CURSOR_MODEL || '',
 		VOLC_EMBEDDING_API_KEY: env.VOLC_EMBEDDING_API_KEY || '',
 		VOLC_EMBEDDING_MODEL: env.VOLC_EMBEDDING_MODEL || 'doubao-embedding-vision-250615',
 		MEMORY_TEMPORAL_DECAY_HALF_LIFE: env.MEMORY_TEMPORAL_DECAY_HALF_LIFE,
@@ -857,6 +857,17 @@ class WechatClient {
 	}
 }
 
+// ── Feedback Gate: 状态管理 ──
+interface PendingFeedbackGate {
+	triggerId: string;
+	message: string;
+	title: string;
+	uid: string;
+	createdAt: number;
+}
+const pendingFeedbackGates = new Map<string, PendingFeedbackGate>();
+const FEEDBACK_GATE_TIMEOUT = 24 * 60 * 60 * 1000; // 24h
+
 // ── 消息监听器 ─────────────────────────────────────
 class WechatMonitor {
 	private isRunning = false;
@@ -1047,12 +1058,14 @@ class WechatMonitor {
 								continue;
 							}
 							
-							// 过滤旧消息（首次启动时可能拉取到历史消息）
-							const msgTime = msg.create_time_ms || 0;
-							if (msgTime > 0 && Date.now() - msgTime > 5 * 60 * 1000) {
-								console.log(`⏭️ 跳过旧消息: ${new Date(msgTime).toLocaleString()}`);
-								continue;
-							}
+						// 过滤旧消息（首次启动时可能拉取到历史消息）
+						// 豁免：当有 pending feedback gate 时，不跳过该用户的消息
+						const msgTime = msg.create_time_ms || 0;
+						const hasPendingFG = pendingFeedbackGates.has(msg.from_user_id!);
+						if (msgTime > 0 && Date.now() - msgTime > 5 * 60 * 1000 && !hasPendingFG) {
+							console.log(`⏭️ 跳过旧消息: ${new Date(msgTime).toLocaleString()}`);
+							continue;
+						}
 							
 							// 消息去重（参考 cc-connect 实现）
 							const dedupKey = `${msg.from_user_id}|${msg.message_id || 0}|${msg.seq || 0}|${msg.create_time_ms || 0}|${msg.client_id || ''}`;
@@ -1195,6 +1208,8 @@ async function execAgentWithFallback(
 		onSessionId?: (sid: string) => void;
 		onProgress?: (p: AgentProgress) => void;
 		onStart?: () => void;
+		feedbackGate?: { chatId?: string; platform?: string; enabledModel?: string };
+		onFeedbackRequested?: (req: FeedbackGateRequest) => void;
 	},
 ): Promise<{
 	result: string;
@@ -1244,6 +1259,8 @@ async function execAgentWithFallback(
 					console.log(`[Agent] 开始执行... (模型: ${model.id})`);
 				}),
 				onProgress: opts?.onProgress,
+				feedbackGate: opts?.feedbackGate,
+				onFeedbackRequested: opts?.onFeedbackRequested,
 			});
 
 			if (out.sessionId && opts?.onSessionId) {
@@ -1521,15 +1538,18 @@ async function startWechatServer() {
 		}
 	};
 
+	const hbGlobal = getHeartbeatGlobalConfig();
 	const heartbeat = new HeartbeatRunner({
 		config: {
-			enabled: false,
-			everyMs: 30 * 60_000,
+			enabled: isHeartbeatEnabled('wechat'),
+			everyMs: hbGlobal.everyMs,
 			workspaceDir: memoryWorkspace,
+			...(hbGlobal.activeHours ? { activeHours: hbGlobal.activeHours } : {}),
 		},
+		shouldRun: createSessionActivityGate(memoryWorkspace),
 		onExecute: async (prompt: string) => {
 			memory?.appendSessionLog(memoryWorkspace, 'user', '[心跳检查] ' + prompt.slice(0, 200), config.CURSOR_MODEL);
-			const ex = await execAgentWithFallback(agentExecutor, memoryWorkspace, config.CURSOR_MODEL || DEFAULT_MODEL, prompt, {
+			const ex = await execAgentWithFallback(agentExecutor, memoryWorkspace, config.CURSOR_MODEL || getDefaultModel(), prompt, {
 				apiKey: config.CURSOR_API_KEY || undefined,
 				platform: 'wechat',
 			});
@@ -1572,7 +1592,7 @@ async function startWechatServer() {
 						try {
 							console.log(`[定时任务] 执行 Agent (新格式): ${job.task.prompt.slice(0, 100)}`);
 							const workspace = job.workspace || defaultWorkspace;
-							const model = job.model || config.CURSOR_MODEL || DEFAULT_MODEL;
+							const model = job.model || config.CURSOR_MODEL || getDefaultModel();
 							
 							const result = await execAgentWithFallback(
 								agentExecutor,
@@ -1639,7 +1659,7 @@ async function startWechatServer() {
 					console.log(`[定时任务] 执行 Agent (旧格式): ${parsed.prompt.slice(0, 100)}`);
 					
 					const workspace = job.workspace || defaultWorkspace;
-					const model = job.model || config.CURSOR_MODEL || DEFAULT_MODEL;
+					const model = job.model || config.CURSOR_MODEL || getDefaultModel();
 					
 					const result = await execAgentWithFallback(
 						agentExecutor,
@@ -1704,7 +1724,7 @@ async function startWechatServer() {
 ┌──────────────────────────────────────────────────┐
 │  微信个人号 → Cursor Agent 中继服务               │
 ├──────────────────────────────────────────────────┤
-│  模型: ${config.CURSOR_MODEL}
+│  模型: ${config.CURSOR_MODEL || getDefaultModel()}
 │  账号: ${accountId}
 │  记忆: ${memory ? `已启用（${config.VOLC_EMBEDDING_MODEL}）` : '未初始化'}
 │  调度: cron-jobs-wechat.json
@@ -2014,6 +2034,9 @@ async function startWechatServer() {
 				reply: async (content: string) => {
 					await sendWechatText(uid, content, contextToken);
 				},
+				sendFile: async (filePath: string, _fileName?: string) => {
+					await sendWechatFile(uid, filePath, contextToken);
+				},
 			};
 
 			const commandContext: CommandContext = {
@@ -2201,6 +2224,35 @@ async function startWechatServer() {
 				return;
 			}
 
+			// ── Feedback Gate: 拦截用户回复 ──
+			const pendingFG = pendingFeedbackGates.get(uid);
+			if (pendingFG) {
+				const age = Date.now() - pendingFG.createdAt;
+				if (age < FEEDBACK_GATE_TIMEOUT) {
+					const isDone = /^(done|完成|ok|好的|结束|没了|没有了|task_complete)$/i.test(message.trim());
+					const responseText = isDone ? 'TASK_COMPLETE' : message;
+					console.log(`[FeedbackGate] Replying to triggerId=${pendingFG.triggerId} isDone=${isDone}: ${message.slice(0, 100)}`);
+					writeFeedbackGateResponse(pendingFG.triggerId, responseText);
+					pendingFeedbackGates.delete(uid);
+
+					const lockKeyForFG = getLockKey(workspace);
+					if (!busySessions.has(lockKeyForFG)) {
+						// Agent 已完成，将反馈作为新消息处理（不 return，继续往下走）
+						console.log(`[FeedbackGate] Agent already finished, treating reply as new message`);
+					} else {
+						await sendWechatText(
+							uid,
+							isDone ? '✅ 对话已结束' : `✅ 反馈已提交，AI 正在继续处理...\n\n> ${message.slice(0, 200)}`,
+							contextToken,
+						);
+						return;
+					}
+				} else {
+					pendingFeedbackGates.delete(uid);
+					console.log(`[FeedbackGate] Expired pending for uid=${uid.slice(0, 10)}...`);
+				}
+			}
+
 			let lockKey = getLockKey(workspace);
 			if (busySessions.has(lockKey)) {
 				// 启动排队时的 typing keepalive
@@ -2239,34 +2291,52 @@ async function startWechatServer() {
 				
 				try {
 					const taskStart = Date.now();
-					const ex = await execAgentWithFallback(
-					agentExecutor,
-					workspace,
-					config.CURSOR_MODEL || DEFAULT_MODEL,
-					message,
-					{
-						apiKey: config.CURSOR_API_KEY || undefined,
-						platform: 'wechat',
-						webhook: uid,
-						sessionId: session.agentId,
-					onSessionId: (sid: string) => {
-						session.agentId = sid;
-						setActiveSession(workspace, sid, message.slice(0, 40));
-						// Bug 修复: sessionId 创建后，需更新 busySessions 的 key
-						const oldLockKey = lockKey;
-						const newLockKey = `session:${sid}`;
-						if (oldLockKey !== newLockKey && busySessions.has(oldLockKey)) {
-							busySessions.delete(oldLockKey);
-							busySessions.add(newLockKey);
-							lockKey = newLockKey;
+				const currentModel = config.CURSOR_MODEL || getDefaultModel();
+				const isOpus = currentModel.toLowerCase().includes('opus');
+				const ex = await execAgentWithFallback(
+				agentExecutor,
+				workspace,
+				currentModel,
+				message,
+				{
+					apiKey: config.CURSOR_API_KEY || undefined,
+					platform: 'wechat',
+					webhook: uid,
+					sessionId: session.agentId,
+				onSessionId: (sid: string) => {
+					session.agentId = sid;
+					setActiveSession(workspace, sid, message.slice(0, 40));
+					const oldLockKey = lockKey;
+					const newLockKey = `session:${sid}`;
+					if (oldLockKey !== newLockKey && busySessions.has(oldLockKey)) {
+						busySessions.delete(oldLockKey);
+						busySessions.add(newLockKey);
+						lockKey = newLockKey;
+					}
+				},
+					onProgress: (p) => {
+						if (p.elapsed > 0 && Math.floor(p.elapsed) % 15 === 0) {
+							console.log(`[Agent] ${formatElapsed(Math.floor(p.elapsed))} ${p.phase}`);
 						}
 					},
-						onProgress: (p) => {
-							if (p.elapsed > 0 && Math.floor(p.elapsed) % 15 === 0) {
-								console.log(`[Agent] ${formatElapsed(Math.floor(p.elapsed))} ${p.phase}`);
-							}
-						},
-					},
+					feedbackGate: isOpus ? {
+						chatId: uid,
+						platform: 'wechat',
+						enabledModel: currentModel,
+					} : undefined,
+					onFeedbackRequested: isOpus ? async (req: FeedbackGateRequest) => {
+						console.log(`[FeedbackGate] Received request: triggerId=${req.triggerId} title=${req.title}`);
+						pendingFeedbackGates.set(uid, {
+							triggerId: req.triggerId,
+							message: req.message,
+							title: req.title,
+							uid,
+							createdAt: Date.now(),
+						});
+						const fgMsg = `💬 **${req.title || 'AI 请求反馈'}**\n\n${req.message}\n\n---\n回复此消息即可提交反馈\n发送「完成」或「done」结束对话`;
+						await sendWechatText(uid, fgMsg, contextToken);
+					} : undefined,
+				},
 				);
 
 				let cleanOutput = ex.result.trim();
@@ -2423,7 +2493,7 @@ async function startWechatServer() {
 	}
 
 	console.log('\n✅ 微信服务已启动！');
-	console.log(`📱 当前模型: ${config.CURSOR_MODEL}`);
+	console.log(`📱 当前模型: ${config.CURSOR_MODEL || getDefaultModel()}`);
 	console.log(`📂 默认项目: ${projectsConfig.default_project}`);
 
 	const shutdown = () => {

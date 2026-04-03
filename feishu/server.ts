@@ -19,12 +19,12 @@ import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
 import { MemoryManager } from "../shared/memory.js";
 import { Scheduler, type CronJob } from "../shared/scheduler.js";
-import { HeartbeatRunner } from "../shared/heartbeat.js";
+import { HeartbeatRunner, getHeartbeatGlobalConfig, createSessionActivityGate, isHeartbeatEnabled } from "../shared/heartbeat.js";
 import { FeilianController, type OperationResult } from "../shared/feilian-control.js";
 import { fetchNews } from "../shared/news-fetcher.js";
 import { getHealthStatus } from "../shared/news-sources/monitoring.js";
 import { CommandHandler, type PlatformAdapter, type CommandContext } from "../shared/command-handler.js";
-import { AgentExecutor } from "../shared/agent-executor.js";
+import { AgentExecutor, writeFeedbackGateResponse, type FeedbackGateRequest } from "../shared/agent-executor.js";
 import { ProcessLock } from "../shared/process-lock.js";
 // import { ReconnectManager } from "../shared/reconnect-manager.js";  // 已移除，SDK 自带重连
 import { tryRecordMessagePersistent } from "./feishu/dedup.js";
@@ -38,7 +38,7 @@ if (!processLock.acquire()) {
 	process.exit(1);
 }
 import { humanizeCronInChinese } from 'cron-chinese';
-import { getAvailableModelChain, shouldFallback, isQuotaExhausted, addToBlacklist, isBlacklisted, DEFAULT_MODEL } from "../shared/models-config.js";
+import { getAvailableModelChain, shouldFallback, isQuotaExhausted, addToBlacklist, isBlacklisted, getDefaultModel } from "../shared/models-config.js";
 
 const HOME = process.env.HOME;
 if (!HOME) throw new Error("$HOME is not set");
@@ -105,7 +105,7 @@ function loadEnv(): EnvConfig {
 		CURSOR_API_KEY: env.CURSOR_API_KEY || "",
 		FEISHU_APP_ID: env.FEISHU_APP_ID || "",
 		FEISHU_APP_SECRET: env.FEISHU_APP_SECRET || "",
-		CURSOR_MODEL: env.CURSOR_MODEL || DEFAULT_MODEL, // 使用全局默认模型
+		CURSOR_MODEL: env.CURSOR_MODEL || '',
 		VOLC_STT_APP_ID: env.VOLC_STT_APP_ID || "",
 		VOLC_STT_ACCESS_TOKEN: env.VOLC_STT_ACCESS_TOKEN || "",
 		VOLC_EMBEDDING_API_KEY: env.VOLC_EMBEDDING_API_KEY || "",
@@ -307,7 +307,7 @@ const scheduler = new Scheduler({
 					try {
 						console.log(`[scheduler] 执行 Agent (新格式): ${job.task.prompt.slice(0, 100)}`);
 						const workspace = job.workspace || defaultWorkspace;
-						const model = job.model || config.CURSOR_MODEL || DEFAULT_MODEL;
+						const model = job.model || config.CURSOR_MODEL || getDefaultModel();
 						const chatId = job.webhook || lastActiveChatId;
 						
 						const { result } = await runAgent(workspace, job.task.prompt, {
@@ -371,7 +371,7 @@ const scheduler = new Scheduler({
 				};
 				console.log(`[scheduler] 执行 Agent (旧格式): ${parsed.prompt.slice(0, 100)}`);
 				const workspace = job.workspace || defaultWorkspace;
-				const model = job.model || config.CURSOR_MODEL || DEFAULT_MODEL;
+				const model = job.model || config.CURSOR_MODEL || getDefaultModel();
 				const chatId = job.webhook || lastActiveChatId;
 				
 				const { result } = await runAgent(workspace, parsed.prompt, {
@@ -446,32 +446,16 @@ const scheduler = new Scheduler({
 });
 
 // ── 心跳系统 ──────────────────────────────────────
-const MIN_SESSION_LINES_FOR_HEARTBEAT = 10;
+const hbGlobal = getHeartbeatGlobalConfig();
 
 const heartbeat = new HeartbeatRunner({
 	config: {
-		enabled: true,
-		everyMs: 24 * 60 * 60 * 1000, // 每天一次
+		enabled: isHeartbeatEnabled('feishu'),
+		everyMs: hbGlobal.everyMs,
 		workspaceDir: memoryWorkspace,
+		...(hbGlobal.activeHours ? { activeHours: hbGlobal.activeHours } : {}),
 	},
-	shouldRun: () => {
-		try {
-			const today = new Date().toISOString().slice(0, 10);
-			const logPath = resolve(memoryWorkspace, `.cursor/sessions/${today}.jsonl`);
-			if (!existsSync(logPath)) return false;
-			const stat = statSync(logPath);
-			if (stat.size < 500) return false; // 文件太小，内容不足
-			const content = readFileSync(logPath, "utf-8");
-			const lines = content.split("\n").filter(Boolean);
-			if (lines.length < MIN_SESSION_LINES_FOR_HEARTBEAT) {
-				console.log(`[心跳] 今日会话仅 ${lines.length} 条（阈值 ${MIN_SESSION_LINES_FOR_HEARTBEAT}），跳过`);
-				return false;
-			}
-			return true;
-		} catch {
-			return false;
-		}
-	},
+	shouldRun: createSessionActivityGate(memoryWorkspace),
 	onExecute: async (prompt: string) => {
 		memory?.appendSessionLog(memoryWorkspace, "user", "[心跳检查] " + prompt.slice(0, 200), config.CURSOR_MODEL);
 		const { result } = await runAgent(memoryWorkspace, prompt);
@@ -1722,6 +1706,8 @@ async function execAgentWithFallback(
 		sessionId?: string;
 		onProgress?: (p: AgentProgress) => void;
 		context?: { platform?: string; chatId?: string };
+		feedbackGate?: { chatId?: string; platform?: string; enabledModel?: string };
+		onFeedbackRequested?: (req: FeedbackGateRequest) => void;
 	},
 ): Promise<{ result: string; sessionId?: string; usedFallback?: boolean; fallbackModel?: string; errorMsg?: string }> {
 	// 获取可用模型链（自动过滤黑名单）
@@ -1807,22 +1793,29 @@ async function execAgent(
 		sessionId?: string;
 		onProgress?: (p: AgentProgress) => void;
 		context?: { platform?: string; chatId?: string };
+		feedbackGate?: { chatId?: string; platform?: string; enabledModel?: string };
+		onFeedbackRequested?: (req: FeedbackGateRequest) => void;
 	},
 ): Promise<{ result: string; sessionId?: string }> {
 	try {
+		const chatId = opts?.context?.chatId;
+		
 		const result = await agentExecutor.execute({
 			workspace,
 			model,
 			prompt,
 			sessionId: opts?.sessionId,
 			platform: opts?.context?.platform as 'feishu' | undefined,
-			webhook: opts?.context?.chatId,
+			webhook: chatId,
 			onProgress: opts?.onProgress,
 			apiKey: config.CURSOR_API_KEY,
+			feedbackGate: opts?.feedbackGate,
+			onFeedbackRequested: opts?.onFeedbackRequested,
 		});
 		
 		// 构建工具调用摘要（添加到回复开头）
 		let finalOutput = result.result;
+		console.log(`[execAgent] result.result type=${typeof result.result} len=${result.result?.length ?? 'N/A'} sessionId=${result.sessionId}`);
 		if (result.toolSummary && result.toolSummary.length > 0) {
 			const summary = buildToolSummary(result.toolSummary);
 			if (summary) {
@@ -1831,7 +1824,7 @@ async function execAgent(
 		}
 		
 		// 去重处理
-		finalOutput = dedupeRepeatedContent(finalOutput);
+		finalOutput = dedupeRepeatedContent(finalOutput || '');
 		
 		// 检查计费错误
 		if (isBillingError(finalOutput)) {
@@ -1851,6 +1844,18 @@ async function execAgent(
 	}
 }
 
+// ── Feedback Gate：等待 IM 用户回复的请求（内存，不持久化）──────
+interface PendingFeedbackGate {
+	triggerId: string;
+	message: string;
+	title: string;
+	chatId: string;
+	cardId?: string;
+	createdAt: number;
+}
+const pendingFeedbackGates = new Map<string, PendingFeedbackGate>();
+const FEEDBACK_GATE_TIMEOUT = 24 * 60 * 60 * 1000; // 24h
+
 // ── 会话级活跃追踪（lockKey = session:id 或 ws:path）──────
 const busySessions = new Set<string>();
 
@@ -1864,7 +1869,7 @@ async function runAgent(
 		context?: { chatId?: string };
 	},
 ): Promise<{ result: string; quotaWarning?: string }> {
-	const primaryModel = config.CURSOR_MODEL || DEFAULT_MODEL;
+	const primaryModel = config.CURSOR_MODEL || getDefaultModel();
 	let lockKey = getLockKey(workspace);
 
 	return withSessionLock(lockKey, async () => {
@@ -1873,6 +1878,33 @@ async function runAgent(
 		try {
 			const existingSessionId = getActiveSessionId(workspace);
 			const isNewSession = !existingSessionId;
+			
+			const chatId = opts?.context?.chatId;
+			const isOpus = primaryModel.toLowerCase().includes('opus');
+			
+			const onFeedbackRequested = chatId && isOpus
+				? async (req: FeedbackGateRequest) => {
+					console.log(`[FeedbackGate] Received request: triggerId=${req.triggerId} title=${req.title}`);
+					const fgCardId = await sendCard(chatId, `💬 **${req.title || 'AI 请求反馈'}**\n\n${req.message}\n\n---\n回复此消息即可提交反馈\n发送「完成」或「done」结束对话`, {
+						title: req.title || '等待反馈',
+						color: 'purple',
+					});
+					pendingFeedbackGates.set(chatId, {
+						triggerId: req.triggerId,
+						message: req.message,
+						title: req.title,
+						chatId,
+						cardId: fgCardId || undefined,
+						createdAt: Date.now(),
+					});
+				}
+				: undefined;
+			
+			const fgConfig = chatId && isOpus ? {
+				chatId,
+				platform: 'feishu',
+				enabledModel: primaryModel,
+			} : undefined;
 
 			try {
 				const { result, sessionId, usedFallback, fallbackModel, errorMsg } = await execAgentWithFallback(
@@ -1883,7 +1915,9 @@ async function runAgent(
 					{
 						sessionId: existingSessionId,
 						onProgress: opts?.onProgress,
-						context: { platform: 'feishu', chatId: opts?.context?.chatId },
+						context: { platform: 'feishu', chatId },
+						feedbackGate: fgConfig,
+						onFeedbackRequested,
 					}
 				);
 				
@@ -1915,16 +1949,18 @@ async function runAgent(
 					console.warn(`[重试] 会话可能过期，重新创建: ${e.message.slice(0, 100)}`);
 					archiveAndResetSession(workspace);
 					try {
-						const { result, sessionId, usedFallback, fallbackModel, errorMsg } = await execAgentWithFallback(
-							lockKey, 
-							workspace, 
-							primaryModel, 
-							prompt, 
-							{
-								onProgress: opts?.onProgress,
-								context: { platform: 'feishu', chatId: opts?.context?.chatId },
-							}
-						);
+					const { result, sessionId, usedFallback, fallbackModel, errorMsg } = await execAgentWithFallback(
+						lockKey, 
+						workspace, 
+						primaryModel, 
+						prompt, 
+						{
+							onProgress: opts?.onProgress,
+							context: { platform: 'feishu', chatId },
+							feedbackGate: fgConfig,
+							onFeedbackRequested,
+						}
+					);
 						
 						if (sessionId) {
 							setActiveSession(workspace, sessionId);
@@ -2556,7 +2592,41 @@ async function handleInner(
 		return;
 	}
 
-	const model = config.CURSOR_MODEL;
+	// ── Feedback Gate: 拦截用户回复 ──
+	const pendingFG = pendingFeedbackGates.get(chatId);
+	if (pendingFG) {
+		const age = Date.now() - pendingFG.createdAt;
+		if (age < FEEDBACK_GATE_TIMEOUT) {
+			const isDone = /^(done|完成|ok|好的|结束|没了|没有了|task_complete)$/i.test(prompt.trim());
+			const responseText = isDone ? 'TASK_COMPLETE' : prompt;
+			console.log(`[FeedbackGate] Replying to triggerId=${pendingFG.triggerId} isDone=${isDone}: ${prompt.slice(0, 100)}`);
+			writeFeedbackGateResponse(pendingFG.triggerId, responseText);
+			pendingFeedbackGates.delete(chatId);
+			
+			if (pendingFG.cardId && isDone) {
+				await updateCard(pendingFG.cardId, `✅ **对话已结束**`, {
+					title: '对话结束',
+					color: 'green',
+				});
+			}
+
+			const currentLockKeyFG = getLockKey(workspace);
+			if (!busySessions.has(currentLockKeyFG)) {
+				console.log(`[FeedbackGate] Agent already finished, treating reply as new message`);
+			} else {
+				await replyCard(messageId, isDone ? '✅ 对话已结束' : `✅ 反馈已提交，AI 正在继续处理...\n\n> ${prompt.slice(0, 200)}`, {
+					title: isDone ? '对话结束' : '处理中',
+					color: isDone ? 'green' : 'blue',
+				});
+				return;
+			}
+		} else {
+			pendingFeedbackGates.delete(chatId);
+			console.log(`[FeedbackGate] Expired pending for chatId=${chatId.slice(0, 10)}...`);
+		}
+	}
+
+	const model = config.CURSOR_MODEL || getDefaultModel();
 
 	// 创建或复用卡片：全局排队卡片 → 同会话排队 → 处理中
 	const currentLockKey = getLockKey(workspace);
@@ -2835,7 +2905,7 @@ console.log(`
 │  飞书 → Cursor Agent 中继服务 v5                 │
 │  架构: OpenClaw 风格 (rules 自动加载)            │
 ├──────────────────────────────────────────────────┤
-│  模型: ${config.CURSOR_MODEL}
+│  模型: ${config.CURSOR_MODEL || getDefaultModel()}
 │  Key:  ...${config.CURSOR_API_KEY.slice(-8)}
 │  连接: 飞书 WebSocket 长连接 + Supervisor 重连
 │  收件: ${INBOX_DIR}

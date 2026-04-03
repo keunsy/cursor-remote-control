@@ -6,7 +6,9 @@
  */
 
 import { spawn, type ChildProcess } from 'child_process';
-import { resolve, basename } from 'path';
+import { resolve as pathResolve, basename } from 'path';
+import { readdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
+import { randomUUID } from 'crypto';
 
 /** 从各平台子目录启动时 cwd 在 feishu|dingtalk|wecom|wechat，定时任务 JSON 应在仓库根目录 */
 const CRON_JSON_AT_REPO_ROOT = new Set(['feishu', 'dingtalk', 'wecom', 'wechat']);
@@ -15,12 +17,12 @@ function resolveCronJobsJsonPath(platform: string): string {
 	const name = `cron-jobs-${platform}.json`;
 	const cwd = process.cwd();
 	if (CRON_JSON_AT_REPO_ROOT.has(basename(cwd))) {
-		return resolve(cwd, '..', name);
+		return pathResolve(cwd, '..', name);
 	}
-	return resolve(cwd, name);
+	return pathResolve(cwd, name);
 }
 
-const AGENT_BIN = process.env.AGENT_BIN || resolve(process.env.HOME || '', '.local/bin/agent');
+const AGENT_BIN = process.env.AGENT_BIN || pathResolve(process.env.HOME || '', '.local/bin/agent');
 const DEFAULT_TIMEOUT = 30 * 60 * 1000; // 30 分钟（平衡执行时间和防卡死）
 const DEFAULT_MAX_CONCURRENT = 10; // 最多 10 个并发任务
 const PROGRESS_INTERVAL = 2000; // 2 秒
@@ -36,6 +38,16 @@ interface AgentProcessInfo {
 	abort: () => void; // 立即中止并 reject Promise
 }
 
+export interface FeedbackGateRequest {
+	triggerId: string;
+	message: string;
+	title: string;
+	context: string;
+	urgent: boolean;
+	triggerFilePath: string;
+	routing: { chat_id?: string; platform?: string };
+}
+
 export interface AgentExecutorOptions {
 	workspace: string;
 	model: string;
@@ -47,6 +59,14 @@ export interface AgentExecutorOptions {
 	// 回调函数
 	onProgress?: (progress: AgentProgress) => void;
 	onStart?: () => void;
+	onFeedbackRequested?: (req: FeedbackGateRequest) => void;
+	
+	// Feedback Gate 配置
+	feedbackGate?: {
+		chatId?: string;
+		platform?: string;
+		enabledModel?: string;
+	};
 	
 	// 可选配置
 	timeout?: number;
@@ -70,6 +90,10 @@ interface AgentEnv extends NodeJS.ProcessEnv {
 	CURSOR_PLATFORM?: string;
 	CURSOR_WEBHOOK?: string;
 	CURSOR_CRON_FILE?: string;
+	FEEDBACK_GATE_CHAT_ID?: string;
+	FEEDBACK_GATE_PLATFORM?: string;
+	FEEDBACK_GATE_MODEL?: string;
+	FEEDBACK_GATE_ROUTING_FILE?: string;
 }
 
 // Watchdog 单例控制
@@ -103,7 +127,7 @@ export class AgentExecutor {
 				`Workspace 无效（${String(rawWs)}）。请检查 projects.json 中 default_project 是否对应有效 path。`
 			);
 		}
-		const workspaceAbs = resolve(rawWs.trim());
+		const workspaceAbs = pathResolve(rawWs.trim());
 		
 		// 2. 构建 CLI 参数
 		const args = [
@@ -140,7 +164,61 @@ export class AgentExecutor {
 			env.CURSOR_CRON_FILE = resolveCronJobsJsonPath(options.platform);
 		}
 		
-		// 4. 启动进程
+		// Feedback Gate: inject env vars so the Python MCP can build routing info
+		if (options.feedbackGate) {
+			const fg = options.feedbackGate;
+			if (fg.chatId) env.FEEDBACK_GATE_CHAT_ID = fg.chatId;
+			if (fg.platform) env.FEEDBACK_GATE_PLATFORM = fg.platform;
+			if (fg.enabledModel) env.FEEDBACK_GATE_MODEL = fg.enabledModel;
+		}
+		
+		// 4. Write routing file for Feedback Gate (Python MCP reads this since it doesn't inherit our env)
+		//    File name includes a session token so other MCP instances (e.g. from Cursor IDE)
+		//    won't accidentally read it — they only check the generic 'feedback_gate_routing.json'.
+		let routingFilePath: string | null = null;
+		const fgSessionToken = options.feedbackGate?.chatId ? randomUUID().slice(0, 8) : '';
+		if (options.feedbackGate?.chatId) {
+			const tmpDir = process.platform === 'win32' ? (process.env.TEMP || 'C:\\Temp') : '/tmp';
+			
+			// Clean up stale feedback gate files from previous sessions
+			try {
+				for (const f of readdirSync(tmpDir)) {
+					if (
+						f.startsWith('feedback_gate_response_') ||
+						f.startsWith('feedback_gate_ack_') ||
+						f.startsWith('feedback_gate_routing_') ||
+						f === 'feedback_gate_response.json' ||
+						f === 'feedback_gate_routing.json' ||
+						f === 'mcp_response.json'
+					) {
+						try { unlinkSync(pathResolve(tmpDir, f)); } catch {}
+					}
+				}
+				console.log('[FeedbackGate] Cleaned up stale response/ack/routing files');
+			} catch {}
+			
+			const routingData = {
+				chat_id: options.feedbackGate.chatId,
+				platform: options.feedbackGate.platform || '',
+				model: options.feedbackGate.enabledModel || '',
+				session: fgSessionToken,
+				timestamp: new Date().toISOString(),
+			};
+			// Write both session-specific and generic routing files:
+			// - Session-specific: passed via env, only our MCP reads it
+			// - Generic: fallback if env inheritance fails (all MCP instances can read it,
+			//   but PPID check in trigger consumer prevents cross-instance consumption)
+			const sessionSpecificPath = pathResolve(tmpDir, `feedback_gate_routing_${fgSessionToken}.json`);
+			const genericPath = pathResolve(tmpDir, 'feedback_gate_routing.json');
+			writeFileSync(sessionSpecificPath, JSON.stringify(routingData, null, 2));
+			writeFileSync(genericPath, JSON.stringify(routingData, null, 2));
+			routingFilePath = sessionSpecificPath;
+			env.FEEDBACK_GATE_ROUTING_FILE = sessionSpecificPath;
+			console.log(`[FeedbackGate] Routing files written: session=${fgSessionToken}`);
+		}
+		
+		// 5. 启动进程
+		console.log(`[AgentExecutor] Spawning: ${AGENT_BIN} args=[${args.slice(0, 6).join(', ')}...] workspace=${workspaceAbs}`);
 		return new Promise((resolve, reject) => {
 			const child = spawn(AGENT_BIN, args, {
 				env,
@@ -148,23 +226,27 @@ export class AgentExecutor {
 			});
 			
 			if (!child.pid) {
+				console.error(`[AgentExecutor] spawn 失败: child.pid is falsy`);
 				reject(new Error('Agent 进程启动失败'));
 				return;
 			}
+			console.log(`[AgentExecutor] Process started pid=${child.pid}`);
 			
 			const lockKey = `${workspaceAbs}:${child.pid}`;
 			const startTime = Date.now();
 			let done = false;
-			let manuallyKilled = false; // 标记是否被手动终止
+			let manuallyKilled = false;
 			let progressTimer: NodeJS.Timeout | null = null;
 			let timeoutTimer: NodeJS.Timeout | null = null;
+			let feedbackGateTimer: NodeJS.Timeout | null = null;
+			let feedbackGateActive = false;
 			
-			// 清理函数
 			const cleanup = () => {
 				done = true;
 				activeAgents.delete(lockKey);
 				if (progressTimer) clearInterval(progressTimer);
 				if (timeoutTimer) clearTimeout(timeoutTimer);
+				if (feedbackGateTimer) clearInterval(feedbackGateTimer);
 			};
 			
 			// 注册进程
@@ -235,9 +317,9 @@ export class AgentExecutor {
 			if (done) return;
 			const now = Date.now();
 			
-			// 检查是否长时间无输出（可能卡住）
+			// 检查是否长时间无输出（可能卡住）— feedback gate 等待中豁免
 			const idleTime = now - lastOutputTime;
-			if (idleTime > IDLE_TIMEOUT) {
+			if (idleTime > IDLE_TIMEOUT && !feedbackGateActive) {
 				console.warn(`[AgentExecutor] 进程 ${Math.floor(idleTime / 1000 / 60)} 分钟无输出，可能卡住，强制终止 ${lockKey}`);
 				cleanup();
 				try {
@@ -295,19 +377,26 @@ export class AgentExecutor {
 							}
 							break;
 						
-						case 'tool_call':
-							phase = 'tool_call';
-							lastSegment = '';
-							if (ev.tool_call && ev.subtype === 'started') {
-								const desc = describeToolCall(ev.tool_call);
-								toolSummary.push(desc);
+					case 'tool_call':
+						phase = 'tool_call';
+						lastSegment = '';
+						if (ev.tool_call && ev.subtype === 'started') {
+							const desc = describeToolCall(ev.tool_call);
+							toolSummary.push(desc);
+						}
+						if (ev.tool_call) {
+							const toolName = Object.keys(ev.tool_call)[0] || '';
+							if (toolName.includes('feedback_gate') || toolName.includes('callMcpTool')) {
+								console.log(`[AgentExecutor] FG tool_call event: subtype=${ev.subtype} tool=${toolName} feedbackGateActive=${feedbackGateActive}`);
 							}
-							break;
+						}
+						break;
 						
-						case 'result':
-							if (ev.result != null) resultText = ev.result;
-							if (ev.subtype === 'error' && ev.error) resultText = ev.error;
-							break;
+					case 'result':
+						if (ev.result != null) resultText = ev.result;
+						if (ev.subtype === 'error' && ev.error) resultText = ev.error;
+						console.log(`[AgentExecutor] Received result event: subtype=${ev.subtype} resultLen=${resultText.length} feedbackGateActive=${feedbackGateActive}`);
+						break;
 					}
 					
 					// 阶段切换时立即触发进度更新
@@ -325,9 +414,78 @@ export class AgentExecutor {
 				}
 			}
 			
+		// Feedback Gate: poll /tmp for trigger files that match our routing.
+		// Two-layer filtering to avoid consuming triggers from IDE MCP instances:
+		//   1. routing.session must match our fgSessionToken  (if present)
+		//   2. trigger.ppid must equal our child.pid  (MCP's parent = our Agent CLI)
+		if (options.feedbackGate?.chatId && options.onFeedbackRequested) {
+			const fgChatId = options.feedbackGate.chatId;
+			const fgPlatform = options.feedbackGate.platform || '';
+			const tmpDir = process.platform === 'win32'
+				? (process.env.TEMP || process.env.TMP || 'C:\\Temp')
+				: '/tmp';
+			const agentCliPid = child.pid!;
+			
+		feedbackGateTimer = setInterval(() => {
+			if (done) return;
+			try {
+				const files = readdirSync(tmpDir).filter(f => f.startsWith('feedback_gate_trigger_pid') && f.endsWith('.json'));
+				for (const file of files) {
+					const fullPath = pathResolve(tmpDir, file);
+					try {
+						const content = readFileSync(fullPath, 'utf-8');
+						const trigger = JSON.parse(content);
+						const triggerPpid = trigger.ppid;
+						if (triggerPpid && triggerPpid !== agentCliPid) {
+							continue;
+						}
+						
+						const routing = trigger.routing;
+						if (routing) {
+							if (routing.chat_id && routing.chat_id !== fgChatId) continue;
+							if (fgPlatform && routing.platform && routing.platform !== fgPlatform) continue;
+							if (fgSessionToken && routing.session && routing.session !== fgSessionToken) continue;
+						} else if (!triggerPpid) {
+							continue;
+						}
+							
+						const data = trigger.data || {};
+						const triggerId = data.trigger_id || '';
+						feedbackGateActive = true;
+						console.log(`[FeedbackGate] Trigger detected: ${triggerId} ppid=${triggerPpid} chatId=${fgChatId}`);
+						
+						// Delete trigger file to signal Python MCP that we consumed it
+						try { unlinkSync(fullPath); } catch {}
+						try { unlinkSync(pathResolve(tmpDir, 'feedback_gate_trigger.json')); } catch {}
+							
+							options.onFeedbackRequested!({
+								triggerId,
+								message: data.message || '',
+								title: data.title || 'Feedback Gate',
+								context: data.context || '',
+								urgent: data.urgent || false,
+								triggerFilePath: fullPath,
+								routing: { chat_id: fgChatId, platform: fgPlatform },
+							});
+						} catch {
+							// invalid file, skip
+						}
+					}
+				} catch {
+					// readdir failed, skip this cycle
+				}
+			}, 500);
+		}
+		
 		// 监听输出
 		child.stdout!.on('data', (chunk: Buffer) => {
-			lastOutputTime = Date.now(); // 更新最后输出时间
+			lastOutputTime = Date.now();
+			if (feedbackGateActive) {
+				// MCP 超时返回后 Agent 会继续输出，但 IM 用户可能还没回复
+				// 不重置 feedbackGateActive，保持 idle timeout 豁免直到进程结束
+				const rawChunk = chunk.toString().slice(0, 200);
+				console.log(`[FeedbackGate] Agent resumed output while FG active (keeping active). First 200 chars: ${rawChunk}`);
+			}
 			lineBuf += chunk.toString();
 			const lines = lineBuf.split('\n');
 			lineBuf = lines.pop()!;
@@ -335,11 +493,18 @@ export class AgentExecutor {
 		});
 			
 			child.stderr!.on('data', (chunk: Buffer) => {
-				stderr += chunk.toString();
+				const text = chunk.toString();
+				stderr += text;
+				if (text.trim()) {
+					console.log(`[AgentExecutor] stderr: ${text.trim().slice(0, 300)}`);
+				}
 			});
 			
 			// 进程结束
 			child.on('close', (code) => {
+				const elapsed = Math.round((Date.now() - startTime) / 1000);
+				console.log(`[AgentExecutor] Process closed: pid=${child.pid} code=${code} elapsed=${elapsed}s done=${done} manuallyKilled=${manuallyKilled}`);
+				
 				// 如果是手动终止，不需要处理输出（Promise 已经被 reject）
 				if (manuallyKilled) {
 					console.log(`[AgentExecutor] 进程 ${lockKey} 已被手动终止，跳过输出处理`);
@@ -360,6 +525,8 @@ export class AgentExecutor {
 					const rawResultText = typeof resultText === 'string' ? resultText.trim() : '';
 					const output = rawResultText || finalSegment || assistantBuf.trim() || stderr.trim() || '(无输出)';
 					
+					console.log(`[AgentExecutor] Final output: code=${code} resultText=${rawResultText.length}ch finalSegment=${finalSegment.length}ch assistantBuf=${assistantBuf.trim().length}ch stderr=${stderr.trim().length}ch sessionId=${sessionId}`);
+					
 					if (code === 0) {
 						resolve({
 							result: output,
@@ -367,6 +534,7 @@ export class AgentExecutor {
 							toolSummary,
 						});
 					} else {
+						console.error(`[AgentExecutor] Agent exited with code ${code}, stderr: ${stderr.slice(0, 500)}`);
 						reject(new Error(`Agent exited with code ${code}\n${stderr}`));
 					}
 				}, 150);
@@ -475,4 +643,42 @@ function describeToolCall(toolCall: any): string {
 	}
 	
 	return `调用工具: ${name}`;
+}
+
+/**
+ * Write a response file that the Python MCP is polling for,
+ * completing the feedback gate round-trip.
+ */
+export function writeFeedbackGateResponse(triggerId: string, userInput: string): void {
+	const tmpDir = process.platform === 'win32'
+		? (process.env.TEMP || process.env.TMP || 'C:\\Temp')
+		: '/tmp';
+	const responseFile = pathResolve(tmpDir, `feedback_gate_response_${triggerId}.json`);
+	const data = {
+		timestamp: new Date().toISOString(),
+		trigger_id: triggerId,
+		user_input: userInput,
+		source: 'cursor-remote-control',
+	};
+	writeFileSync(responseFile, JSON.stringify(data, null, 2));
+	console.log(`[FeedbackGate] Response written: ${responseFile}`);
+}
+
+/**
+ * Write an acknowledgement file that the Python MCP checks
+ * to confirm the extension/remote-control received the trigger.
+ */
+export function writeFeedbackGateAck(triggerId: string): void {
+	const tmpDir = process.platform === 'win32'
+		? (process.env.TEMP || process.env.TMP || 'C:\\Temp')
+		: '/tmp';
+	const ackFile = pathResolve(tmpDir, `feedback_gate_ack_${triggerId}.json`);
+	const data = {
+		timestamp: new Date().toISOString(),
+		trigger_id: triggerId,
+		acknowledged: true,
+		source: 'cursor-remote-control',
+	};
+	writeFileSync(ackFile, JSON.stringify(data, null, 2));
+	console.log(`[FeedbackGate] Ack written: ${ackFile}`);
 }
