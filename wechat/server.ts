@@ -2334,11 +2334,7 @@ async function startWechatServer() {
 							createdAt: Date.now(),
 						});
 						if (req.agentOutput) {
-							const maxLen = 3000;
-							const output = req.agentOutput.length > maxLen
-								? req.agentOutput.slice(-maxLen) + '\n\n...(输出已截断)'
-								: req.agentOutput;
-							await sendWechatText(uid, output, contextToken);
+							await sendWechatText(uid, req.agentOutput, contextToken);
 						}
 						const fgMsg = `💬 **${req.title || 'AI 请求反馈'}**\n\n${req.message}\n\n---\n回复此消息即可提交反馈\n发送「完成」或「done」结束对话`;
 						await sendWechatText(uid, fgMsg, contextToken);
