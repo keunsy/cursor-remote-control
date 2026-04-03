@@ -21,14 +21,14 @@ import { Scheduler, type CronJob } from '../shared/scheduler.js';
 import { MemoryManager } from '../shared/memory.js';
 import { fetchNews } from '../shared/news-fetcher.js';
 import { getHealthStatus } from '../shared/news-sources/monitoring.js';
-import { HeartbeatRunner } from '../shared/heartbeat.js';
+import { HeartbeatRunner, getHeartbeatGlobalConfig, createSessionActivityGate, isHeartbeatEnabled } from '../shared/heartbeat.js';
 import { FeilianController, type OperationResult } from '../shared/feilian-control.js';
 import { humanizeCronInChinese } from 'cron-chinese';
 import { CommandHandler, type PlatformAdapter, type CommandContext } from '../shared/command-handler.js';
 import { AgentExecutor } from '../shared/agent-executor.js';
 import { ProcessLock } from '../shared/process-lock.js';
 // import { ReconnectManager } from '../shared/reconnect-manager.js';  // 已移除，SDK 自带重连
-import { getAvailableModelChain, shouldFallback, isQuotaExhausted, addToBlacklist, isBlacklisted, DEFAULT_MODEL, type ModelConfig } from '../shared/models-config.js';
+import { getAvailableModelChain, shouldFallback, isQuotaExhausted, addToBlacklist, isBlacklisted, getDefaultModel, type ModelConfig } from '../shared/models-config.js';
 import { uploadFileDingtalk, sendFileDingtalk } from './send-file-dingtalk.js';
 
 // ── 进程锁（防止多实例运行）──────────────────────
@@ -143,7 +143,7 @@ function loadEnv(): EnvConfig {
 		CURSOR_API_KEY: env.CURSOR_API_KEY || '',
 		DINGTALK_APP_KEY: env.DINGTALK_APP_KEY || '',
 		DINGTALK_APP_SECRET: env.DINGTALK_APP_SECRET || '',
-		CURSOR_MODEL: env.CURSOR_MODEL || DEFAULT_MODEL, // 使用全局默认模型
+		CURSOR_MODEL: env.CURSOR_MODEL || '',
 		VOLC_STT_APP_ID: env.VOLC_STT_APP_ID || '',
 		VOLC_STT_ACCESS_TOKEN: env.VOLC_STT_ACCESS_TOKEN || '',
 		VOLC_EMBEDDING_API_KEY: env.VOLC_EMBEDDING_API_KEY || '',
@@ -305,12 +305,16 @@ try {
 // （钉钉使用 webhook 而非 chatId）
 
 // ── 心跳系统 ──────────────────────────────────────
+const hbGlobal = getHeartbeatGlobalConfig();
+
 const heartbeat = new HeartbeatRunner({
 	config: {
-		enabled: false,  // 默认关闭，用户通过 /心跳 开启
-		everyMs: 30 * 60_000,  // 30 分钟
-		workspaceDir: memoryWorkspace, // 修复：使用 memoryWorkspace 避免污染工作项目
+		enabled: isHeartbeatEnabled('dingtalk'),
+		everyMs: hbGlobal.everyMs,
+		workspaceDir: memoryWorkspace,
+		...(hbGlobal.activeHours ? { activeHours: hbGlobal.activeHours } : {}),
 	},
+	shouldRun: createSessionActivityGate(memoryWorkspace),
 	onExecute: async (prompt: string) => {
 		memory?.appendSessionLog(memoryWorkspace, "user", "[心跳检查] " + prompt.slice(0, 200), config.CURSOR_MODEL);
 		const { result, quotaWarning } = await runAgent(memoryWorkspace, prompt);
@@ -778,7 +782,7 @@ async function runAgent(
 		onSessionId?: (sessionId: string) => void;
 	}
 ): Promise<RunAgentResult> {
-	const primaryModel = config.CURSOR_MODEL || DEFAULT_MODEL;
+	const primaryModel = config.CURSOR_MODEL || getDefaultModel();
 
 	// 安全调用 session ID 回调，失败时不中断主流程
 	const notifySession = (out: { sessionId?: string }) => {
@@ -1678,7 +1682,7 @@ async function handleMessage(msg: any) {
 		const agentElapsedMs = Date.now() - agentStart;
 		const elapsed = formatElapsed(Math.round(agentElapsedMs / 1000));
 		const title = quotaWarning ? `⚠️ 完成 · ${elapsed}（已降级）` : `✅ 完成 · ${elapsed}`;
-		console.log(`[完成] model=${quotaWarning ? 'auto' : config.CURSOR_MODEL} elapsed=${elapsed} (${result.length} chars)`);
+		console.log(`[完成] model=${quotaWarning ? 'auto' : (config.CURSOR_MODEL || getDefaultModel())} elapsed=${elapsed} (${result.length} chars)`);
 
 			// 如果是出生仪式，删除 BOOTSTRAP.md
 			if (isBootstrap) {
@@ -1847,7 +1851,7 @@ const scheduler = new Scheduler({
 					try {
 						console.log(`[scheduler] 执行 Agent (新格式): ${job.task.prompt.slice(0, 100)}`);
 						const workspace = job.workspace || defaultWorkspace;
-						const model = job.model || config.CURSOR_MODEL || DEFAULT_MODEL;
+						const model = job.model || config.CURSOR_MODEL || getDefaultModel();
 						
 						const { result } = await runAgent(workspace, job.task.prompt, {
 							skipCard: true
@@ -1910,7 +1914,7 @@ const scheduler = new Scheduler({
 				};
 				console.log(`[scheduler] 执行 Agent (旧格式): ${parsed.prompt.slice(0, 100)}`);
 				const workspace = job.workspace || defaultWorkspace;
-				const model = job.model || config.CURSOR_MODEL || DEFAULT_MODEL;
+				const model = job.model || config.CURSOR_MODEL || getDefaultModel();
 				
 				const { result } = await runAgent(workspace, parsed.prompt, {
 					skipCard: true
@@ -1989,7 +1993,7 @@ console.log(`
 ┌──────────────────────────────────────────────────┐
 │  钉钉 → Cursor Agent 中继服务 v3.0               │
 ├──────────────────────────────────────────────────┤
-│  模型: ${config.CURSOR_MODEL}
+│  模型: ${config.CURSOR_MODEL || getDefaultModel()}
 │  Key:  ${config.CURSOR_API_KEY ? `...${config.CURSOR_API_KEY.slice(-8)}` : '(未设置)'}
 │  连接: 钉钉 Stream 长连接
 │  收件: ${INBOX_DIR}

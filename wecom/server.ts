@@ -16,7 +16,7 @@ import { resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Scheduler, type CronJob } from '../shared/scheduler.js';
 import { MemoryManager } from '../shared/memory.js';
-import { HeartbeatRunner } from '../shared/heartbeat.js';
+import { HeartbeatRunner, getHeartbeatGlobalConfig, createSessionActivityGate, isHeartbeatEnabled } from '../shared/heartbeat.js';
 import { FeilianController, type OperationResult } from '../shared/feilian-control.js';
 import { fetchNews } from '../shared/news-fetcher.js';
 import { getHealthStatus } from '../shared/news-sources/monitoring.js';
@@ -32,7 +32,7 @@ import {
 	loadSessionsFromDisk, saveSessions, sessionsStore,
 	getCurrentProject, setCurrentProject,
 } from './wecom-helper.js';
-import { getAvailableModelChain, shouldFallback, isQuotaExhausted, addToBlacklist, isBlacklisted, DEFAULT_MODEL } from '../shared/models-config.js';
+import { getAvailableModelChain, shouldFallback, isQuotaExhausted, addToBlacklist, isBlacklisted, getDefaultModel } from '../shared/models-config.js';
 
 // ── 进程锁（防止多实例运行）──────────────────────
 const processLock = new ProcessLock("wecom");
@@ -138,7 +138,7 @@ function loadEnv(): EnvConfig {
 		CURSOR_API_KEY: env.CURSOR_API_KEY || '',
 		WECOM_BOT_ID: env.WECOM_BOT_ID || '',
 		WECOM_BOT_SECRET: env.WECOM_BOT_SECRET || '',
-		CURSOR_MODEL: env.CURSOR_MODEL || DEFAULT_MODEL, // 使用全局默认模型
+		CURSOR_MODEL: env.CURSOR_MODEL || '',
 		VOLC_STT_APP_ID: env.VOLC_STT_APP_ID || '',
 		VOLC_STT_ACCESS_TOKEN: env.VOLC_STT_ACCESS_TOKEN || '',
 		VOLC_EMBEDDING_API_KEY: env.VOLC_EMBEDDING_API_KEY || '',
@@ -234,12 +234,16 @@ interface ActiveSession {
 let lastActiveSession: ActiveSession | undefined;
 
 // ── 心跳系统 ──────────────────────────────────────
+const hbGlobal = getHeartbeatGlobalConfig();
+
 const heartbeat = new HeartbeatRunner({
 	config: {
-		enabled: false,
-		everyMs: 30 * 60_000,
+		enabled: isHeartbeatEnabled('wecom'),
+		everyMs: hbGlobal.everyMs,
 		workspaceDir: memoryWorkspace,
+		...(hbGlobal.activeHours ? { activeHours: hbGlobal.activeHours } : {}),
 	},
+	shouldRun: createSessionActivityGate(memoryWorkspace),
 	onExecute: async (prompt: string) => {
 		memory?.appendSessionLog(memoryWorkspace, "user", "[心跳检查] " + prompt.slice(0, 200), config.CURSOR_MODEL);
 		const { result, quotaWarning } = await runAgent(memoryWorkspace, prompt);
@@ -299,7 +303,7 @@ async function runAgent(
 		onStart?: () => void;
 	}
 ): Promise<RunAgentResult> {
-	const primaryModel = config.CURSOR_MODEL || DEFAULT_MODEL;
+	const primaryModel = config.CURSOR_MODEL || getDefaultModel();
 
 	const notifySession = (out: { sessionId?: string }) => {
 		if (out.sessionId && context?.onSessionId) {
@@ -486,7 +490,7 @@ console.log(`
 ┌──────────────────────────────────────────────────┐
 │  企业微信 → Cursor Agent 中继服务 v1.0           │
 ├──────────────────────────────────────────────────┤
-│  模型: ${config.CURSOR_MODEL}
+│  模型: ${config.CURSOR_MODEL || getDefaultModel()}
 │  Key:  ${config.CURSOR_API_KEY ? `...${config.CURSOR_API_KEY.slice(-8)}` : '(未设置)'}
 │  连接: WebSocket 长连接
 │  SDK: @wecom/aibot-node-sdk
@@ -986,7 +990,7 @@ wsClient.on('message.text', async (frame: WsFrame) => {
 		
 		await wsClient.replyStream(frame, streamId, `**${title}**\n\n---\n\n${finalMessage}`, true);
 		
-		console.log(`[完成] model=${quotaWarning ? 'auto' : config.CURSOR_MODEL} elapsed=${elapsed} (${result.length} chars)`);
+		console.log(`[完成] model=${quotaWarning ? 'auto' : (config.CURSOR_MODEL || getDefaultModel())} elapsed=${elapsed} (${result.length} chars)`);
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : String(error);
 			
@@ -1037,7 +1041,7 @@ const scheduler = new Scheduler({
 					try {
 						console.log(`[scheduler] 执行 Agent (新格式): ${job.task.prompt.slice(0, 100)}`);
 						const workspace = job.workspace || defaultWorkspace;
-						const model = job.model || config.CURSOR_MODEL || DEFAULT_MODEL;
+						const model = job.model || config.CURSOR_MODEL || getDefaultModel();
 						
 						const { result } = await runAgent(workspace, job.task.prompt, {
 							skipStreaming: true
@@ -1100,7 +1104,7 @@ const scheduler = new Scheduler({
 				};
 				console.log(`[scheduler] 执行 Agent (旧格式): ${parsed.prompt.slice(0, 100)}`);
 				const workspace = job.workspace || defaultWorkspace;
-				const model = job.model || config.CURSOR_MODEL || DEFAULT_MODEL;
+				const model = job.model || config.CURSOR_MODEL || getDefaultModel();
 				
 				const { result } = await runAgent(workspace, parsed.prompt, {
 					skipStreaming: true

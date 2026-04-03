@@ -1,3 +1,6 @@
+import { readFileSync, existsSync, statSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 export interface HeartbeatConfig {
   enabled: boolean;
   everyMs: number;
@@ -6,6 +9,73 @@ export interface HeartbeatConfig {
   activeHours?: {
     start: number; // 0-23
     end: number; // 0-23
+  };
+}
+
+interface HeartbeatGlobalConfig {
+  everyMs: number;
+  minSessionLines: number;
+  minSessionBytes: number;
+  activeHours?: { start: number; end: number } | null;
+  platforms?: Record<string, { enabled?: boolean }>;
+}
+
+export type Platform = 'feishu' | 'dingtalk' | 'wechat' | 'wecom' | 'telegram';
+
+const HEARTBEAT_CONFIG_PATH = resolve(import.meta.dirname, '..', 'config', 'heartbeat-config.json');
+let _hbCachedConfig: HeartbeatGlobalConfig | null = null;
+let _hbCachedMtimeMs = 0;
+
+const HEARTBEAT_DEFAULTS: HeartbeatGlobalConfig = {
+  everyMs: 86400000,
+  minSessionLines: 10,
+  minSessionBytes: 500,
+  activeHours: null,
+};
+
+export function getHeartbeatGlobalConfig(): HeartbeatGlobalConfig {
+  try {
+    if (!existsSync(HEARTBEAT_CONFIG_PATH)) return _hbCachedConfig ?? HEARTBEAT_DEFAULTS;
+    const mtime = statSync(HEARTBEAT_CONFIG_PATH).mtimeMs;
+    if (_hbCachedConfig && mtime === _hbCachedMtimeMs) return _hbCachedConfig;
+    const raw = JSON.parse(readFileSync(HEARTBEAT_CONFIG_PATH, 'utf-8'));
+    _hbCachedConfig = { ...HEARTBEAT_DEFAULTS, ...raw };
+    _hbCachedMtimeMs = mtime;
+    return _hbCachedConfig!;
+  } catch {
+    return _hbCachedConfig ?? HEARTBEAT_DEFAULTS;
+  }
+}
+
+/**
+ * 获取指定平台的心跳 enabled 状态
+ */
+export function isHeartbeatEnabled(platform: Platform): boolean {
+  const cfg = getHeartbeatGlobalConfig();
+  return cfg.platforms?.[platform]?.enabled ?? false;
+}
+
+/**
+ * 创建通用的 shouldRun 函数，基于统一配置的会话活动判断
+ */
+export function createSessionActivityGate(workspaceDir: string): () => boolean {
+  return () => {
+    const cfg = getHeartbeatGlobalConfig();
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const logPath = resolve(workspaceDir, `.cursor/sessions/${today}.jsonl`);
+      const stat = statSync(logPath);
+      if (stat.size < cfg.minSessionBytes) return false;
+      const content = readFileSync(logPath, 'utf-8');
+      const lines = content.split('\n').filter(Boolean);
+      if (lines.length < cfg.minSessionLines) {
+        console.log(`[心跳] 今日会话仅 ${lines.length} 条（阈值 ${cfg.minSessionLines}），跳过`);
+        return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
   };
 }
 

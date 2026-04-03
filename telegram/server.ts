@@ -20,7 +20,7 @@ import { MemoryManager } from '../shared/memory.js';
 import { HeartbeatRunner } from '../shared/heartbeat.js';
 import { CommandHandler, type PlatformAdapter, type CommandContext } from '../shared/command-handler.js';
 import { AgentExecutor } from '../shared/agent-executor.js';
-import { DEFAULT_MODEL } from '../shared/models-config.js';
+import { getDefaultModel } from '../shared/models-config.js';
 import { ProcessLock } from '../shared/process-lock.js';
 
 const HOME = process.env.HOME!;
@@ -94,7 +94,7 @@ function loadEnv(): EnvConfig {
 	return {
 		CURSOR_API_KEY: env.CURSOR_API_KEY || '',
 		TELEGRAM_BOT_TOKEN: env.TELEGRAM_BOT_TOKEN || '',
-		CURSOR_MODEL: env.CURSOR_MODEL || DEFAULT_MODEL,
+		CURSOR_MODEL: env.CURSOR_MODEL || '',
 		VOLC_STT_APP_ID: env.VOLC_STT_APP_ID || '',
 		VOLC_STT_ACCESS_TOKEN: env.VOLC_STT_ACCESS_TOKEN || '',
 		VOLC_EMBEDDING_API_KEY: env.VOLC_EMBEDDING_API_KEY || '',
@@ -532,7 +532,7 @@ bot.on('message', async (msg) => {
 		const startTime = Date.now();
 		const result = await agentExecutor.execute({
 			workspace,
-			model: config.CURSOR_MODEL,
+			model: config.CURSOR_MODEL || getDefaultModel(),
 			prompt: actualText,
 			sessionId: sessionId || undefined,
 			platform: 'telegram',
@@ -612,5 +612,5 @@ scheduler.start();
 heartbeat.start();
 
 console.log('[就绪] Telegram 服务已启动，等待消息...');
-console.log(`[配置] 模型: ${config.CURSOR_MODEL}`);
+console.log(`[配置] 模型: ${config.CURSOR_MODEL || getDefaultModel()}`);
 console.log(`[配置] 默认项目: ${projectsConfig.default_project}`);

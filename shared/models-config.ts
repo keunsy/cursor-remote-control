@@ -8,8 +8,8 @@
  * 4. 集中管理（新增模型只需改这个文件）
  */
 
-import { readFileSync, existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
 
 // ──────────────────────────────────────────────────
 // 类型定义
@@ -74,21 +74,29 @@ const DEFAULT_CONFIG: GlobalModelConfig = {
 	],
 };
 
+let _cachedConfig: GlobalModelConfig | null = null;
+let _cachedMtimeMs = 0;
+
 /**
- * 读取全局模型配置（如果不存在则使用默认配置）
+ * 读取全局模型配置（带文件 mtime 缓存，配置文件变更后自动刷新）
  */
 function loadGlobalConfig(): GlobalModelConfig {
 	if (!existsSync(MODEL_CONFIG_PATH)) {
 		console.warn(`[警告] 配置文件不存在: ${MODEL_CONFIG_PATH}`);
 		console.warn('使用默认配置（auto 模型），建议创建配置文件：config/model-config.json');
+		_cachedConfig = DEFAULT_CONFIG;
 		return DEFAULT_CONFIG;
 	}
 
 	try {
+		const mtime = statSync(MODEL_CONFIG_PATH).mtimeMs;
+		if (_cachedConfig && mtime === _cachedMtimeMs) {
+			return _cachedConfig;
+		}
+
 		const content = readFileSync(MODEL_CONFIG_PATH, 'utf-8');
 		const config = JSON.parse(content) as GlobalModelConfig;
 		
-		// 验证必需字段
 		if (!config.defaultModel) {
 			throw new Error('配置文件缺少 defaultModel 字段');
 		}
@@ -98,9 +106,16 @@ function loadGlobalConfig(): GlobalModelConfig {
 		if (!config.blacklistResetCron) {
 			throw new Error('配置文件缺少 blacklistResetCron 字段');
 		}
-		
+
+		_cachedConfig = config;
+		_cachedMtimeMs = mtime;
+
 		return config;
 	} catch (err) {
+		if (_cachedConfig) {
+			console.error(`[模型配置] 重新读取失败，继续使用缓存:`, err);
+			return _cachedConfig;
+		}
 		console.error(`[致命错误] 读取配置文件失败: ${MODEL_CONFIG_PATH}`);
 		console.error(err);
 		console.error('请检查配置文件格式是否正确（参考 config/model-config.example.json）');
@@ -108,29 +123,48 @@ function loadGlobalConfig(): GlobalModelConfig {
 	}
 }
 
-const globalConfig = loadGlobalConfig();
+/** 初始加载 */
+loadGlobalConfig();
 
 /**
- * 默认使用的模型（从 config/model-config.json 读取）
- * 具体可选值请查看配置文件中的 models 列表
+ * 获取默认模型（动态读取，配置文件变更后自动生效，无需重启）
  */
-export const DEFAULT_MODEL = globalConfig.defaultModel;
+export function getDefaultModel(): string {
+	return loadGlobalConfig().defaultModel;
+}
+
+/** @deprecated 使用 getDefaultModel() — 为向后兼容保留 */
+export const DEFAULT_MODEL = getDefaultModel();
 
 /**
- * 首选模型 — 新月份黑名单重置时自动恢复 defaultModel 到此值
- * 如未配置，则不做恢复（保持 defaultModel 不变）
+ * 获取首选模型（动态读取）
  */
-export const PREFERRED_MODEL = globalConfig.preferredModel || '';
+export function getPreferredModel(): string {
+	return loadGlobalConfig().preferredModel || '';
+}
+
+/** @deprecated 使用 getPreferredModel() */
+export const PREFERRED_MODEL = getPreferredModel();
 
 /**
- * 黑名单重置 Cron 表达式（从 config/model-config.json 读取）
+ * 获取黑名单重置 Cron（动态读取）
  */
-export const BLACKLIST_RESET_CRON = globalConfig.blacklistResetCron;
+export function getBlacklistResetCron(): string {
+	return loadGlobalConfig().blacklistResetCron;
+}
+
+/** @deprecated 使用 getBlacklistResetCron() */
+export const BLACKLIST_RESET_CRON = getBlacklistResetCron();
 
 /**
- * 所有可用模型配置（从 config/model-config.json 读取）
+ * 获取所有可用模型（动态读取）
  */
-export const MODELS: ModelConfig[] = globalConfig.models || [];
+export function getModels(): ModelConfig[] {
+	return loadGlobalConfig().models || [];
+}
+
+/** @deprecated 使用 getModels() */
+export const MODELS: ModelConfig[] = getModels();
 
 
 /**
@@ -150,13 +184,14 @@ export function findModel(input: string): ModelConfig | null {
 	
 	// 按编号查找（1-based）
 	// 确保是纯整数，不是小数
+	const models = getModels();
 	const num = Number.parseInt(trimmed, 10);
-	if (!Number.isNaN(num) && num.toString() === trimmed && num >= 1 && num <= MODELS.length) {
-		return MODELS[num - 1] ?? null;
+	if (!Number.isNaN(num) && num.toString() === trimmed && num >= 1 && num <= models.length) {
+		return models[num - 1] ?? null;
 	}
 	
 	// 按 ID 或别名查找
-	const found = MODELS.find(m => 
+	const found = models.find(m => 
 		m.id.toLowerCase() === trimmed || 
 		m.aliases.some(alias => alias.toLowerCase() === trimmed)
 	);
@@ -170,14 +205,15 @@ export function findModel(input: string): ModelConfig | null {
  * @returns 包含自身和 fallback 的完整模型链，找不到返回空数组
  */
 export function getModelChain(modelId: string): ModelConfig[] {
-	const model = MODELS.find(m => m.id === modelId);
+	const models = getModels();
+	const model = models.find(m => m.id === modelId);
 	if (!model) return [];
 	
 	const chain: ModelConfig[] = [model];
 	
 	if (model.fallbackChain && model.fallbackChain.length > 0) {
 		for (const fallbackId of model.fallbackChain) {
-			const fallback = MODELS.find(m => m.id === fallbackId);
+			const fallback = models.find(m => m.id === fallbackId);
 			if (fallback) chain.push(fallback);
 		}
 	}
@@ -194,8 +230,9 @@ export function getModelChain(modelId: string): ModelConfig[] {
 export function formatModelList(currentModelId: string): string {
 	const lines: string[] = [];
 	const { models: blacklisted } = getBlacklistStatus();
+	const models = getModels();
 	
-	MODELS.forEach((m, i) => {
+	models.forEach((m, i) => {
 		const isCurrent = m.id === currentModelId;
 		const inBlacklist = blacklisted.includes(m.id);
 		
@@ -234,7 +271,7 @@ export function formatModelList(currentModelId: string): string {
 	lines.push('· `/模型 名称` — 如 `/模型 opus`');
 	lines.push('· `/模型 别名` — 如 `/模型 o`');
 	
-	return `**可用模型（共 ${MODELS.length} 个）**\n\n${lines.join('\n')}`;
+	return `**可用模型（共 ${models.length} 个）**\n\n${lines.join('\n')}`;
 }
 
 /**
@@ -397,18 +434,20 @@ export function configureBlacklist(config: BlacklistConfig): void {
  * 新月份重置时，自动将 config/model-config.json 的 defaultModel 恢复到 preferredModel
  */
 function restorePreferredModel(): void {
-	if (!PREFERRED_MODEL) return;
+	const preferred = getPreferredModel();
+	if (!preferred) return;
 
 	try {
-		const fs = require('node:fs');
-		const raw = fs.readFileSync(MODEL_CONFIG_PATH, 'utf-8');
+		const raw = readFileSync(MODEL_CONFIG_PATH, 'utf-8');
 		const cfg = JSON.parse(raw);
-		if (cfg.defaultModel === PREFERRED_MODEL) return;
+		if (cfg.defaultModel === preferred) return;
 
 		const prev = cfg.defaultModel;
-		cfg.defaultModel = PREFERRED_MODEL;
-		fs.writeFileSync(MODEL_CONFIG_PATH, JSON.stringify(cfg, null, 2) + '\n', 'utf-8');
-		console.log(`[新月份] defaultModel 已自动恢复: ${prev} → ${PREFERRED_MODEL}`);
+		cfg.defaultModel = preferred;
+		writeFileSync(MODEL_CONFIG_PATH, JSON.stringify(cfg, null, 2) + '\n', 'utf-8');
+		_cachedConfig = null;
+		_cachedMtimeMs = 0;
+		console.log(`[新月份] defaultModel 已自动恢复: ${prev} → ${preferred}`);
 	} catch (err) {
 		console.error('[新月份] 恢复 defaultModel 失败:', err);
 	}
@@ -419,9 +458,8 @@ function restorePreferredModel(): void {
  */
 function loadBlacklist(): ModelBlacklist {
 	try {
-		const fs = require('node:fs');
-		if (fs.existsSync(BLACKLIST_PATH)) {
-			const data = JSON.parse(fs.readFileSync(BLACKLIST_PATH, 'utf-8'));
+		if (existsSync(BLACKLIST_PATH)) {
+			const data = JSON.parse(readFileSync(BLACKLIST_PATH, 'utf-8'));
 			
 			// 检查是否需要自动重置
 			const now = Date.now();
@@ -476,12 +514,11 @@ function calculateNextResetTime(): number {
  */
 function saveBlacklist(): void {
 	try {
-		const fs = require('node:fs');
-		const dir = require('node:path').dirname(BLACKLIST_PATH);
-		if (!fs.existsSync(dir)) {
-			fs.mkdirSync(dir, { recursive: true });
+		const dir = dirname(BLACKLIST_PATH);
+		if (!existsSync(dir)) {
+			mkdirSync(dir, { recursive: true });
 		}
-		fs.writeFileSync(BLACKLIST_PATH, JSON.stringify(blacklist, null, 2), 'utf-8');
+		writeFileSync(BLACKLIST_PATH, JSON.stringify(blacklist, null, 2), 'utf-8');
 	} catch (err) {
 		console.error('[模型黑名单] 保存失败:', err);
 	}
@@ -495,8 +532,7 @@ function saveBlacklist(): void {
  * @param modelId 模型 ID
  */
 export function addToBlacklist(modelId: string): void {
-	// 检查模型是否受保护（从配置文件读取 protected 字段）
-	const model = MODELS.find(m => m.id === modelId);
+	const model = getModels().find(m => m.id === modelId);
 	if (model?.protected) {
 		console.log(`[模型黑名单] ${modelId} 是受保护模型，拒绝加入黑名单`);
 		return;
@@ -571,8 +607,7 @@ export function getAvailableModelChain(modelId: string): ModelConfig[] {
 		console.log(`[智能跳过] ${firstModel.id} 在黑名单中，直接使用 fallback`);
 	}
 
-	// 保证链末端总有一次 `auto`（配置中存在且未在链中、且未黑名单时），满足「模型类错误最终可切换到 auto」
-	const autoModel = MODELS.find(m => m.id === 'auto');
+	const autoModel = getModels().find(m => m.id === 'auto');
 	if (
 		autoModel &&
 		!available.some(m => m.id === 'auto') &&

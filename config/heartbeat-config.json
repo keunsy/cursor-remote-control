@@ -1,0 +1,12 @@
+{
+  "everyMs": 86400000,
+  "minSessionLines": 10,
+  "minSessionBytes": 500,
+  "activeHours": null,
+  "platforms": {
+    "feishu": { "enabled": true },
+    "dingtalk": { "enabled": false },
+    "wechat": { "enabled": false },
+    "wecom": { "enabled": false }
+  }
+}
