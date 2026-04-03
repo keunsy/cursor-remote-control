@@ -509,15 +509,15 @@ export class AgentExecutor {
 							urgent: data.urgent || false,
 							triggerFilePath: fullPath,
 							routing: { chat_id: fgChatId, platform: fgPlatform },
-						agentOutput: assistantBuf.trim() || undefined,
-						isKeepalive,
-					});
-					if (!isKeepalive) {
-						assistantBuf = '';
-					}
-					} catch {
-							// invalid file, skip
+							agentOutput: assistantBuf.trim() || undefined,
+							isKeepalive,
+						});
+						if (!isKeepalive) {
+							assistantBuf = '';
 						}
+					} catch {
+						// invalid file, skip
+					}
 					}
 				} catch {
 					// readdir failed, skip this cycle
