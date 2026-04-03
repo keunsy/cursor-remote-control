@@ -1886,6 +1886,12 @@ async function runAgent(
 			const onFeedbackRequested = chatId && isOpus
 				? async (req: FeedbackGateRequest) => {
 					console.log(`[FeedbackGate] Received request: triggerId=${req.triggerId} title=${req.title}`);
+					if (req.agentOutput) {
+						await sendCard(chatId, req.agentOutput.slice(0, 4000), {
+							title: '📝 中间结果',
+							color: 'green',
+						});
+					}
 					const fgCardId = await sendCard(chatId, `💬 **${req.title || 'AI 请求反馈'}**\n\n${req.message}\n\n---\n回复此消息即可提交反馈\n发送「完成」或「done」结束对话`, {
 						title: req.title || '等待反馈',
 						color: 'purple',

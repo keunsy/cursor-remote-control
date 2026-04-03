@@ -330,8 +330,8 @@ export class AgentExecutor {
 				return;
 			}
 			
-			// 进度更新
-			if (options.onProgress && now - lastProgressTime >= PROGRESS_INTERVAL) {
+			// 进度更新（feedback gate 激活时暂停）
+			if (options.onProgress && now - lastProgressTime >= PROGRESS_INTERVAL && !feedbackGateActive) {
 				lastProgressTime = now;
 				options.onProgress({
 					elapsed: Math.round((now - startTime) / 1000),
@@ -404,8 +404,8 @@ export class AgentExecutor {
 						break;
 					}
 					
-					// 阶段切换时立即触发进度更新
-					if (phase !== prevPhase && options.onProgress) {
+					// 阶段切换时立即触发进度更新（feedback gate 激活时暂停）
+					if (phase !== prevPhase && options.onProgress && !feedbackGateActive) {
 						const now = Date.now();
 						lastProgressTime = now;
 						options.onProgress({
