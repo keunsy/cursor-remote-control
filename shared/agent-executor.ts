@@ -46,6 +46,7 @@ export interface FeedbackGateRequest {
 	urgent: boolean;
 	triggerFilePath: string;
 	routing: { chat_id?: string; platform?: string };
+	agentOutput?: string;
 }
 
 export interface AgentExecutorOptions {
@@ -471,6 +472,7 @@ export class AgentExecutor {
 								urgent: data.urgent || false,
 								triggerFilePath: fullPath,
 								routing: { chat_id: fgChatId, platform: fgPlatform },
+								agentOutput: assistantBuf.trim() || undefined,
 							});
 						} catch {
 							// invalid file, skip
