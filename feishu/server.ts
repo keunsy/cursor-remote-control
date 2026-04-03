@@ -1854,6 +1854,7 @@ interface PendingFeedbackGate {
 	createdAt: number;
 }
 const pendingFeedbackGates = new Map<string, PendingFeedbackGate>();
+const feedbackGateLatestCards = new Map<string, string>();
 const FEEDBACK_GATE_TIMEOUT = 24 * 60 * 60 * 1000; // 24h
 
 // ── 会话级活跃追踪（lockKey = session:id 或 ws:path）──────
@@ -2614,10 +2615,13 @@ async function handleInner(
 			if (!busySessions.has(currentLockKeyFG)) {
 				console.log(`[FeedbackGate] Agent already finished, treating reply as new message`);
 			} else {
-				await replyCard(messageId, isDone ? '✅ 对话已结束' : `✅ 反馈已提交，AI 正在继续处理...\n\n> ${prompt.slice(0, 200)}`, {
+				const fgReplyCardId = await replyCard(messageId, isDone ? '✅ 对话已结束' : `✅ 反馈已提交，AI 正在继续处理...\n\n> ${prompt.slice(0, 200)}`, {
 					title: isDone ? '对话结束' : '处理中',
 					color: isDone ? 'green' : 'blue',
 				});
+				if (fgReplyCardId && chatId) {
+					feedbackGateLatestCards.set(chatId, fgReplyCardId);
+				}
 				return;
 			}
 		} else {
@@ -2674,6 +2678,8 @@ async function handleInner(
 
 	const onProgress = cardId
 		? (p: AgentProgress) => {
+				const latestCard = feedbackGateLatestCards.get(chatId);
+				if (latestCard) cardId = latestCard;
 				const time = formatElapsed(p.elapsed);
 				const phaseLabel = p.phase === "thinking" ? "🤔 思考中" : p.phase === "tool_call" ? "🔧 执行工具" : "💬 回复中";
 				const snippet = p.snippet.split("\n").filter((l) => l.trim()).slice(-4).join("\n");
@@ -2711,6 +2717,13 @@ async function handleInner(
 		const doneColor = quotaWarning ? "orange" : "green";
 
 		// 尝试发送 AI 结果到飞书卡片
+		// 如果经历了 feedback gate 多轮，优先更新最新的卡片（避免用户翻页）
+		const latestFGCard = feedbackGateLatestCards.get(chatId);
+		if (latestFGCard) {
+			cardId = latestFGCard;
+			feedbackGateLatestCards.delete(chatId);
+			console.log(`[回复] 使用 feedback gate 最新卡片: ${latestFGCard}`);
+		}
 		let sendOk = false;
 		console.log(`[回复] 准备更新卡片 cardId=${cardId} length=${fullResult.length} maxLength=${CARD_MAX}`);
 		if (cardId && fullResult.length <= CARD_MAX) {

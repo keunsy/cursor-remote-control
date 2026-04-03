@@ -388,6 +388,10 @@ export class AgentExecutor {
 							const toolName = Object.keys(ev.tool_call)[0] || '';
 							if (toolName.includes('feedback_gate') || toolName.includes('callMcpTool')) {
 								console.log(`[AgentExecutor] FG tool_call event: subtype=${ev.subtype} tool=${toolName} feedbackGateActive=${feedbackGateActive}`);
+								if (ev.subtype === 'completed' && feedbackGateActive) {
+									feedbackGateActive = false;
+									console.log(`[FeedbackGate] Tool call completed, resuming progress updates`);
+								}
 							}
 						}
 						break;
@@ -457,6 +461,7 @@ export class AgentExecutor {
 						// Delete trigger file to signal Python MCP that we consumed it
 						try { unlinkSync(fullPath); } catch {}
 						try { unlinkSync(pathResolve(tmpDir, 'feedback_gate_trigger.json')); } catch {}
+						writeFeedbackGateAck(triggerId);
 							
 							options.onFeedbackRequested!({
 								triggerId,
