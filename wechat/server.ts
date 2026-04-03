@@ -2264,22 +2264,21 @@ async function startWechatServer() {
 
 					const lockKeyForFG = getLockKey(workspace);
 					if (!busySessions.has(lockKeyForFG)) {
-						// Agent 已完成，将反馈作为新消息处理（不 return，继续往下走）
 						console.log(`[FeedbackGate] Agent already finished, treating reply as new message`);
-				} else {
-					await sendWechatText(
-						uid,
-						isDone ? '✅ 对话已结束' : '✅ 反馈已提交，AI 正在继续处理...',
-						contextToken,
-					);
-					if (!isDone) {
-						const prevCleanup = activeTypingCleanup.get(uid);
-						if (prevCleanup) prevCleanup();
-						const stopFn = startTypingKeepalive(client, uid);
-						activeTypingCleanup.set(uid, stopFn);
+					} else {
+						await sendWechatText(
+							uid,
+							isDone ? '✅ 对话已结束' : '✅ 反馈已提交，AI 正在继续处理...',
+							contextToken,
+						);
+						if (!isDone) {
+							const prevCleanup = activeTypingCleanup.get(uid);
+							if (prevCleanup) prevCleanup();
+							const stopFn = startTypingKeepalive(client, uid);
+							activeTypingCleanup.set(uid, stopFn);
+						}
+						return;
 					}
-					return;
-				}
 				} else {
 					pendingFeedbackGates.delete(uid);
 					console.log(`[FeedbackGate] Expired pending for uid=${uid.slice(0, 10)}...`);
@@ -2523,6 +2522,7 @@ async function startWechatServer() {
 		} finally {
 			const fpCleanup = activeTypingCleanup.get(uid);
 			if (fpCleanup) { fpCleanup(); activeTypingCleanup.delete(uid); }
+			pendingFeedbackGates.delete(uid);
 			stopTyping();
 		}
 			} finally {

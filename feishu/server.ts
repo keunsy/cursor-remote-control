@@ -2007,6 +2007,10 @@ async function runAgent(
 			}
 		} finally {
 			busySessions.delete(lockKey);
+			if (chatId) {
+				pendingFeedbackGates.delete(chatId);
+				feedbackGateLatestCards.delete(chatId);
+			}
 		}
 	});
 }
