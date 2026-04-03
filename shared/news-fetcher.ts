@@ -2,6 +2,7 @@ import type { NewsItem, FetchOptions, NewsSource, SourceConfig } from './news-so
 import { loadConfig, getEnabledSources } from './news-sources/config-loader';
 import { NewsnowSource } from './news-sources/newsnow';
 import { RSSHubSource } from './news-sources/rsshub';
+import { AIAggregatorSource } from './news-sources/ai-aggregator';
 import { MockNewsSource } from './news-sources/mock';
 import { aggregateNews } from './news-sources/aggregator';
 import { formatNewsCard } from './news-sources/formatter';
@@ -32,6 +33,8 @@ function createSource(config: SourceConfig, globalConfig?: NewsSourcesConfig): N
       return new NewsnowSource(config, globalConfig?.presets);
     case 'rsshub':
       return new RSSHubSource(config);
+    case 'ai-aggregator':
+      return new AIAggregatorSource(config);
     case 'mock':
       return new MockNewsSource(config);
     default:

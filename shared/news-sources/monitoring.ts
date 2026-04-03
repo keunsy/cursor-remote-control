@@ -140,6 +140,7 @@ function getDisplayName(sourceId: string): string {
   const map: Record<string, string> = {
     newsnow: 'NewsNow API',
     rsshub: 'RSSHub',
+    'ai-aggregator': 'AI 新闻聚合',
   };
   return map[sourceId] || sourceId;
 }

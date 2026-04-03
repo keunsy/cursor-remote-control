@@ -35,6 +35,13 @@ export class RSSHubSource implements NewsSource {
     this.baseUrl = (config.config.baseUrl as string) || 'https://rsshub.app';
     this.feeds = (config.config.feeds as string[]) || [];
     this.timeout = (config.config.timeout as number) ?? 15000;
+
+    const names = config.config.feedNames as Record<string, string> | undefined;
+    if (names) {
+      for (const [feed, name] of Object.entries(names)) {
+        this.feedNameMap.set(feed, name);
+      }
+    }
   }
 
   async fetch(options: FetchOptions): Promise<NewsItem[]> {
@@ -42,9 +49,9 @@ export class RSSHubSource implements NewsSource {
     const results: NewsItem[] = [];
 
     try {
-      // 并行请求所有 feed，避免串行累积超时时间
+      const perFeedLimit = Math.max(options.topN, 10);
       const feedResults = await Promise.allSettled(
-        this.feeds.map((feed) => this.fetchFeed(feed, options.topN))
+        this.feeds.map((feed) => this.fetchFeed(feed, perFeedLimit))
       );
 
       for (const [idx, result] of feedResults.entries()) {
@@ -55,10 +62,13 @@ export class RSSHubSource implements NewsSource {
         }
       }
 
-      // 如果所有 feed 都失败，抛出错误
       if (results.length === 0) {
         throw new Error(`所有 RSS feed 请求失败（${this.feeds.join(', ')}）`);
       }
+
+      results.sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
+      let rank = 1;
+      for (const item of results) item.rank = rank++;
 
       const sliced = results.slice(0, options.topN);
       recordMetrics(this.id, true, Date.now() - start, sliced.length);
@@ -76,7 +86,9 @@ export class RSSHubSource implements NewsSource {
   }
 
   private async fetchFeed(feed: string, topN: number): Promise<NewsItem[]> {
-    const url = `${this.baseUrl.replace(/\/$/, '')}/${feed.replace(/^\//, '')}`;
+    const url = feed.startsWith('http')
+      ? feed
+      : `${this.baseUrl.replace(/\/$/, '')}/${feed.replace(/^\//, '')}`;
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
@@ -162,11 +174,38 @@ export class RSSHubSource implements NewsSource {
   }
 
   private getPlatformName(feed: string): string {
-    if (feed.includes('weibo')) return '微博';
-    if (feed.includes('zhihu')) return '知乎';
-    if (feed.includes('baidu')) return '百度';
-    if (feed.includes('douyin')) return '抖音';
-    if (feed.includes('toutiao')) return '今日头条';
+    const mapped = this.feedNameMap.get(feed);
+    if (mapped) return mapped;
+
+    const lower = feed.toLowerCase();
+    if (lower.includes('weibo')) return '微博';
+    if (lower.includes('zhihu')) return '知乎';
+    if (lower.includes('baidu')) return '百度';
+    if (lower.includes('douyin')) return '抖音';
+    if (lower.includes('toutiao')) return '今日头条';
+    if (lower.includes('36kr')) return '36氪';
+    if (lower.includes('qbitai')) return '量子位';
+    if (lower.includes('techcrunch')) return 'TechCrunch AI';
+    if (lower.includes('hnrss') || lower.includes('hackernews') || lower.includes('hn.algolia') || lower.includes('hacker-news')) return 'Hacker News';
+    if (lower.includes('producthunt') || lower.includes('product-hunt')) return 'Product Hunt';
+    if (lower.includes('sspai')) return '少数派';
+    if (lower.includes('readhub')) return 'Readhub';
+    if (lower.includes('ithome')) return 'IT之家';
+    if (lower.includes('jiqizhixin') || lower.includes('机器之心')) return '机器之心';
+    if (lower.includes('leiphone') || lower.includes('雷锋网')) return '雷锋网';
+    if (lower.includes('infoq')) return 'InfoQ';
+    if (lower.includes('theverge')) return 'The Verge AI';
+    if (lower.includes('venturebeat')) return 'VentureBeat AI';
+    if (lower.includes('openai.com')) return 'OpenAI';
+    if (lower.includes('deepmind')) return 'DeepMind';
+    if (lower.includes('huggingface')) return 'Hugging Face';
+    if (lower.includes('arstechnica')) return 'Ars Technica';
     return 'RSS';
+  }
+
+  private feedNameMap = new Map<string, string>();
+
+  setFeedName(feed: string, name: string): void {
+    this.feedNameMap.set(feed, name);
   }
 }

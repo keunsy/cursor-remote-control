@@ -7,9 +7,11 @@ export interface FormattingConfig {
   includeDescription: boolean;
   descriptionMaxLength: number;
   includeUrl: boolean;
-  platformOrder?: string[]; // 平台显示顺序
-  platformMaxItems?: Record<string, number>; // 每个平台的最大条数
-  useEnhancedStyle?: boolean; // 是否使用增强样式（默认 true）
+  platformOrder?: string[];
+  platformMaxItems?: Record<string, number>;
+  useEnhancedStyle?: boolean;
+  /** 平台分组：key 为分组标题，value 为属于该分组的平台列表 */
+  platformGroups?: Record<string, string[]>;
 }
 
 /** 飞书卡片 JSON 估算限制（字节） */
@@ -155,36 +157,48 @@ export function formatNewsCard(
   }
 
   const header = `# 📰 今日热点新闻\n\n📊 共 ${items.length} 条热点  |  ⏱ ${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}\n`;
-  const footer = `\n---\n💡 数据来源：NewsNow API`;
+  const footer = `\n---\n💡 数据来源：NewsNow + AI 新闻聚合`;
 
   const grouped = groupByPlatform(items);
   const chunks: string[] = [];
   let currentChunk = header;
 
-  // 按 platformOrder 排序，如果没配置则使用原顺序
   const platformOrder = config.platformOrder || Object.keys(grouped);
-  const platformsToShow = platformOrder.filter(p => grouped[p]); // 只显示有数据的平台
+  const platformsToShow = platformOrder.filter(p => grouped[p]);
+
+  const groups = config.platformGroups;
+  const renderedGroupHeaders = new Set<string>();
 
   for (const platformName of platformsToShow) {
     const news = grouped[platformName];
     if (!news || news.length === 0) continue;
-    // 每个平台的最大条数：优先使用 platformMaxItems，否则用 maxItemsPerPlatform
     const maxItems = config.platformMaxItems?.[platformName] ?? config.maxItemsPerPlatform;
-    
+
+    let groupHeader = '';
+    if (groups) {
+      for (const [groupTitle, members] of Object.entries(groups)) {
+        if (members.includes(platformName) && !renderedGroupHeaders.has(groupTitle)) {
+          renderedGroupHeaders.add(groupTitle);
+          groupHeader = `\n${'═'.repeat(22)}\n# ${groupTitle}\n`;
+          break;
+        }
+      }
+    }
+
     const section = formatSection(
       platformName,
       news.slice(0, maxItems),
       config
     );
 
-    const candidate = currentChunk + section + footer;
+    const candidate = currentChunk + groupHeader + section + footer;
     const size = estimateSize(candidate);
 
     if (size > maxSize && currentChunk.length > header.length) {
       chunks.push(currentChunk + footer);
-      currentChunk = header + section;
+      currentChunk = header + groupHeader + section;
     } else {
-      currentChunk += section;
+      currentChunk += groupHeader + section;
     }
   }
 
