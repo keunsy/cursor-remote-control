@@ -1885,7 +1885,16 @@ async function runAgent(
 			
 			const onFeedbackRequested = chatId && isOpus
 				? async (req: FeedbackGateRequest) => {
-					console.log(`[FeedbackGate] Received request: triggerId=${req.triggerId} title=${req.title}`);
+					console.log(`[FeedbackGate] Received request: triggerId=${req.triggerId} title=${req.title} isKeepalive=${req.isKeepalive}`);
+					if (req.isKeepalive) {
+						const existingFG = pendingFeedbackGates.get(chatId);
+						if (existingFG) {
+							console.log(`[FeedbackGate] Keepalive: updating triggerId ${existingFG.triggerId} → ${req.triggerId}`);
+							existingFG.triggerId = req.triggerId;
+							existingFG.createdAt = Date.now();
+						}
+						return;
+					}
 					if (req.agentOutput) {
 						await sendCard(chatId, req.agentOutput.slice(0, 4000), {
 							title: '📝 中间结果',

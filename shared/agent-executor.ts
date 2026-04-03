@@ -7,7 +7,7 @@
 
 import { spawn, type ChildProcess } from 'child_process';
 import { resolve as pathResolve, basename } from 'path';
-import { readdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
+import { existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
 import { randomUUID } from 'crypto';
 
 /** 从各平台子目录启动时 cwd 在 feishu|dingtalk|wecom|wechat，定时任务 JSON 应在仓库根目录 */
@@ -47,6 +47,7 @@ export interface FeedbackGateRequest {
 	triggerFilePath: string;
 	routing: { chat_id?: string; platform?: string };
 	agentOutput?: string;
+	isKeepalive?: boolean;
 }
 
 export interface AgentExecutorOptions {
@@ -241,6 +242,11 @@ export class AgentExecutor {
 			let timeoutTimer: NodeJS.Timeout | null = null;
 			let feedbackGateTimer: NodeJS.Timeout | null = null;
 			let feedbackGateActive = false;
+			let feedbackGatePending = false;
+			let feedbackGateKeepaliveTimer: NodeJS.Timeout | null = null;
+			let feedbackGateKeepalivePending = false;
+			
+			const KEEPALIVE_DELAY_MS = 35_000;
 			
 			const cleanup = () => {
 				done = true;
@@ -248,6 +254,7 @@ export class AgentExecutor {
 				if (progressTimer) clearInterval(progressTimer);
 				if (timeoutTimer) clearTimeout(timeoutTimer);
 				if (feedbackGateTimer) clearInterval(feedbackGateTimer);
+				if (feedbackGateKeepaliveTimer) clearTimeout(feedbackGateKeepaliveTimer);
 			};
 			
 			// 注册进程
@@ -319,8 +326,9 @@ export class AgentExecutor {
 			const now = Date.now();
 			
 			// 检查是否长时间无输出（可能卡住）— feedback gate 等待中豁免
+			// feedbackGatePending 一旦触发就持久豁免，防止 MCP 返回 WAITING 后 Agent 继续跑其他 tool 时被 idle timeout 杀死
 			const idleTime = now - lastOutputTime;
-			if (idleTime > IDLE_TIMEOUT && !feedbackGateActive) {
+			if (idleTime > IDLE_TIMEOUT && !feedbackGateActive && !feedbackGatePending) {
 				console.warn(`[AgentExecutor] 进程 ${Math.floor(idleTime / 1000 / 60)} 分钟无输出，可能卡住，强制终止 ${lockKey}`);
 				cleanup();
 				try {
@@ -387,10 +395,19 @@ export class AgentExecutor {
 						}
 						if (ev.tool_call) {
 							const toolName = Object.keys(ev.tool_call)[0] || '';
-							if (toolName.includes('feedback_gate') || toolName.includes('callMcpTool')) {
-								console.log(`[AgentExecutor] FG tool_call event: subtype=${ev.subtype} tool=${toolName} feedbackGateActive=${feedbackGateActive}`);
+							const mcpName = ev.tool_call?.mcpToolCall?.args?.name || ev.tool_call?.callMcpTool?.args?.name || '';
+							if (toolName.includes('feedback_gate') || toolName.includes('callMcpTool') || mcpName.includes('feedback_gate')) {
+								console.log(`[AgentExecutor] FG tool_call event: subtype=${ev.subtype} tool=${toolName} mcp=${mcpName} feedbackGateActive=${feedbackGateActive}`);
 								if (ev.subtype === 'completed' && feedbackGateActive) {
 									feedbackGateActive = false;
+									if (feedbackGateKeepaliveTimer) {
+										clearTimeout(feedbackGateKeepaliveTimer);
+										feedbackGateKeepaliveTimer = null;
+									}
+									if (!feedbackGateKeepalivePending) {
+										feedbackGatePending = false;
+										console.log(`[FeedbackGate] User responded, clearing pending state`);
+									}
 									console.log(`[FeedbackGate] Tool call completed, resuming progress updates`);
 								}
 							}
@@ -456,25 +473,46 @@ export class AgentExecutor {
 							
 						const data = trigger.data || {};
 						const triggerId = data.trigger_id || '';
+						const isKeepalive = feedbackGateKeepalivePending;
+						feedbackGateKeepalivePending = false;
 						feedbackGateActive = true;
-						console.log(`[FeedbackGate] Trigger detected: ${triggerId} ppid=${triggerPpid} chatId=${fgChatId}`);
+						feedbackGatePending = true;
+						console.log(`[FeedbackGate] Trigger detected: ${triggerId} ppid=${triggerPpid} chatId=${fgChatId} isKeepalive=${isKeepalive}`);
 						
 						// Delete trigger file to signal Python MCP that we consumed it
 						try { unlinkSync(fullPath); } catch {}
 						try { unlinkSync(pathResolve(tmpDir, 'feedback_gate_trigger.json')); } catch {}
 						writeFeedbackGateAck(triggerId);
-							
-							options.onFeedbackRequested!({
-								triggerId,
-								message: data.message || '',
-								title: data.title || 'Feedback Gate',
-								context: data.context || '',
-								urgent: data.urgent || false,
-								triggerFilePath: fullPath,
-								routing: { chat_id: fgChatId, platform: fgPlatform },
-								agentOutput: assistantBuf.trim() || undefined,
-							});
-						} catch {
+						
+						// Keepalive: 在 CLI 超时 (~60s) 前写入响应文件让 MCP 正常返回
+						// 这样即使 is_remote=False，MCP 也能在超时前返回，Agent 会重新调用 feedback_gate_chat
+						if (feedbackGateKeepaliveTimer) clearTimeout(feedbackGateKeepaliveTimer);
+						feedbackGateKeepaliveTimer = setTimeout(() => {
+							if (!feedbackGateActive || done) return;
+							const responseFile = pathResolve(tmpDir, `feedback_gate_response_${triggerId}.json`);
+							if (existsSync(responseFile)) return;
+							writeFileSync(responseFile, JSON.stringify({
+								timestamp: new Date().toISOString(),
+								trigger_id: triggerId,
+								user_input: '__KEEPALIVE__: User has not responded yet. Please call feedback_gate_chat again with the same message to continue waiting for user input. Do NOT treat this as an actual user response.',
+								source: 'cursor-remote-control-keepalive',
+							}, null, 2));
+							feedbackGateKeepalivePending = true;
+							console.log(`[FeedbackGate] Keepalive response written for trigger ${triggerId}`);
+						}, KEEPALIVE_DELAY_MS);
+						
+						options.onFeedbackRequested!({
+							triggerId,
+							message: data.message || '',
+							title: data.title || 'Feedback Gate',
+							context: data.context || '',
+							urgent: data.urgent || false,
+							triggerFilePath: fullPath,
+							routing: { chat_id: fgChatId, platform: fgPlatform },
+							agentOutput: assistantBuf.trim() || undefined,
+							isKeepalive,
+						});
+					} catch {
 							// invalid file, skip
 						}
 					}
