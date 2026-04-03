@@ -16,7 +16,7 @@ import { FeilianController, type OperationResult } from "./feilian-control.js";
 import { fetchNews } from "./news-fetcher.js";
 import { getHealthStatus } from "./news-sources/monitoring.js";
 import { humanizeCronInChinese } from "cron-chinese";
-import { findModel, formatModelList, getModelChain, getBlacklistStatus, resetBlacklist } from "./models-config.js";
+import { findModel, formatModelList, getModelChain, getBlacklistStatus, resetBlacklist, getDefaultModel } from "./models-config.js";
 
 const HOME = process.env.HOME!;
 
@@ -249,7 +249,7 @@ export class CommandHandler {
 		const statusText = [
 			`**${platformLabel}：** ${credentialPreview}`,
 			`**Key：** ${keyPreview}`,
-			`**模型：** \`${config.CURSOR_MODEL}\``,
+			`**模型：** \`${config.CURSOR_MODEL || getDefaultModel()}\``,
 			`**记忆：** ${memStatus}`,
 			`**调度：** ${schedText}`,
 			`**心跳：** ${hbText}`,
@@ -478,7 +478,7 @@ export class CommandHandler {
 	async handleModel(args: string): Promise<void> {
 		// 无参数：显示模型列表
 		if (!args) {
-			const list = formatModelList(this.ctx.config.CURSOR_MODEL);
+			const list = formatModelList(this.ctx.config.CURSOR_MODEL || getDefaultModel());
 			await this.adapter.reply(list);
 			return;
 		}

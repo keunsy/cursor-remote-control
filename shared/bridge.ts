@@ -18,6 +18,7 @@
 import { spawn } from "node:child_process";
 import { readFileSync, watchFile, existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { getDefaultModel } from "./models-config.js";
 
 const HOME = process.env.HOME;
 if (!HOME) throw new Error("$HOME is not set");
@@ -70,7 +71,7 @@ function parseEnv(): EnvConfig {
 	}
 	return {
 		CURSOR_API_KEY: env.CURSOR_API_KEY || "",
-		CURSOR_MODEL: env.CURSOR_MODEL || "auto",
+		CURSOR_MODEL: env.CURSOR_MODEL || '',
 	};
 }
 
@@ -79,7 +80,7 @@ let config = parseEnv();
 watchFile(ENV_PATH, { interval: 2000 }, () => {
 	try {
 		config = parseEnv();
-		console.log(`[热更换] 已重新加载 (model=${config.CURSOR_MODEL})`);
+		console.log(`[热更换] 已重新加载 (model=${config.CURSOR_MODEL || getDefaultModel()})`);
 	} catch (e) {
 		console.error("[热更换] 读取失败:", e);
 	}
@@ -145,7 +146,7 @@ function runAgent(prompt: string): Promise<string> {
 		const child = spawn(AGENT_BIN, [
 			"-p", "--force", "--trust", "--approve-mcps",
 			"--workspace", workspace,
-			"--model", config.CURSOR_MODEL,
+			"--model", config.CURSOR_MODEL || getDefaultModel(),
 			"--output-format", "text",
 			"--", prompt,
 		], {
@@ -314,7 +315,7 @@ console.log(`
 ├─────────────────────────────────────────────────┤
 │  平台: ${platform}
 │  端口: ${PORT}
-│  模型: ${config.CURSOR_MODEL}
+│  模型: ${config.CURSOR_MODEL || getDefaultModel()}
 │  Key:  ...${config.CURSOR_API_KEY.slice(-8)}
 │
 │  OpenClaw provider 配置:

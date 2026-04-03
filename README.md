@@ -247,10 +247,14 @@ bun run start.ts
 ```
 
 **特点**：
-- HTTP 长轮询模式（35秒超时）
+- HTTP 长轮询模式（35秒超时），无需公网 IP
 - 基于腾讯官方 ilink bot API
-- Token 自动持久化（无需重复扫码）
+- Token 自动持久化（首次扫码后无需重复登录）
 - 支持"正在输入中"状态提示
+- 支持文本、图片、语音、文件消息
+- 支持 `/发送文件` 通过 CDN 发送本地文件
+- 支持定时任务（天气推送、GitHub Trending 等）
+- 可通过 `bash service.sh install` 安装为 launchd 系统服务
 
 详细配置见 [wechat/README.md](wechat/README.md)
 
@@ -311,7 +315,7 @@ bash manage-services.sh logs wecom       # 查看企业微信日志
 
 ### 基本对话
 
-在飞书、钉钉或企业微信中 @你的机器人发送消息：
+在飞书、钉钉、企业微信中 @你的机器人 或在微信中直接发消息：
 
 ```
 @机器人 你好
@@ -339,7 +343,7 @@ bash manage-services.sh logs wecom       # 查看企业微信日志
 | `/新闻状态` | `/health` | 查看热点数据源健康状态 |
 | `/心跳` | `/heartbeat` | 查看/管理心跳系统 |
 | `/飞连` | `/vpn` `/feilian` | 远程控制飞连 VPN（开/关/状态） |
-| `/发送文件 <路径>` | `/sendfile` `/send` | **飞书/企业微信** - 发送本地文件（飞书 30MB，企业微信 20MB） |
+| `/发送文件 <路径>` | `/sendfile` `/send` | 发送本地文件（飞书 30MB，企业微信 20MB，微信通过 CDN） |
 
 ### 项目路由（多工作区）
 
@@ -430,7 +434,7 @@ cp projects.json.example projects.json
 
 ### 文件发送功能
 
-所有平台（飞书、钉钉、企业微信）都支持发送本地文件：
+所有平台（飞书、钉钉、企业微信、微信个人号）都支持发送本地文件：
 
 ```
 /发送文件 ~/Desktop/report.pdf
@@ -441,16 +445,16 @@ cp projects.json.example projects.json
 **特性**：
 - ✅ 支持绝对路径和 `~` 家目录
 - ✅ 自动检查文件存在性和大小
-- ✅ 最大文件大小：飞书/钉钉 30MB，企业微信 20MB
 - ✅ 支持多种文件格式：APK、PDF、DOC/DOCX、XLS/XLSX、PPT、图片、音视频等
 - ⚠️ 钉钉文件发送为实验性功能
 
 **平台对比**：
-| 平台 | 文件大小限制 | 稳定性 |
-|------|------------|--------|
-| 飞书 | 30MB | ✅ 稳定 |
-| 钉钉 | 30MB | ⚠️ 实验性 |
-| 企业微信 | 20MB | ✅ 稳定 |
+| 平台 | 文件大小限制 | 方式 | 稳定性 |
+|------|------------|------|--------|
+| 飞书 | 30MB | API 上传 | ✅ 稳定 |
+| 钉钉 | 30MB | API 上传 | ⚠️ 实验性 |
+| 企业微信 | 20MB | API 上传 | ✅ 稳定 |
+| 微信个人号 | 取决于 CDN | CDN 转发 | ✅ 稳定 |
 
 **命令行工具**（飞书）：
 
@@ -474,7 +478,7 @@ bun run send-file.ts /path/to/file.apk <接收人ID>
 | `cron-jobs-*.json.example` | 空的定时任务模板 | ✅ 提交到仓库 |
 | `cron-jobs-*.json` | AI 创建的定时任务 | ❌ 已忽略 |
 | `config/news-sources.json` | 新闻数据源配置 | ✅ 提交到仓库 |
-| `feishu/.env` / `dingtalk/.env` / `wecom/.env` | 实际凭据 | ❌ 已忽略 |
+| `feishu/.env` / `dingtalk/.env` / `wecom/.env` / `wechat/.env` | 实际凭据 | ❌ 已忽略 |
 
 **首次安装**：从 `.example` 文件复制创建配置  
 **Git pull 更新**：你的本地配置不会被覆盖
@@ -535,6 +539,15 @@ VOLC_EMBEDDING_MODEL=doubao-embedding-vision-250615
 | 查看状态 | `cd wecom && bash service.sh status` |
 | 查看日志 | `cd wecom && bash service.sh logs` |
 
+### 微信个人号服务
+
+| 问题 | 解决方案 |
+|------|----------|
+| 微信无响应 | `cd wechat && bash service.sh restart` |
+| 查看状态 | `cd wechat && bash service.sh status` |
+| 查看日志 | `tail -100 /tmp/wechat-cursor.log` |
+| Token 过期 | 删除 `wechat/.wechat_token` 重新扫码 |
+
 ### 通用问题
 
 | 问题 | 原因 | 解决方案 |
@@ -554,7 +567,7 @@ A: 不需要。运行 `agent login` 登录后会自动使用登录凭据。
 **Q: 为什么提示配额用完？**  
 A: 默认 `opus-4.6`。如果配额用尽，可切换：`/模型 auto`（省配额）或 `/模型 opust`（深度推理）。
 
-**Q: 飞书、钉钉、企业微信可以同时运行吗？**  
+**Q: 飞书、钉钉、企业微信、微信可以同时运行吗？**  
 A: 可以！所有平台服务独立运行，互不干扰，共享 `projects.json` 配置和记忆系统。
 
 ---
@@ -578,7 +591,7 @@ A: 可以！所有平台服务独立运行，互不干扰，共享 `projects.jso
 | SDK | @larksuiteoapi/node-sdk | dingtalk-stream | @wecom/aibot-node-sdk | ilink bot API (HTTP) |
 | 连接方式 | WebSocket 长连接 | Stream 长连接 | WebSocket 长连接 | HTTP 长轮询 (35s) |
 | 流式回复 | 轮询刷新 | ❌ 不支持 | 主动推送 ⭐ | 正在输入状态 |
-| 文件发送 | ✅ (30MB) | ✅ (30MB) 🆕 | ✅ (20MB) ⭐ | ❌ 不支持 |
+| 文件发送 | ✅ (30MB) | ✅ (30MB) 🆕 | ✅ (20MB) ⭐ | ✅ (CDN) 🆕 |
 | 新闻推送 | ✅ | ✅ | ✅ ⭐ | ✅ |
 | 飞连 VPN | ✅ | ✅ | ✅ ⭐ | ❌ 不需要 |
 | 数据库 | SQLite（向量索引 + FTS5） | SQLite（向量索引 + FTS5） | SQLite（向量索引 + FTS5） | SQLite（向量索引 + FTS5） |
@@ -601,8 +614,8 @@ A: 可以！所有平台服务独立运行，互不干扰，共享 `projects.jso
 
 ### 主要变更
 
-- ✨ **新增钉钉和企业微信渠道支持**（原项目仅支持飞书）
-- 🏗️ **独立三服务架构**（飞书、钉钉、企业微信可同时运行，互不干扰）
+- ✨ **新增钉钉、企业微信、微信个人号渠道**（原项目仅支持飞书）
+- 🏗️ **独立四服务架构**（飞书、钉钉、企业微信、微信个人号可同时运行，互不干扰）
 - 🔧 **统一服务管理**（`manage-services.sh` 统一管理多个服务）
 - 📦 **配置文件分离**（每个服务独立 `.env` 和 `cron-jobs.json`）
 - 🎯 **增强的项目路由**（共享 `projects.json`，支持持久切换）
