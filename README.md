@@ -78,6 +78,7 @@ Telegram ──Bot API──→ telegram/server.ts ────┤          │
 **5. 定时任务**
 - AI 通过对话创建定时任务，写入 `cron-jobs-*.json`
 - 支持一次性任务、间隔任务、Cron 表达式
+- 三种任务类型：`agent-prompt`（调用 AI Agent 执行 prompt）、`fetch-news`（抓取热点新闻）、`text`（纯文本推送）
 - 到期自动执行，结果推送到对应 IM 渠道
 
 **6. 心跳系统**
