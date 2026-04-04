@@ -33,13 +33,13 @@ cd dingtalk && bash service.sh status
 
 **正常输出**：
 ```
-✅ feishu-cursor 正在运行 (PID: 12345)
-✅ dingtalk-cursor 正在运行 (PID: 67890)
+✅ feishu 正在运行 (PID: 12345)
+✅ dingtalk 正在运行 (PID: 67890)
 ```
 
 **异常输出**：
 ```
-❌ feishu-cursor 未运行
+❌ feishu 未运行
 ```
 
 ### 查看日志
@@ -65,7 +65,7 @@ cd feishu && grep ERROR logs/server.log
 **症状**：
 ```bash
 $ bash service.sh status
-❌ feishu-cursor 未运行
+❌ feishu 未运行
 ```
 
 **排查步骤**：
