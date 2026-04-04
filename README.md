@@ -214,9 +214,13 @@ bash service.sh install
 **飞书后台配置**（服务启动后操作）：
 
 1. 在[飞书开放平台](https://open.feishu.cn)创建企业自建应用
-2. 添加**机器人**能力，配置权限：`im:message`、`im:message.group_at_msg`、`im:resource`
-3. 复制 **App ID** 和 **App Secret**（已填入上面的 .env）
-4. **等本机服务启动后**，在「事件订阅」中选择**长连接模式**，订阅 `im.message.receive_v1`
+2. 添加**机器人**能力
+3. 在「权限管理」中开通以下权限（**读写和只读都需要开通**）：
+   - `im:message` / `im:message:readonly` — 获取与发送单聊、群聊消息
+   - `im:message.group_at_msg` / `im:message.group_at_msg:readonly` — 获取群组中所有消息
+   - `im:resource` / `im:resource:readonly` — 获取与上传图片或文件资源
+4. 复制 **App ID** 和 **App Secret**（已填入上面的 .env）
+5. **等本机服务启动后**，在「事件订阅」中选择**长连接模式**，订阅 `im.message.receive_v1`
 
 #### 🟦 安装钉钉服务
 
