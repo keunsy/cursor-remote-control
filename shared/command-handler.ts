@@ -120,14 +120,6 @@ export class CommandHandler {
 		const projects = Object.keys(this.ctx.projectsConfig.projects).map(k => `\`${k}\``).join("、");
 
 		const helpText = [
-			"**🖥️ IDE 远程控制**（需安装 [cursor-feedback-gate](https://github.com/keunsy/cursor-feedback-gate) 扩展）",
-			"- `/ide <消息>` — 向 IDE 正在运行的 Agent 投递消息",
-			"- `/ide` — 查看活跃实例和转发开关状态",
-			"- `/ide on` — 开启转发模式（所有非命令消息自动投递到 IDE）",
-			"- `/ide off` — 关闭转发模式",
-			"- `/ide #序号 <消息>` — 多窗口时指定目标实例",
-			"- Agent 回复会自动返回 IM 并引用原始问题，实现双向交互",
-			"",
 			"**基础指令**",
 			"- `/帮助` `/help` — 显示本帮助",
 			"- `/状态` `/status` — 查看服务状态",
@@ -189,6 +181,14 @@ export class CommandHandler {
 		"· 对话切换：说「切到 remote」等可持久切换",
 		"· 前缀指定：`项目名:消息` 或 `#项目名 消息`",
 		`· 可用项目：${projects}`,
+		"",
+		"**🖥️ IDE 远程控制**（需安装 [cursor-feedback-gate](https://github.com/keunsy/cursor-feedback-gate) 扩展）",
+		"- `/ide <消息>` — 向 IDE 正在运行的 Agent 投递消息",
+		"- `/ide` — 查看活跃实例和转发开关状态",
+		"- `/ide on` — 开启转发模式（所有非命令消息自动投递到 IDE）",
+		"- `/ide off` — 关闭转发模式",
+		"- `/ide #序号 <消息>` — 多窗口时指定目标实例",
+		"- Agent 回复会自动返回 IM 并引用原始问题，实现双向交互",
 	);
 
 		await this.adapter.reply(`📖 **使用帮助**\n\n${helpText.join("\n")}`);
