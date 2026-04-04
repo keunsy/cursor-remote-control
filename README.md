@@ -140,7 +140,7 @@ cursor-remote-control/
 
 ## 功能特性
 
-- 🚀 **多渠道支持**: 飞书、钉钉、企业微信、微信个人号等，独立部署，可同时运行，易于扩展新渠道
+- 🚀 **多渠道支持**: 飞书、钉钉、企业微信、微信个人号、Telegram 等，独立部署，可同时运行，易于扩展新渠道
 - 💰 **配额节约**: 集成 [Feedback Gate](https://github.com/keunsy/cursor-feedback-gate)，单次请求内多轮反馈不消耗额外配额，500 次/月可实现数倍有效交互 ⭐
 - 🧠 **记忆系统**: 混合搜索（FTS5 + 向量）、时间衰减、MMR 去重、自动 Flush
 - ⏰ **定时任务**: AI 通过对话创建 Cron 任务，自动执行并推送通知
@@ -268,6 +268,19 @@ bun run start.ts
 - 可通过 `bash service.sh install` 安装为 launchd 系统服务
 
 详细配置见 [wechat/README.md](wechat/README.md)
+
+#### 🔵 安装 Telegram 服务
+
+```bash
+cd telegram
+cp .env.example .env
+# 编辑 .env 填入 Telegram Bot Token（通过 @BotFather 创建）
+
+bun install
+bash service.sh install
+```
+
+详细配置见 [telegram/README.md](telegram/README.md)
 
 #### 同时使用多个渠道
 
@@ -488,6 +501,14 @@ bun run send-file.ts /path/to/file.apk <接收人ID>
 | 查看日志 | `tail -100 /tmp/wechat-cursor.log` |
 | Token 过期 | 删除 `wechat/.wechat_token` 重新扫码 |
 
+### Telegram 服务
+
+| 问题 | 解决方案 |
+|------|----------|
+| Telegram 无响应 | `cd telegram && bash service.sh restart` |
+| 查看状态 | `cd telegram && bash service.sh status` |
+| 查看日志 | `cd telegram && bash service.sh logs` |
+
 ### 通用问题
 
 | 问题 | 原因 | 解决方案 |
@@ -506,8 +527,8 @@ A: 不需要。运行 `agent login` 登录后会自动使用登录凭据。
 **Q: 为什么提示配额用完？**  
 A: 默认 `opus-4.6`。如果配额用尽，可切换：`/模型 auto`（省配额）或 `/模型 opust`（深度推理）。
 
-**Q: 飞书、钉钉、企业微信、微信可以同时运行吗？**  
-A: 可以！所有平台服务独立运行，互不干扰，共享 `projects.json` 配置和记忆系统。
+**Q: 所有渠道可以同时运行吗？**  
+A: 可以！飞书、钉钉、企业微信、微信、Telegram 等所有平台服务独立运行，互不干扰，共享 `projects.json` 配置和记忆系统。
 
 ---
 
@@ -517,6 +538,7 @@ A: 可以！所有平台服务独立运行，互不干扰，共享 `projects.jso
 - **钉钉服务**: [dingtalk/README.md](dingtalk/README.md) - 完整的钉钉配置、功能说明和使用指南
 - **企业微信服务**: [wecom/README.md](wecom/README.md) - 完整的企业微信配置、功能说明和使用指南
 - **微信个人号服务**: [wechat/README.md](wechat/README.md) - 完整的微信配置、功能说明和使用指南
+- **Telegram 服务**: [telegram/README.md](telegram/README.md) - 完整的 Telegram 配置、功能说明和使用指南
 - **热点新闻推送**: [docs/news-push-usage.md](docs/news-push-usage.md) - 新闻推送功能使用文档
 - **个人配置**: [飞书-Cursor-快速参考](docs/飞书-Cursor-快速参考.md) - 项目快捷路由配置
 
@@ -524,16 +546,16 @@ A: 可以！所有平台服务独立运行，互不干扰，共享 `projects.jso
 
 ## 技术栈
 
-| 层 | 飞书 | 钉钉 | 企业微信 | 微信个人号 |
-|---|------|------|---------|---------|
-| 运行时 | Bun 1.x + TypeScript | Bun 1.x + TypeScript | Bun 1.x + TypeScript | Bun 1.x + TypeScript |
-| SDK | @larksuiteoapi/node-sdk | dingtalk-stream | @wecom/aibot-node-sdk | ilink bot API (HTTP) |
-| 连接方式 | WebSocket 长连接 | Stream 长连接 | WebSocket 长连接 | HTTP 长轮询 (35s) |
-| 流式回复 | 轮询刷新 | ❌ 不支持 | 主动推送 ⭐ | 正在输入状态 |
-| 文件发送 | ✅ (30MB) | ✅ (30MB) 🆕 | ✅ (20MB) ⭐ | ✅ (CDN) 🆕 |
-| 新闻推送 | ✅ | ✅ | ✅ ⭐ | ✅ |
-| 数据库 | SQLite（向量索引 + FTS5） | SQLite（向量索引 + FTS5） | SQLite（向量索引 + FTS5） | SQLite（向量索引 + FTS5） |
-| 部署 | macOS launchd | macOS launchd | macOS launchd | 直接运行 (bun run start.ts) |
+| 层 | 飞书 | 钉钉 | 企业微信 | 微信个人号 | Telegram |
+|---|------|------|---------|---------|----------|
+| 运行时 | Bun 1.x + TypeScript | Bun 1.x + TypeScript | Bun 1.x + TypeScript | Bun 1.x + TypeScript | Bun 1.x + TypeScript |
+| SDK | @larksuiteoapi/node-sdk | dingtalk-stream | @wecom/aibot-node-sdk | ilink bot API (HTTP) | node-telegram-bot-api |
+| 连接方式 | WebSocket 长连接 | Stream 长连接 | WebSocket 长连接 | HTTP 长轮询 (35s) | Bot API 长轮询 |
+| 流式回复 | 轮询刷新 | ❌ 不支持 | 主动推送 ⭐ | 正在输入状态 | 消息编辑更新 |
+| 文件发送 | ✅ (30MB) | ✅ (30MB) 🆕 | ✅ (20MB) ⭐ | ✅ (CDN) 🆕 | ✅ (50MB) |
+| 新闻推送 | ✅ | ✅ | ✅ ⭐ | ✅ | ✅ |
+| 数据库 | SQLite（向量索引 + FTS5） | SQLite（向量索引 + FTS5） | SQLite（向量索引 + FTS5） | SQLite（向量索引 + FTS5） | SQLite（向量索引 + FTS5） |
+| 部署 | macOS launchd | macOS launchd | macOS launchd | 直接运行 (bun run start.ts) | macOS launchd |
 
 **共享模块**（`shared/` 目录）：
 - 项目路由配置 (`projects.json`)
