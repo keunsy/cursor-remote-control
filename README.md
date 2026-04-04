@@ -7,6 +7,10 @@
 
 在手机上发消息，你的 Mac 就自动写代码、审文档、执行任务。将 Cursor 变成你的**私人 AI 战略合伙人**，随时随地通过 IM 调用。
 
+**两种远程模式**：
+- **Agent CLI 模式**：通过 IM 启动独立的 Cursor Agent 会话，适合新任务
+- **IDE 入队模式**（`/ide`）：直接向正在运行的 Cursor IDE 窗口投递消息，与当前活跃的 Agent 对话交互，支持双向反馈——Agent 的回复自动返回 IM（依赖 [cursor-feedback-gate](https://github.com/keunsy/cursor-feedback-gate)）
+
 ---
 
 ## 架构设计
