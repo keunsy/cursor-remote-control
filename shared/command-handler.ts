@@ -1270,7 +1270,9 @@ export class CommandHandler {
 
 		const sessions = this.getIdeSessions();
 
-		const forwardStatus = chatId && CommandHandler.ideForwardEnabled.get(chatId) ? '  🟢 转发模式：已开启' : '';
+		const forwardStatus = chatId && CommandHandler.ideForwardEnabled.get(chatId)
+			? '\n🟢 转发模式：已开启（发 `/ide off` 关闭）'
+			: '\n⚪ 转发模式：未开启（发 `/ide on` 开启）';
 		if (!content) {
 			if (sessions.length === 0) {
 				await this.adapter.reply(
