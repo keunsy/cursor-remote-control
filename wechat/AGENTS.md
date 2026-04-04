@@ -1,4 +1,4 @@
-# AGENTS.md — wechat-cursor-claw
+# AGENTS.md — 微信个人号远程控制
 
 > 微信个人号 → Cursor Agent 中继服务
 

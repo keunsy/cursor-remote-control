@@ -1,4 +1,4 @@
-# dingtalk-cursor-claw
+# 钉钉远程控制
 
 > 钉钉 → Cursor Agent 远程控制
 
@@ -408,7 +408,7 @@ A: 编辑 `.env` 中的 `CURSOR_MODEL` 变量，支持热更新（无需重启�
 ## 技术架构
 
 ```
-手机钉钉 ─Stream→ dingtalk-cursor-claw ─CLI→ Cursor IDE
+手机钉钉 ─Stream→ dingtalk/server.ts ─CLI→ Cursor IDE
                          ↓
                   符号链接共享核心模块
                          ↓

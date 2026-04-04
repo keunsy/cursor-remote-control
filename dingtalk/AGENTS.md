@@ -1,4 +1,4 @@
-# AGENTS.md — dingtalk-cursor-claw
+# AGENTS.md — 钉钉远程控制
 
 > 钉钉 → Cursor Agent 中继服务 v2
 
@@ -24,7 +24,7 @@
 ## 目录结构
 
 ```
-dingtalk-cursor-claw/
+dingtalk/
 ├── server.ts              # 主服务入口：钉钉 Stream → Cursor Agent CLI
 ├── dingtalk-client.ts     # 钉钉 Stream 客户端封装
 ├── dingtalk-helper.ts     # 钉钉工具函数

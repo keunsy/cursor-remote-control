@@ -10,14 +10,14 @@ Send a message on your phone, and your Mac writes code, reviews documents, or ex
 
 ## Why
 
-Cursor Agent CLI is incredibly powerful, but you need to be at your desk to use it. **feishu-cursor** bridges that gap: connect Feishu (Lark) to your local Cursor IDE via WebSocket, and control it from anywhere — your phone, a meeting, a coffee shop.
+Cursor Agent CLI is incredibly powerful, but you need to be at your desk to use it. **Cursor Remote Control** bridges that gap: connect Feishu (Lark) to your local Cursor IDE via WebSocket, and control it from anywhere — your phone, a meeting, a coffee shop.
 
 Beyond coding, executives and knowledge workers use this to co-create documents, review strategies, and manage files with AI — turning Cursor into a **personal AI strategic partner** driven entirely via instant messaging.
 
 ## Architecture
 
 ```
-Phone (Feishu) ──WebSocket──→ feishu-cursor ──Cursor CLI──→ Local Cursor IDE
+Phone (Feishu) ──WebSocket──→ feishu/server.ts ──Cursor CLI──→ Local Cursor IDE
                                     │                          │
                              ┌──────┼──────┐            --resume (session continuity)
                              │      │      │
@@ -337,7 +337,7 @@ Phase 3: Platform
 
 ## 这是什么
 
-**feishu-cursor** 将飞书变成 Cursor AI 的远程遥控器。在手机上发消息，你的 Mac 就自动写代码、审文档、执行任务。
+**Cursor Remote Control** 将飞书变成 Cursor AI 的远程遥控器。在手机上发消息，你的 Mac 就自动写代码、审文档、执行任务。
 
 不仅仅是编程工具——企业高管可以用它和 AI 共创战略文档、审阅文件、管理知识库，让 Cursor 成为你的**私人 AI 战略合伙人**。
 

@@ -1,7 +1,6 @@
-# wecom-cursor-claw
+# 企业微信远程控制
 
-> 企业微信 → Cursor Agent 远程控制  
-> 基于 @wecom/aibot-node-sdk 的 WebSocket 长连接实现
+> 企业微信 → Cursor Agent 远程控制
 
 ## 功能清单
 
@@ -254,7 +253,7 @@ bash service.sh logs       # 查看实时日志
 ## 技术架构
 
 ```
-手机企业微信 ─WebSocket→ wecom-cursor-claw ─CLI→ Cursor IDE
+手机企业微信 ─WebSocket→ wecom/server.ts ─CLI→ Cursor IDE
                          ↓
                   共享核心模块
                          ↓

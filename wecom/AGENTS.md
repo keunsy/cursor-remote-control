@@ -1,4 +1,4 @@
-# AGENTS.md — wecom-cursor-claw
+# AGENTS.md — 企业微信远程控制
 
 > 企业微信 → Cursor Agent 中继服务（MVP 版本）
 
