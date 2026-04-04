@@ -228,6 +228,7 @@ export class MemoryManager {
 				// 创建或打开数据库
 				const db = new Database(dbPath);
 				db.exec("PRAGMA journal_mode = WAL");
+				db.exec("PRAGMA busy_timeout = 5000");
 
 				// 验证基本操作
 				db.prepare("SELECT 1").get();

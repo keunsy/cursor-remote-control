@@ -26,6 +26,7 @@ import { getHealthStatus } from "../shared/news-sources/monitoring.js";
 import { CommandHandler, type PlatformAdapter, type CommandContext } from "../shared/command-handler.js";
 import { AgentExecutor, writeFeedbackGateResponse, type FeedbackGateRequest } from "../shared/agent-executor.js";
 import { ProcessLock } from "../shared/process-lock.js";
+import { IdeReplyWatcher } from "../shared/ide-reply-watcher.js";
 // import { ReconnectManager } from "../shared/reconnect-manager.js";  // 已移除，SDK 自带重连
 import { tryRecordMessagePersistent } from "./feishu/dedup.js";
 import { sendMediaFeishu } from "./feishu/media.js";
@@ -1140,8 +1141,9 @@ function route(
 	
 	// 3. 使用当前项目（如果有）
 	if (currentProject && projects[currentProject]) {
+		const p = projects[currentProject]!;
 		return {
-			workspace: projects[currentProject].path,
+			workspace: p.path,
 			prompt: text.trim(),
 			label: currentProject,
 			intent: routeIntent,
@@ -1854,6 +1856,7 @@ interface PendingFeedbackGate {
 	createdAt: number;
 }
 const pendingFeedbackGates = new Map<string, PendingFeedbackGate>();
+const feedbackRoundCounter = new Map<string, number>();
 const feedbackGateLatestCards = new Map<string, string>();
 const FEEDBACK_GATE_TIMEOUT = 24 * 60 * 60 * 1000; // 24h
 
@@ -1875,12 +1878,12 @@ async function runAgent(
 
 	return withSessionLock(lockKey, async () => {
 		busySessions.add(lockKey);
+		const chatId = opts?.context?.chatId;
 		opts?.onStart?.();
 		try {
 			const existingSessionId = getActiveSessionId(workspace);
 			const isNewSession = !existingSessionId;
 			
-			const chatId = opts?.context?.chatId;
 			const isOpus = primaryModel.toLowerCase().includes('opus');
 			
 			const onFeedbackRequested = chatId && isOpus
@@ -1901,8 +1904,11 @@ async function runAgent(
 							color: 'green',
 						});
 					}
-					const fgCardId = await sendCard(chatId, `💬 **${req.title || 'AI 请求反馈'}**\n\n${req.message}\n\n---\n回复此消息即可提交反馈\n发送「完成」或「done」结束对话`, {
-						title: req.title || '等待反馈',
+					const round = (feedbackRoundCounter.get(chatId) || 0) + 1;
+					feedbackRoundCounter.set(chatId, round);
+					const roundLabel = round === 1 ? '🆕 新对话' : `🔄 第 ${round} 轮`;
+					const fgCardId = await sendCard(chatId, `💬 **${req.title || 'AI 请求反馈'}**\n\n${req.message}\n\n---\n${roundLabel}\n回复此消息即可提交反馈\n发送「完成」或「done」结束对话`, {
+						title: `${req.title || '等待反馈'}（${roundLabel}）`,
 						color: 'purple',
 					});
 					pendingFeedbackGates.set(chatId, {
@@ -1946,7 +1952,6 @@ async function runAgent(
 				
 				// 检查是否使用了 fallback
 				if (usedFallback && fallbackModel) {
-					// 简化提示：只说明原因和结果，避免重复
 					const reason = errorMsg?.toLowerCase().includes('usage limit') || errorMsg?.toLowerCase().includes('quota')
 						? `\`${primaryModel}\` 配额用尽`
 						: `\`${primaryModel}\` 失败`;
@@ -1983,9 +1988,7 @@ async function runAgent(
 							generateSessionTitle(workspace, sessionId, prompt, result);
 						}
 						
-						// 检查是否使用了 fallback
 						if (usedFallback && fallbackModel) {
-							// 简化提示：只说明原因和结果，避免重复
 							const reason = errorMsg?.toLowerCase().includes('usage limit') || errorMsg?.toLowerCase().includes('quota')
 								? `\`${primaryModel}\` 配额用尽`
 								: `\`${primaryModel}\` 失败`;
@@ -2009,6 +2012,7 @@ async function runAgent(
 			busySessions.delete(lockKey);
 			if (chatId) {
 				pendingFeedbackGates.delete(chatId);
+				feedbackRoundCounter.delete(chatId);
 				feedbackGateLatestCards.delete(chatId);
 			}
 		}
@@ -2346,28 +2350,20 @@ async function handleInner(
 	// 创建命令处理器
 	const commandHandler = new CommandHandler(feishuAdapter, commandContext);
 	
+	// 群聊安全保护：apikey 命令在群聊中直接拦截，不进入 route()
+	if (isGroup && /^\/?(?:api\s*key|密钥|换key|更换密钥)\b/i.test(text)) {
+		await replyCard(messageId, "⚠️ **安全提醒：请勿在群聊中发送 API Key！**\n\n请在与机器人的 **私聊** 中发送 `/apikey` 指令。", { title: "安全提醒", color: "red" });
+		return;
+	}
+	
 	// 尝试路由到命令处理器
 	const handled = await commandHandler.route(text, (newSessionId: string) => {
 		setActiveSession(defaultWorkspace, newSessionId);
-	});
+	}, { chatId });
 	
 	if (handled) {
 		console.log('[命令] 已通过统一处理器处理');
 		return;
-	}
-	
-	// === 以下是平台特定命令（需要群聊保护或特殊逻辑）===
-	
-	// /apikey、/密钥 → 群聊保护（飞书特定：需要在群聊中阻止）
-	const apikeyMatch = text.match(/^\/?(?:api\s*key|密钥|换key|更换密钥)[\s:：=]*(.+)/i);
-	if (apikeyMatch) {
-		if (isGroup) {
-			await replyCard(messageId, "⚠️ **安全提醒：请勿在群聊中发送 API Key！**\n\n请在与机器人的 **私聊** 中发送 `/apikey` 指令。", { title: "安全提醒", color: "red" });
-			return;
-		}
-		// 私聊模式：委托给统一处理器（不需要更新 session，传递空回调保持一致性）
-		const handled = await commandHandler.route(text, () => {});
-		if (handled) return;
 	}
 	
 	// 检测相对时间新闻推送（X分钟后推送热点、X小时后推送新闻）
@@ -2537,7 +2533,7 @@ async function handleInner(
 	let workspace: string, prompt: string, label: string, intent: RouteIntent, routeChanged: boolean | undefined;
 	
 	if (forceProject && projectsConfig.projects[forceProject]) {
-		workspace = projectsConfig.projects[forceProject].path;
+		workspace = projectsConfig.projects[forceProject]!.path;
 		prompt = text;
 		label = forceProject;
 		intent = { type: 'temp', project: forceProject, cleanedText: text };
@@ -2598,7 +2594,7 @@ async function handleInner(
 	if (prompt !== text) {
 		const routedHandled = await commandHandler.route(prompt, (newSessionId: string) => {
 			setActiveSession(workspace, newSessionId);
-		});
+		}, { chatId });
 		if (routedHandled) {
 			console.log('[命令] 路由后的命令已通过统一处理器处理');
 			return;
@@ -2614,7 +2610,7 @@ async function handleInner(
 
 	// ── Feedback Gate: 拦截用户回复 ──
 	const pendingFG = pendingFeedbackGates.get(chatId);
-	if (pendingFG) {
+	if (pendingFG && !prompt.trim().startsWith('/') && !CommandHandler.isIdeForwardEnabled(chatId)) {
 		const age = Date.now() - pendingFG.createdAt;
 		if (age < FEEDBACK_GATE_TIMEOUT) {
 			const isDone = /^(done|完成|ok|好的|结束|没了|没有了|task_complete)$/i.test(prompt.trim());
@@ -2623,11 +2619,14 @@ async function handleInner(
 			writeFeedbackGateResponse(pendingFG.triggerId, responseText);
 			pendingFeedbackGates.delete(chatId);
 			
-			if (pendingFG.cardId && isDone) {
-				await updateCard(pendingFG.cardId, `✅ **对话已结束**`, {
-					title: '对话结束',
-					color: 'green',
-				});
+			if (isDone) {
+				feedbackRoundCounter.delete(chatId);
+				if (pendingFG.cardId) {
+					await updateCard(pendingFG.cardId, `✅ **对话已结束**`, {
+						title: '对话结束',
+						color: 'green',
+					});
+				}
 			}
 
 			const currentLockKeyFG = getLockKey(workspace);
@@ -2645,6 +2644,7 @@ async function handleInner(
 			}
 		} else {
 			pendingFeedbackGates.delete(chatId);
+			feedbackRoundCounter.delete(chatId);
 			console.log(`[FeedbackGate] Expired pending for chatId=${chatId.slice(0, 10)}...`);
 		}
 	}
@@ -2720,7 +2720,6 @@ async function handleInner(
 		const elapsed = formatElapsed(Math.round((Date.now() - taskStart) / 1000));
 		console.log(`[${new Date().toISOString()}] 完成 [${label}] model=${usedModel} elapsed=${elapsed} (${result.length} chars)`);
 
-		// 记录 assistant 回复到会话日志
 		if (memory) {
 			memory.appendSessionLog(workspace, "assistant", result.slice(0, 3000), usedModel);
 		}
@@ -2735,8 +2734,6 @@ async function handleInner(
 		const doneTitle = `完成 · ${elapsed}`;
 		const doneColor = quotaWarning ? "orange" : "green";
 
-		// 尝试发送 AI 结果到飞书卡片
-		// 如果经历了 feedback gate 多轮，优先更新最新的卡片（避免用户翻页）
 		const latestFGCard = feedbackGateLatestCards.get(chatId);
 		if (latestFGCard) {
 			cardId = latestFGCard;
@@ -2968,6 +2965,10 @@ ${list}
 scheduler.start().catch((e) => console.warn(`[scheduler] start failed: ${e}`));
 
 heartbeat.start();
+
+new IdeReplyWatcher("feishu", async (chatId, message) => {
+	await sendCard(chatId, message, { title: "🤖 IDE Agent", color: "blue" });
+}).start();
 
 // ── 飞书 WebSocket 启动（简化版，避免复杂性）─────
 // 参考：OpenClaw 的教训，但采用更简单的方案

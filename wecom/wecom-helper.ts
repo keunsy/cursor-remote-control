@@ -381,8 +381,9 @@ export function resolveWorkspace(
 	
 	// 3. 使用当前项目
 	if (currentProject && projects[currentProject]) {
+		const p = projects[currentProject]!;
 		return {
-			workspace: projects[currentProject].path,
+			workspace: p.path,
 			message: text.trim(),
 			label: currentProject,
 			intent: routeIntent,

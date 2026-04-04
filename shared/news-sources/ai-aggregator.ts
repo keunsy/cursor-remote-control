@@ -196,7 +196,10 @@ export class AIAggregatorSource implements NewsSource {
     if (lower.includes('少数派')) return '少数派';
     if (lower.includes('infoq')) return 'InfoQ';
     if (lower.includes('techradar')) return 'TechRadar';
-    const cleaned = source.split('(')[0].split('·')[0].split('@')[0].trim();
+    const seg0 = source.split('(')[0] ?? source;
+    const seg1 = seg0.split('·')[0] ?? seg0;
+    const seg2 = seg1.split('@')[0] ?? seg1;
+    const cleaned = seg2.trim();
     return cleaned || source;
   }
 }

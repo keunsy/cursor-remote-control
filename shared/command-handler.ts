@@ -6,7 +6,7 @@
  */
 
 import { resolve } from "node:path";
-import { readFileSync, existsSync, statSync } from "node:fs";
+import { readFileSync, existsSync, statSync, appendFileSync, readdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import type { Scheduler } from "./scheduler.js";
 import type { MemoryManager } from "./memory.js";
@@ -93,6 +93,11 @@ function formatRelativeTime(timestamp: number): string {
 export class CommandHandler {
 	private adapter: PlatformAdapter;
 	private ctx: CommandContext;
+	private static ideForwardEnabled = new Map<string, boolean>();
+
+	static isIdeForwardEnabled(chatId: string): boolean {
+		return CommandHandler.ideForwardEnabled.get(chatId) === true;
+	}
 
 	constructor(adapter: PlatformAdapter, context: CommandContext) {
 		this.adapter = adapter;
@@ -123,6 +128,7 @@ export class CommandHandler {
 			"- `/新对话 --all` — 批量重置所有项目的会话",
 			"- `/终止 [项目名]` `/stop` — 终止正在执行的任务",
 			"- `/终止 --all` — 批量终止所有运行中的任务",
+			"- `/ide <消息>` — 投递消息到 IDE Feedback Gate 队列",
 			"",
 			"**热点 / 新闻**",
 			"- `/新闻` `/news` — **立即推送**今日热点（直接发 `/新闻`）；定时例：`/新闻 每天9点 推送10条`",
@@ -1220,10 +1226,166 @@ export class CommandHandler {
 	}
 
 	// ──────────────────────────────────────────────────
+	// /ide — 投递消息到 IDE Feedback Gate 队列
+	// ──────────────────────────────────────────────────
+
+	private getIdeSessions(): { pid: number; project: string; cwd: string }[] {
+		const tmpDir = process.platform === 'win32'
+			? (process.env.TEMP || process.env.TMP || 'C:\\Temp')
+			: '/tmp';
+		const sessions: { pid: number; project: string; cwd: string }[] = [];
+		for (const f of readdirSync(tmpDir).filter(
+			f => f.startsWith('feedback_gate_session_') && f.endsWith('.json')
+		)) {
+			try {
+				const raw = readFileSync(resolve(tmpDir, f), 'utf8');
+				const data = JSON.parse(raw);
+				process.kill(data.pid, 0);
+				sessions.push({ pid: data.pid, project: data.project || 'unknown', cwd: data.cwd || '' });
+			} catch {}
+		}
+		return sessions;
+	}
+
+	private async handleIde(text: string, chatId?: string): Promise<boolean> {
+		const content = text.replace(/^\/ide\s*/i, '').trim();
+
+		if (/^on$/i.test(content)) {
+			if (!chatId) {
+				await this.adapter.reply('❌ 无法开启转发模式（缺少 chatId）');
+				return true;
+			}
+			const sessions = this.getIdeSessions();
+			if (sessions.length === 0) {
+				await this.adapter.reply('❌ 当前没有活跃的 Feedback Gate 实例，无法开启转发模式');
+				return true;
+			}
+			CommandHandler.ideForwardEnabled.set(chatId, true);
+			const list = sessions.map((s, i) => `  ${i + 1}. ${s.project} (PID ${s.pid})`).join('\n');
+			await this.adapter.reply(`✅ IDE 转发模式已开启\n\n所有非命令消息将自动投递到 IDE Feedback Gate\n\n🖥️ 活跃实例:\n${list}\n\n发送 \`/ide off\` 关闭`);
+			return true;
+		}
+		if (/^off$/i.test(content)) {
+			if (chatId) CommandHandler.ideForwardEnabled.delete(chatId);
+			await this.adapter.reply('✅ IDE 转发模式已关闭');
+			return true;
+		}
+
+		const sessions = this.getIdeSessions();
+
+		const forwardStatus = chatId && CommandHandler.ideForwardEnabled.get(chatId) ? '  🟢 转发模式：已开启' : '';
+		if (!content) {
+			if (sessions.length === 0) {
+				await this.adapter.reply(
+					`📋 **/ide 指令用法**\n\n\`/ide <消息>\` — 投递消息到 IDE Feedback Gate 队列\n\`/ide #序号 <消息>\` — 指定窗口\n\`/ide on\` — 开启转发模式（所有消息自动投递）\n\`/ide off\` — 关闭转发模式\n\n⚠️ 当前没有活跃的 Feedback Gate 实例${forwardStatus}`
+				);
+			} else {
+				const list = sessions.map((s, i) =>
+					`  ${i + 1}. **${s.project}** (PID ${s.pid})`
+				).join('\n');
+				await this.adapter.reply(
+					`📋 **/ide 指令用法**\n\n\`/ide <消息>\` — 投递到唯一实例或广播\n\`/ide #序号 <消息>\` — 指定窗口\n\`/ide #PID <消息>\` — 按 PID 指定\n\`/ide on\` — 开启转发模式\n\`/ide off\` — 关闭转发模式\n\n🖥️ 活跃实例:\n${list}${forwardStatus}`
+				);
+			}
+			return true;
+		}
+
+		if (sessions.length === 0) {
+			await this.adapter.reply(
+				'❌ 当前没有活跃的 Feedback Gate，消息未投递\n\n请先在 Cursor 中启动 Feedback Gate 后再试'
+			);
+			return true;
+		}
+
+		let target: { pid: number; project: string } | null = null;
+		let messageText = content;
+
+		const hashMatch = content.match(/^#(\S+)\s+([\s\S]+)/);
+		if (hashMatch) {
+			const selector = hashMatch[1]!;
+			messageText = hashMatch[2]!.trim();
+			const idx = parseInt(selector, 10);
+			if (!isNaN(idx) && idx >= 1 && idx <= sessions.length) {
+				target = sessions[idx - 1]!;
+			} else {
+				const pid = parseInt(selector, 10);
+				target = sessions.find(s => s.pid === pid) || null;
+			}
+			if (!target) {
+				const list = sessions.map((s, i) =>
+					`  ${i + 1}. **${s.project}** (PID ${s.pid})`
+				).join('\n');
+				await this.adapter.reply(
+					`❌ 未找到匹配的实例: #${selector}\n\n🖥️ 可用实例:\n${list}`
+				);
+				return true;
+			}
+		} else if (sessions.length === 1) {
+			target = sessions[0]!;
+		}
+
+		if (!messageText) {
+			await this.adapter.reply('❌ 消息内容不能为空');
+			return true;
+		}
+
+		const tmpDir = process.platform === 'win32'
+			? (process.env.TEMP || process.env.TMP || 'C:\\Temp')
+			: '/tmp';
+
+		const targets = target ? [target] : sessions;
+
+		const entry = JSON.stringify({
+			id: `ide_queue_${Date.now()}`,
+			text: messageText,
+			source: this.ctx.platform,
+			chatId: chatId || '',
+			ts: new Date().toISOString()
+		});
+
+		try {
+			for (const t of targets) {
+				appendFileSync(resolve(tmpDir, `feedback_gate_ide_queue_${t.pid}.jsonl`), entry + '\n');
+			}
+			const time = new Date().toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+			if (targets.length === 1) {
+				await this.adapter.reply(
+					`✅ 已投递到 IDE 队列\n\n📝 ${messageText}\n🕐 ${time}\n🖥️ ${targets[0]!.project} (PID ${targets[0]!.pid})\n\n当 Agent 下次调用时将自动出队处理`
+				);
+			} else {
+				const list = targets.map(t => `  • ${t.project} (PID ${t.pid})`).join('\n');
+				await this.adapter.reply(
+					`✅ 已广播到 ${targets.length} 个 IDE 实例\n\n📝 ${messageText}\n🕐 ${time}\n${list}\n\n💡 可用 \`/ide #序号 消息\` 指定单个窗口`
+				);
+			}
+		} catch (e) {
+			await this.adapter.reply(`❌ IDE 队列投递失败: ${(e as Error).message}`);
+		}
+		return true;
+	}
+
+	// ──────────────────────────────────────────────────
 	// 命令路由 - 统一入口
 	// ──────────────────────────────────────────────────
 
-	async route(text: string, updateSessionCallback?: (sessionId: string) => void): Promise<boolean> {
+	async route(text: string, updateSessionCallback?: (sessionId: string) => void, options?: { chatId?: string }): Promise<boolean> {
+		// IDE 转发模式：非命令消息自动当 /ide 处理
+		if (options?.chatId && CommandHandler.ideForwardEnabled.get(options.chatId)
+			&& text.trim() && !text.trim().startsWith('/')) {
+			const sessions = this.getIdeSessions();
+			if (sessions.length === 0) {
+				CommandHandler.ideForwardEnabled.delete(options.chatId);
+				await this.adapter.reply('⚠️ IDE 转发模式已自动关闭（没有活跃的 Feedback Gate 实例）');
+				return false;
+			}
+			return this.handleIde(`/ide ${text}`, options.chatId);
+		}
+
+		// /ide — 投递到 IDE Feedback Gate 队列
+		if (/^\/ide\b/i.test(text.trim())) {
+			return this.handleIde(text, options?.chatId);
+		}
+
 		// /help、/帮助
 		if (/^\/(help|帮助|指令)\s*$/i.test(text.trim())) {
 			await this.handleHelp();

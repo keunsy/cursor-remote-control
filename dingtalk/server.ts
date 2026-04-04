@@ -27,6 +27,7 @@ import { humanizeCronInChinese } from 'cron-chinese';
 import { CommandHandler, type PlatformAdapter, type CommandContext } from '../shared/command-handler.js';
 import { AgentExecutor } from '../shared/agent-executor.js';
 import { ProcessLock } from '../shared/process-lock.js';
+import { IdeReplyWatcher } from '../shared/ide-reply-watcher.js';
 // import { ReconnectManager } from '../shared/reconnect-manager.js';  // 已移除，SDK 自带重连
 import { getAvailableModelChain, shouldFallback, isQuotaExhausted, addToBlacklist, isBlacklisted, getDefaultModel, type ModelConfig } from '../shared/models-config.js';
 import { uploadFileDingtalk, sendFileDingtalk } from './send-file-dingtalk.js';
@@ -1088,8 +1089,9 @@ function resolveWorkspace(
 	
 	// 3. 使用当前项目（如果有）
 	if (currentProject && projects[currentProject]) {
+		const p = projects[currentProject]!;
 		return {
-			workspace: projects[currentProject].path,
+			workspace: p.path,
 			message: text.trim(),
 			label: currentProject,
 			intent: routeIntent,
@@ -1369,14 +1371,14 @@ async function handleMessage(msg: any) {
 			return;
 		}
 		// 私聊模式：委托给统一处理器（不需要更新 session）
-		await commandHandler.route(text, () => {});
+		await commandHandler.route(text, () => {}, { chatId: conversationId });
 		return;
 	}
 	
 	// 尝试路由到命令处理器
 	const handled = await commandHandler.route(text, (newSessionId: string) => {
 		session.agentId = newSessionId;
-	});
+	}, { chatId: conversationId });
 	
 	if (handled) {
 		console.log('[命令] 已通过统一处理器处理');
@@ -1603,7 +1605,7 @@ async function handleMessage(msg: any) {
 	if (message !== text) {
 		const handled = await commandHandler.route(message, (newSessionId: string) => {
 			session.agentId = newSessionId;
-		});
+		}, { chatId: conversationId });
 		if (handled) {
 			console.log('[命令] 路由后的命令已通过统一处理器处理');
 			return;
@@ -1739,7 +1741,7 @@ async function handleMessage(msg: any) {
 		
 		// 手动终止的任务不需要发送错误消息（用户已经收到"已终止"的回复）
 		if (msg === 'MANUALLY_STOPPED') {
-			console.log(`[手动终止] workspace=${workspace} lockKey=${lockKey}`);
+			console.log('[手动终止] 用户已终止任务');
 			return;
 		}
 		
@@ -1853,9 +1855,7 @@ const scheduler = new Scheduler({
 						const workspace = job.workspace || defaultWorkspace;
 						const model = job.model || config.CURSOR_MODEL || getDefaultModel();
 						
-						const { result } = await runAgent(workspace, job.task.prompt, {
-							skipCard: true
-						});
+						const { result } = await runAgent(workspace, job.task.prompt, undefined);
 						
 						return { status: 'ok' as const, result };
 					} catch (err) {
@@ -1916,9 +1916,7 @@ const scheduler = new Scheduler({
 				const workspace = job.workspace || defaultWorkspace;
 				const model = job.model || config.CURSOR_MODEL || getDefaultModel();
 				
-				const { result } = await runAgent(workspace, parsed.prompt, {
-					skipCard: true
-				});
+				const { result } = await runAgent(workspace, parsed.prompt, undefined);
 				
 				return { status: 'ok' as const, result };
 			} catch (err) {
@@ -2090,6 +2088,11 @@ console.log(`[scheduler] started, file: ${cronStorePath}`);
 // ── 启动心跳系统 ──────────────────────────────────
 heartbeat.start();
 console.log(`[心跳] 已启动，默认关闭（发送 /心跳 开启）`);
+
+new IdeReplyWatcher("dingtalk", async (chatId, message) => {
+	const webhook = getWebhook(chatId);
+	if (webhook) await sendMarkdown(webhook, message, "🤖 IDE Agent", "blue");
+}).start();
 
 // 网络恢复监控已禁用：
 // 实践证明频繁的主动重连反而导致消息丢失和连接不稳定

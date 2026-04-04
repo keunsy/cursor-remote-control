@@ -24,6 +24,7 @@ import { humanizeCronInChinese } from 'cron-chinese';
 import { CommandHandler, type PlatformAdapter, type CommandContext } from '../shared/command-handler.js';
 import { AgentExecutor } from '../shared/agent-executor.js';
 import { ProcessLock } from '../shared/process-lock.js';
+import { IdeReplyWatcher } from '../shared/ide-reply-watcher.js';
 // import { ReconnectManager } from '../shared/reconnect-manager.js';  // 已移除，SDK 自带重连
 import {
 	getSession, setActiveSession, archiveAndResetSession,
@@ -529,12 +530,6 @@ const wsClient = new AiBot.WSClient({
 	secret: config.WECOM_BOT_SECRET,
 });
 
-// 使用重连管理器启动企业微信连接
-const reconnectManager = new ReconnectManager({
-	maxRetries: 10,
-	backoffDelays: [1, 2, 5, 10, 30, 60], // 秒
-});
-
 // ── 事件监听 ─────────────────────────────────────
 wsClient.on('authenticated', () => {
 	console.log('🔐 [企业微信] WebSocket 认证成功');
@@ -672,7 +667,7 @@ wsClient.on('message.text', async (frame: WsFrame) => {
 	// 尝试路由到命令处理器
 	const handled = await commandHandler.route(text, (newSessionId: string) => {
 		session.agentId = newSessionId;
-	});
+	}, { chatId: chatid });
 	
 	if (handled) {
 		console.log('[命令] 已通过统一处理器处理');
@@ -694,7 +689,7 @@ wsClient.on('message.text', async (frame: WsFrame) => {
 			return;
 		}
 		// 私聊模式：委托给统一处理器（不需要更新 session，传递空回调保持一致性）
-		const handled = await commandHandler.route(text, () => {});
+		const handled = await commandHandler.route(text, () => {}, { chatId: chatid });
 		if (handled) return;
 	}
 		
@@ -858,7 +853,7 @@ wsClient.on('message.text', async (frame: WsFrame) => {
 	if (message !== text) {
 		const routedHandled = await commandHandler.route(message, (newSessionId: string) => {
 			session.agentId = newSessionId;
-		});
+		}, { chatId: chatid });
 		if (routedHandled) {
 			console.log('[命令] 路由后的命令已通过统一处理器处理');
 			return;
@@ -1043,9 +1038,7 @@ const scheduler = new Scheduler({
 						const workspace = job.workspace || defaultWorkspace;
 						const model = job.model || config.CURSOR_MODEL || getDefaultModel();
 						
-						const { result } = await runAgent(workspace, job.task.prompt, {
-							skipStreaming: true
-						});
+						const { result } = await runAgent(workspace, job.task.prompt, undefined);
 						
 						return { status: 'ok' as const, result };
 					} catch (err) {
@@ -1106,9 +1099,7 @@ const scheduler = new Scheduler({
 				const workspace = job.workspace || defaultWorkspace;
 				const model = job.model || config.CURSOR_MODEL || getDefaultModel();
 				
-				const { result } = await runAgent(workspace, parsed.prompt, {
-					skipStreaming: true
-				});
+				const { result } = await runAgent(workspace, parsed.prompt, undefined);
 				
 				return { status: 'ok' as const, result };
 			} catch (err) {
@@ -1194,6 +1185,13 @@ scheduler.start().catch((err) => {
 // ── 启动心跳系统 ──────────────────────────────────
 heartbeat.start();
 console.log(`[心跳] 已启动，默认关闭（发送 /心跳 开启）`);
+
+new IdeReplyWatcher("wecom", async (chatId, message) => {
+	await wsClient.sendMessage(chatId, {
+		msgtype: "markdown",
+		markdown: { content: message },
+	});
+}).start();
 
 // ── 启动自检（.cursor/BOOT.md）───────────────────────
 // 已禁用：agent 进程初始化太慢，会阻塞启动

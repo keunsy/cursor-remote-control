@@ -28,6 +28,7 @@ import { fetchNews } from '../shared/news-fetcher.js';
 import { getHealthStatus } from '../shared/news-sources/monitoring.js';
 import { CommandHandler, type PlatformAdapter, type CommandContext } from '../shared/command-handler.js';
 import { ProcessLock } from '../shared/process-lock.js';
+import { IdeReplyWatcher } from '../shared/ide-reply-watcher.js';
 import { humanizeCronInChinese } from 'cron-chinese';
 import {
 	getSession,
@@ -866,6 +867,7 @@ interface PendingFeedbackGate {
 	createdAt: number;
 }
 const pendingFeedbackGates = new Map<string, PendingFeedbackGate>();
+const feedbackRoundCounter = new Map<string, number>();
 const activeTypingCleanup = new Map<string, () => void>();
 const FEEDBACK_GATE_TIMEOUT = 24 * 60 * 60 * 1000; // 24h
 
@@ -1088,31 +1090,6 @@ class WechatMonitor {
 						// 保存 context_token（回复消息时必需，立即持久化）
 						if (msg.context_token && msg.from_user_id) {
 							this.setContextToken(msg.from_user_id, msg.context_token);
-						}
-						
-						// 快速路径：feedback gate 回复直接处理，不进 onMessage
-						const fgEntry = pendingFeedbackGates.get(msg.from_user_id!);
-						if (fgEntry) {
-							const msgText = WechatMonitor.extractText(msg).trim();
-							if (msgText) {
-								const isDone = /^(done|完成|ok|好的|结束|没了|没有了|task_complete)$/i.test(msgText);
-								const responseText = isDone ? 'TASK_COMPLETE' : msgText;
-								console.log(`[FeedbackGate:FastPath] Replying triggerId=${fgEntry.triggerId} isDone=${isDone}: ${msgText.slice(0, 100)}`);
-								writeFeedbackGateResponse(fgEntry.triggerId, responseText);
-								pendingFeedbackGates.delete(msg.from_user_id!);
-								try {
-									const ct = this.getContextToken(msg.from_user_id!) || msg.context_token;
-									const replyText = isDone ? '✅ 对话已结束' : '✅ 反馈已提交，AI 正在继续处理...';
-									await this.client.sendTextMessage(msg.from_user_id!, replyText, ct);
-								} catch {}
-								if (!isDone) {
-									const prevCleanup = activeTypingCleanup.get(msg.from_user_id!);
-									if (prevCleanup) prevCleanup();
-									const stopFn = startTypingKeepalive(this.client, msg.from_user_id!);
-									activeTypingCleanup.set(msg.from_user_id!, stopFn);
-								}
-								continue;
-							}
 						}
 						
 						// fire-and-forget：不阻塞 poll 循环（busySessions 控制并发）
@@ -1763,6 +1740,10 @@ async function startWechatServer() {
 	heartbeat.start();
 	console.log('[心跳] 已启动，默认关闭（/心跳 开启）');
 
+	new IdeReplyWatcher("wechat", async (chatId, message) => {
+		await client.sendTextMessage(chatId, message);
+	}).start();
+
 	const monitor = new WechatMonitor(client, async (msg: WeixinMessage) => {
 		try {
 		const uid = msg.from_user_id;
@@ -2091,7 +2072,7 @@ async function startWechatServer() {
 
 			const cmdHandled = await commandHandler.route(text, (newSessionId: string) => {
 				session.agentId = newSessionId;
-			});
+			}, { chatId: uid });
 			if (cmdHandled) {
 				console.log('[命令] 已由 CommandHandler 处理');
 				return;
@@ -2237,7 +2218,7 @@ async function startWechatServer() {
 			if (message !== text) {
 				const routedHandled = await commandHandler.route(message, (sid: string) => {
 					session.agentId = sid;
-				});
+				}, { chatId: uid });
 				if (routedHandled) return;
 			}
 
@@ -2253,7 +2234,7 @@ async function startWechatServer() {
 
 			// ── Feedback Gate: 拦截用户回复 ──
 			const pendingFG = pendingFeedbackGates.get(uid);
-			if (pendingFG) {
+			if (pendingFG && !message.trim().startsWith('/') && !CommandHandler.isIdeForwardEnabled(uid)) {
 				const age = Date.now() - pendingFG.createdAt;
 				if (age < FEEDBACK_GATE_TIMEOUT) {
 					const isDone = /^(done|完成|ok|好的|结束|没了|没有了|task_complete)$/i.test(message.trim());
@@ -2261,6 +2242,7 @@ async function startWechatServer() {
 					console.log(`[FeedbackGate] Replying to triggerId=${pendingFG.triggerId} isDone=${isDone}: ${message.slice(0, 100)}`);
 					writeFeedbackGateResponse(pendingFG.triggerId, responseText);
 					pendingFeedbackGates.delete(uid);
+					if (isDone) feedbackRoundCounter.delete(uid);
 
 					const lockKeyForFG = getLockKey(workspace);
 					if (!busySessions.has(lockKeyForFG)) {
@@ -2281,6 +2263,7 @@ async function startWechatServer() {
 					}
 				} else {
 					pendingFeedbackGates.delete(uid);
+					feedbackRoundCounter.delete(uid);
 					console.log(`[FeedbackGate] Expired pending for uid=${uid.slice(0, 10)}...`);
 				}
 			}
@@ -2380,7 +2363,10 @@ async function startWechatServer() {
 						if (req.agentOutput) {
 							await sendWechatText(uid, req.agentOutput, contextToken);
 						}
-						const fgMsg = `💬 **${req.title || 'AI 请求反馈'}**\n\n${req.message}\n\n---\n回复此消息即可提交反馈\n发送「完成」或「done」结束对话`;
+						const round = (feedbackRoundCounter.get(uid) || 0) + 1;
+						feedbackRoundCounter.set(uid, round);
+						const roundLabel = round === 1 ? '🆕 新对话' : `🔄 第 ${round} 轮`;
+						const fgMsg = `💬 **${req.title || 'AI 请求反馈'}**（${roundLabel}）\n\n${req.message}\n\n---\n回复此消息即可提交反馈\n发送「完成」或「done」结束对话`;
 						await sendWechatText(uid, fgMsg, contextToken);
 					} : undefined,
 				},
@@ -2523,6 +2509,7 @@ async function startWechatServer() {
 			const fpCleanup = activeTypingCleanup.get(uid);
 			if (fpCleanup) { fpCleanup(); activeTypingCleanup.delete(uid); }
 			pendingFeedbackGates.delete(uid);
+			feedbackRoundCounter.delete(uid);
 			stopTyping();
 		}
 			} finally {

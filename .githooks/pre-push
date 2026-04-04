@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Pre-push hook: 检查即将推送的 commit 中是否包含敏感信息
+# 安装方式: git config core.hooksPath .githooks
+
+set -e
+
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+SENSITIVE_PATTERNS=(
+    'sk-[a-zA-Z0-9]{20,}'
+    'ghp_[a-zA-Z0-9]{36,}'
+    'AKIA[A-Z0-9]{16}'
+    'xox[bprs]-[a-zA-Z0-9]{10,}'
+    '-----BEGIN (RSA |EC )?PRIVATE KEY-----'
+    '@im\.(wechat|bot):[a-f0-9]{30,}'
+    'oc_[a-f0-9]{28,}'
+    'Bearer [a-zA-Z0-9\-_.]{20,}'
+)
+
+PATTERN=$(IFS='|'; echo "${SENSITIVE_PATTERNS[*]}")
+
+echo -e "${YELLOW}🔍 Pre-push: 检查敏感信息...${NC}"
+
+while read local_ref local_sha remote_ref remote_sha; do
+    if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+        range="$local_sha"
+    elif [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+        continue
+    else
+        range="$remote_sha..$local_sha"
+    fi
+
+    hits=$(git diff "$range" 2>/dev/null | grep -E "^\+.*($PATTERN)" | grep -v '^\+\+\+' | grep -v 'regex\|pattern\|test\|example\|mock\|\.example' || true)
+
+    if [ -n "$hits" ]; then
+        echo -e "${RED}❌ 检测到疑似敏感信息！推送已阻止。${NC}"
+        echo ""
+        echo -e "${RED}匹配内容：${NC}"
+        echo "$hits" | head -10
+        echo ""
+        echo -e "${YELLOW}如果确认安全，使用 git push --no-verify 强制推送${NC}"
+        exit 1
+    fi
+done
+
+echo -e "${GREEN}✅ 未检测到敏感信息，推送继续${NC}"
+exit 0
