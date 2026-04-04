@@ -867,6 +867,7 @@ interface PendingFeedbackGate {
 	createdAt: number;
 }
 const pendingFeedbackGates = new Map<string, PendingFeedbackGate>();
+const recentFeedbackConsumed = new Map<string, number>();
 const feedbackRoundCounter = new Map<string, number>();
 const activeTypingCleanup = new Map<string, () => void>();
 const FEEDBACK_GATE_TIMEOUT = 24 * 60 * 60 * 1000; // 24h
@@ -2242,6 +2243,7 @@ async function startWechatServer() {
 					console.log(`[FeedbackGate] Replying to triggerId=${pendingFG.triggerId} isDone=${isDone}: ${message.slice(0, 100)}`);
 					writeFeedbackGateResponse(pendingFG.triggerId, responseText);
 					pendingFeedbackGates.delete(uid);
+					recentFeedbackConsumed.set(uid, Date.now());
 					if (isDone) feedbackRoundCounter.delete(uid);
 
 					const lockKeyForFG = getLockKey(workspace);
@@ -2265,6 +2267,13 @@ async function startWechatServer() {
 					pendingFeedbackGates.delete(uid);
 					feedbackRoundCounter.delete(uid);
 					console.log(`[FeedbackGate] Expired pending for uid=${uid.slice(0, 10)}...`);
+				}
+			} else if (!pendingFG && !message.trim().startsWith('/') && !CommandHandler.isIdeForwardEnabled(uid)) {
+				const lastConsumed = recentFeedbackConsumed.get(uid);
+				if (lastConsumed && Date.now() - lastConsumed < 10_000) {
+					console.log(`[FeedbackGate] Duplicate message within cooldown for uid=${uid.slice(0, 10)}...`);
+					await sendWechatText(uid, '💡 反馈已提交，无需重复发送，AI 正在处理中...', contextToken);
+					return;
 				}
 			}
 
@@ -2353,6 +2362,7 @@ async function startWechatServer() {
 						const fpCleanup = activeTypingCleanup.get(uid);
 						if (fpCleanup) { fpCleanup(); activeTypingCleanup.delete(uid); }
 						stopTyping();
+						recentFeedbackConsumed.delete(uid);
 						pendingFeedbackGates.set(uid, {
 							triggerId: req.triggerId,
 							message: req.message,

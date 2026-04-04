@@ -1856,6 +1856,7 @@ interface PendingFeedbackGate {
 	createdAt: number;
 }
 const pendingFeedbackGates = new Map<string, PendingFeedbackGate>();
+const recentFeedbackConsumed = new Map<string, number>();
 const feedbackRoundCounter = new Map<string, number>();
 const feedbackGateLatestCards = new Map<string, string>();
 const FEEDBACK_GATE_TIMEOUT = 24 * 60 * 60 * 1000; // 24h
@@ -1911,6 +1912,7 @@ async function runAgent(
 						title: `${req.title || '等待反馈'}（${roundLabel}）`,
 						color: 'purple',
 					});
+					recentFeedbackConsumed.delete(chatId);
 					pendingFeedbackGates.set(chatId, {
 						triggerId: req.triggerId,
 						message: req.message,
@@ -2618,6 +2620,7 @@ async function handleInner(
 			console.log(`[FeedbackGate] Replying to triggerId=${pendingFG.triggerId} isDone=${isDone}: ${prompt.slice(0, 100)}`);
 			writeFeedbackGateResponse(pendingFG.triggerId, responseText);
 			pendingFeedbackGates.delete(chatId);
+			recentFeedbackConsumed.set(chatId, Date.now());
 			
 			if (isDone) {
 				feedbackRoundCounter.delete(chatId);
@@ -2646,6 +2649,16 @@ async function handleInner(
 			pendingFeedbackGates.delete(chatId);
 			feedbackRoundCounter.delete(chatId);
 			console.log(`[FeedbackGate] Expired pending for chatId=${chatId.slice(0, 10)}...`);
+		}
+	} else if (!pendingFG && !prompt.trim().startsWith('/') && !CommandHandler.isIdeForwardEnabled(chatId)) {
+		const lastConsumed = recentFeedbackConsumed.get(chatId);
+		if (lastConsumed && Date.now() - lastConsumed < 10_000) {
+			console.log(`[FeedbackGate] Duplicate message within cooldown for chatId=${chatId.slice(0, 10)}...`);
+			await replyCard(messageId, '💡 反馈已提交，无需重复发送，AI 正在处理中...', {
+				title: '提示',
+				color: 'grey',
+			});
+			return;
 		}
 	}
 
