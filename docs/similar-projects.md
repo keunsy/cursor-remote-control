@@ -32,7 +32,6 @@
 │  🏢 飞书/企业 IM 层                                         │
 │  ├── OpenClaw (开源框架)                                   │
 │  ├── AutoClaw (50+ 技能) ⭐⭐⭐⭐                           │
-│  ├── feishu-cursor-claw (cursor-remote-control 基于此)    │
 │  ├── cursor-remote-control (向量记忆+心跳) ⭐⭐⭐⭐⭐        │
 │  └── ClawdBot (团队协作)                                   │
 │                                                            │
@@ -397,33 +396,6 @@
 
 ---
 
-### feishu-cursor-claw - 飞书 Cursor 远程控制
-
-**基本信息**：
-- GitHub：https://github.com/nongjun/feishu-cursor-claw
-- 创建：2025 年 3 月
-- 特色：**cursor-remote-control 基于此项目改进**
-
-**核心功能**：
-- ✅ 飞书远程控制 Cursor IDE
-- ✅ 多模态输入（文字/语音/图片）
-- ✅ 流式进度卡片
-- ✅ 会话连续性
-- ✅ WebSocket 长连接
-
-**技术特点**：
-- 飞书 WebSocket SDK
-- Volcengine STT + whisper 降级
-- 实时卡片更新
-- 会话自动恢复
-
-**历史意义**：
-- 本项目的起点
-- 已在此基础上大幅扩展
-- 开源社区贡献
-
----
-
 ### ClawdBot - 团队协作助手
 
 **基本信息**：
@@ -453,7 +425,7 @@
 **基本信息**：
 - 位置：本项目
 - 语言：TypeScript + Bun
-- 基于：feishu-cursor-claw 改进
+- 特色：多平台支持、向量记忆、心跳系统
 
 **支持平台**（3 个）：
 - ✅ 飞书 (Feishu) - WebSocket
@@ -838,7 +810,6 @@
 - OpenClaw：https://openclawcn.com/
 - AutoClaw：https://autoclaws.org/im-integration/
 - openclaw-lark：https://github.com/larksuite/openclaw-lark
-- feishu-cursor-claw：https://github.com/nongjun/feishu-cursor-claw
 - ClawdBot：Medium 搜索 "ClawdBot Lark Feishu"
 
 ### 📚 相关文档

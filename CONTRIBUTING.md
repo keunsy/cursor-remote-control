@@ -538,7 +538,6 @@ WIP
 感谢你的贡献！每一个 PR、Issue、甚至 Star 都是对我们的支持。
 
 特别感谢：
-- [@nongjun](https://github.com/nongjun) - 原始项目 [feishu-cursor-claw](https://github.com/nongjun/feishu-cursor-claw) 作者
 - 所有贡献者
 
 ---

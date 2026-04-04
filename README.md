@@ -3,10 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg)](https://www.typescriptlang.org/)
 [![Bun](https://img.shields.io/badge/Bun-1.x-333333.svg)](https://bun.sh)
-
-> 基于 [feishu-cursor-claw](https://github.com/nongjun/feishu-cursor-claw) 改进，支持飞书、钉钉、企业微信、微信个人号等多平台。
-
-通过 IM 平台（飞书、钉钉、企业微信、微信等）远程控制 Cursor AI Agent 的中继服务。
+通过 IM 平台远程控制 Cursor AI Agent 的中继服务。已支持飞书、钉钉、企业微信、微信个人号，架构可扩展至更多渠道。
 
 在手机上发消息，你的 Mac 就自动写代码、审文档、执行任务。将 Cursor 变成你的**私人 AI 战略合伙人**，随时随地通过 IM 调用。
 
@@ -20,10 +17,14 @@
 手机飞书 ──WebSocket──→ feishu/server.ts ────┐
                                              │
 手机钉钉 ──Stream─────→ dingtalk/server.ts ───┤
+                                             │
+手机企业微信 ─WebSocket→ wecom/server.ts ──────┤
                                              ├──→ Cursor CLI ──→ 本地 Cursor IDE
-手机企业微信 ─WebSocket→ wecom/server.ts ──────┤          │
+手机微信 ──HTTP Poll──→ wechat/server.ts ─────┤          │
                                              │          │
-手机微信 ──HTTP Poll──→ wechat/server.ts ─────┘          │
+Telegram ──Bot API──→ telegram/server.ts ────┤          │
+                                             │          │
+更多渠道... ─────────→ xxx/server.ts ─────────┘          │
                                                          │
         ┌────────────────────────────────────────────────┘
         │
@@ -41,6 +42,8 @@
 - 钉钉：Stream 长连接模式，本地服务主动连接钉钉服务器
 - 企业微信：WebSocket 长连接模式，本地服务主动连接企业微信服务器
 - 微信个人号：HTTP 长轮询模式，基于腾讯官方 ilink bot API
+- Telegram：Bot API 长轮询模式
+- 更多渠道持续扩展中...
 - 无需公网 IP，无需端口映射
 
 **2. 消息处理**
@@ -62,7 +65,7 @@
 - 同一会话串行，不同会话并发
 - Cursor CLI 自主管理生命周期
 
-**4. 记忆系统**（OpenClaw 风格完整实现）⭐
+**4. 记忆系统** ⭐
 - **短期记忆**：`.cursor/sessions/` 会话转录（JSONL 格式）
 - **长期记忆**：`.cursor/MEMORY.md` + `.cursor/memory/` 每日日记
 - **混合搜索**：`.memory.sqlite` (FTS5 BM25 30% + 向量 70%)
@@ -75,7 +78,7 @@
 **5. 定时任务**
 - AI 通过对话创建定时任务，写入 `cron-jobs-*.json`
 - 支持一次性任务、间隔任务、Cron 表达式
-- 到期自动执行，结果推送到飞书/钉钉
+- 到期自动执行，结果推送到对应 IM 渠道
 
 **6. 心跳系统**
 - 定期触发 `.cursor/HEARTBEAT.md` 检查清单
@@ -122,6 +125,10 @@ cursor-remote-control/
 │   ├── start.ts                 # 启动脚本
 │   └── README.md                # 微信详细文档
 │
+├── telegram/                    # Telegram 服务（独立）
+│   ├── server.ts                # Telegram 主服务
+│   └── README.md                # Telegram 详细文档
+│
 ├── projects.json                # 项目路由配置（共享）
 ├── cron-jobs-feishu.json        # 飞书定时任务
 ├── cron-jobs-dingtalk.json      # 钉钉定时任务
@@ -133,15 +140,19 @@ cursor-remote-control/
 
 ## 功能特性
 
-- 🚀 **四渠道支持**: 飞书、钉钉、企业微信、微信个人号独立部署，可同时运行
-- 🧠 **记忆系统**: OpenClaw 完整实现（混合搜索 + 时间衰减 + MMR 去重 + 自动 Flush）⭐
-- ⏰ **定时任务**: AI 创建的 Cron 任务，自动执行并推送通知
+- 🚀 **多渠道支持**: 飞书、钉钉、企业微信、微信个人号等，独立部署，可同时运行，易于扩展新渠道
+- 💰 **配额节约**: 集成 [Feedback Gate](https://github.com/keunsy/cursor-feedback-gate)，单次请求内多轮反馈不消耗额外配额，500 次/月可实现数倍有效交互 ⭐
+- 🧠 **记忆系统**: 混合搜索（FTS5 + 向量）、时间衰减、MMR 去重、自动 Flush
+- ⏰ **定时任务**: AI 通过对话创建 Cron 任务，自动执行并推送通知
 - 📰 **热点新闻推送**: 定时抓取多平台热榜并推送（微博/知乎/百度等）
 - ❤️ **心跳检查**: 定期后台维护（整理记忆、检查状态）
-- 🎙️ **语音识别**: 火山引擎豆包 STT → 本地 whisper-cpp 降级
-- 🖼️ **图片处理**: 自动下载和 OCR 识别
-- 📁 **项目路由**: 多工作区切换（共享配置）
-- 🔄 **会话连续性**: 自动 resume，多会话并发
+- 🖼️ **多模态处理**: 文本、图片、语音、文件等多种消息类型
+- 📁 **项目路由**: 多工作区切换，支持持久切换、临时路由、快捷前缀
+- 🔄 **会话连续性**: 自动 resume 恢复上下文，多会话并发
+- 📤 **文件发送**: 跨平台发送本地文件（API 上传 / CDN 转发）
+- ⚡ **流式进度推送**: Agent 执行过程实时回传进度卡片
+- 🔌 **OpenAI API 桥接**: 兼容 OpenAI Chat Completions 接口，可作为模型 provider
+- 🎛️ **模型策略**: 模型别名、fallback 链、黑名单、按月重置
 - 🎯 **身份人格**: 持久化人格与规则系统
 
 ---
@@ -325,7 +336,7 @@ bash manage-services.sh logs wecom       # 查看企业微信日志
 
 ### 常用指令
 
-三个渠道都支持以下指令：
+所有渠道都支持以下指令：
 
 | 指令 | 中文别名 | 说明 |
 |------|----------|------|
@@ -342,7 +353,6 @@ bash manage-services.sh logs wecom       # 查看企业微信日志
 | `/新闻` | `/news` | **热点**：立即推送今日热点；或 `/新闻 每天9点 推送10条` 定时 |
 | `/新闻状态` | `/health` | 查看热点数据源健康状态 |
 | `/心跳` | `/heartbeat` | 查看/管理心跳系统 |
-| `/飞连` | `/vpn` `/feilian` | 远程控制飞连 VPN（开/关/状态） |
 | `/发送文件 <路径>` | `/sendfile` `/send` | 发送本地文件（飞书 30MB，企业微信 20MB，微信通过 CDN） |
 
 ### 项目路由（多工作区）
@@ -389,48 +399,6 @@ cp projects.json.example projects.json
 | `/任务 执行 <ID>` | 立即执行一次 |
 
 **详细文档**：[docs/news-push-usage.md](docs/news-push-usage.md)
-
----
-
-### 飞连 VPN 远程控制
-
-通过飞书、钉钉或企业微信消息远程开关飞连 VPN（支持锁屏状态）。
-
-**快速使用**：
-- `/飞连` — 切换 VPN 状态
-- `/飞连 开` — 确保 VPN 连接
-- `/飞连 关` — 断开 VPN
-- `/飞连 状态` — 查询连接状态
-
-**前置配置**：
-
-1. **确认飞连快捷键为 ⌘+O**（在飞连设置中）
-
-2. **配置辅助功能权限**
-
-   macOS 系统设置 → 隐私与安全性 → 辅助功能 → 点击 + 添加：
-
-   ```bash
-   /Users/你的用户名/.bun/bin/bun
-   ```
-
-   找不到 bun 路径时运行：
-   ```bash
-   which bun
-   ```
-
-3. **重启服务生效**
-
-   ```bash
-   cd feishu && bash service.sh restart
-   cd dingtalk && bash service.sh restart
-   cd wecom && bash service.sh restart
-   ```
-
-**限制**：
-- ⚠️ 锁屏状态下可能需要解锁后才能生效（取决于权限配置）
-- ⚠️ 仅支持快捷键控制，不支持指定线路
-- ⚠️ 需要飞连客户端正在运行
 
 ### 文件发送功能
 
@@ -485,34 +453,6 @@ bun run send-file.ts /path/to/file.apk <接收人ID>
 
 ---
 
-## 高级配置
-
-### 语音识别（可选，推荐）
-
-**火山引擎豆包 STT**（高质量中文识别）：
-
-1. 到[火山引擎控制台](https://console.volcengine.com/speech/app)创建应用
-2. 开通「大模型流式语音识别」服务
-3. 在对应服务的 `.env` 中配置：
-
-```bash
-VOLC_STT_APP_ID=你的APP_ID
-VOLC_STT_ACCESS_TOKEN=你的ACCESS_TOKEN
-```
-
-不配置则自动降级到本地 whisper-cpp（需安装：`brew install whisper-cpp`）。
-
-### 向量记忆搜索（可选）
-
-启用语义记忆搜索功能（在对应服务的 `.env` 中）：
-
-```bash
-VOLC_EMBEDDING_API_KEY=你的API_KEY
-VOLC_EMBEDDING_MODEL=doubao-embedding-vision-250615
-```
-
----
-
 ## 故障排查
 
 ### 飞书服务
@@ -555,7 +495,6 @@ VOLC_EMBEDDING_MODEL=doubao-embedding-vision-250615
 | `API Key 无效` | .env 中有无效占位符 | 运行 `agent login` 登录，注释掉 .env 中的 `CURSOR_API_KEY` |
 | `团队配额已用完` | 使用高消耗模型 | 改用 `auto` 模型（编辑 .env 中的 `CURSOR_MODEL=auto`） |
 | `permission denied to access path` | projects.json 路径错误 | 检查 projects.json 中的路径是否正确 |
-| 语音识别乱码 | whisper 质量低 | 配置火山引擎 STT（`VOLC_STT_*` 变量） |
 | `agent: command not found` | Agent CLI 未安装 | `curl https://cursor.com/install -fsS \| bash` |
 | `bun: command not found` | Bun 未安装 | `curl -fsSL https://bun.sh/install \| bash` |
 
@@ -593,9 +532,7 @@ A: 可以！所有平台服务独立运行，互不干扰，共享 `projects.jso
 | 流式回复 | 轮询刷新 | ❌ 不支持 | 主动推送 ⭐ | 正在输入状态 |
 | 文件发送 | ✅ (30MB) | ✅ (30MB) 🆕 | ✅ (20MB) ⭐ | ✅ (CDN) 🆕 |
 | 新闻推送 | ✅ | ✅ | ✅ ⭐ | ✅ |
-| 飞连 VPN | ✅ | ✅ | ✅ ⭐ | ❌ 不需要 |
 | 数据库 | SQLite（向量索引 + FTS5） | SQLite（向量索引 + FTS5） | SQLite（向量索引 + FTS5） | SQLite（向量索引 + FTS5） |
-| 语音 | 火山引擎 → whisper-cpp | 火山引擎 → whisper-cpp | 火山引擎 → whisper-cpp | 火山引擎 → whisper-cpp |
 | 部署 | macOS launchd | macOS launchd | macOS launchd | 直接运行 (bun run start.ts) |
 
 **共享模块**（`shared/` 目录）：
@@ -608,26 +545,6 @@ A: 可以！所有平台服务独立运行，互不干扰，共享 `projects.jso
 
 ---
 
-## 致谢
-
-本项目基于 [feishu-cursor-claw](https://github.com/nongjun/feishu-cursor-claw) 开发，在原项目基础上进行了大量改进和扩展。
-
-### 主要变更
-
-- ✨ **新增钉钉、企业微信、微信个人号渠道**（原项目仅支持飞书）
-- 🏗️ **独立四服务架构**（飞书、钉钉、企业微信、微信个人号可同时运行，互不干扰）
-- 🔧 **统一服务管理**（`manage-services.sh` 统一管理多个服务）
-- 📦 **配置文件分离**（每个服务独立 `.env` 和 `cron-jobs.json`）
-- 🎯 **增强的项目路由**（共享 `projects.json`，支持持久切换）
-- 🔐 **安全增强**（平台隔离，独立环境变量）
-- ⚡ **企业微信优势**（主动推送流式回复，延迟更低）
-
-感谢 [@nongjun](https://github.com/nongjun) 的开源贡献。
-
----
-
 ## 开源协议
 
 本项目采用 MIT License 开源。详见 [LICENSE](LICENSE) 文件。
-
-基于 [feishu-cursor-claw](https://github.com/nongjun/feishu-cursor-claw)（同为 MIT License）开发。

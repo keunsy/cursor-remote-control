@@ -1,7 +1,6 @@
 # dingtalk-cursor-claw
 
 > 钉钉 → Cursor Agent 远程控制
-> 基于 feishu-cursor-claw 的钉钉版本
 
 ## 快速开始
 

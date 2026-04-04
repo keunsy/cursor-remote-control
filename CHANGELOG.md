@@ -68,8 +68,6 @@
 
 ## [2.0.0] - 2026-03-14
 
-基于 [feishu-cursor-claw](https://github.com/nongjun/feishu-cursor-claw) 进行大量改进和扩展。
-
 ### 新增
 
 - **钉钉渠道支持**：完整支持钉钉 Stream 长连接
@@ -86,15 +84,6 @@
 - **定时任务**：飞书使用 `cron-jobs-feishu.json`，钉钉使用 `cron-jobs-dingtalk.json`，企业微信使用 `cron-jobs-wecom.json`
 - **环境变量**：各服务独立 `.env`，平台隔离更清晰
 
-### 致谢
-
-- 原项目 [feishu-cursor-claw](https://github.com/nongjun/feishu-cursor-claw) 作者 [@nongjun](https://github.com/nongjun)
-
----
-
-## [1.x] - 原项目
-
-功能与版本以原仓库 [feishu-cursor-claw](https://github.com/nongjun/feishu-cursor-claw) 为准，本项目自 2.0.0 起在其基础上演进。
 
 [Unreleased]: https://github.com/keunsy/cursor-remote-control/compare/v2.0.0...HEAD
 [2.0.0]: https://github.com/keunsy/cursor-remote-control/releases/tag/v2.0.0
