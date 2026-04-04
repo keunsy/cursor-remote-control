@@ -14,25 +14,25 @@
 ### 整体架构
 
 ```
-手机飞书 ──WebSocket──→ feishu/server.ts ────┐
-                                             │
-手机钉钉 ──Stream─────→ dingtalk/server.ts ───┤
-                                             │
-手机企业微信 ─WebSocket→ wecom/server.ts ──────┤
-                                             ├──→ Cursor CLI ──→ 本地 Cursor IDE
-手机微信 ──HTTP Poll──→ wechat/server.ts ─────┤          │
-                                             │          │
-Telegram ──Bot API──→ telegram/server.ts ────┤          │
-                                             │          │
-更多渠道... ─────────→ xxx/server.ts ─────────┘          │
-                                                         │
-        ┌────────────────────────────────────────────────┘
+飞书 ────── WebSocket ─────┐
+                           │
+钉钉 ────── Stream ────────┤
+                           │
+企业微信 ── WebSocket ─────┤
+                           ├──→ Cursor CLI ──→ 本地 Cursor IDE
+微信 ────── HTTP Poll ─────┤          │
+                           │          │
+Telegram ── Bot API ───────┤          │
+                           │          │
+更多渠道... ────────────────┘          │
+                                      │
+        ┌─────────────────────────────┘
         │
-        ├─→ 项目路由 (projects.json)
-        ├─→ 会话管理 (--resume, 自动恢复上下文)
-        ├─→ 记忆系统 (.cursor/MEMORY.md + SQLite向量数据库)
-        ├─→ 定时任务 (cron-jobs-*.json, AI 创建的定时任务)
-        └─→ 心跳系统 (.cursor/HEARTBEAT.md, 定期维护)
+        ├─→ 项目路由
+        ├─→ 会话管理（自动恢复上下文）
+        ├─→ 记忆系统（混合搜索 + 向量数据库）
+        ├─→ 定时任务（AI 创建，自动执行）
+        └─→ 心跳系统（定期维护）
 ```
 
 ### 工作原理
