@@ -120,6 +120,14 @@ export class CommandHandler {
 		const projects = Object.keys(this.ctx.projectsConfig.projects).map(k => `\`${k}\``).join("、");
 
 		const helpText = [
+			"**🖥️ IDE 远程控制**（需安装 [cursor-feedback-gate](https://github.com/keunsy/cursor-feedback-gate) 扩展）",
+			"- `/ide <消息>` — 向 IDE 正在运行的 Agent 投递消息",
+			"- `/ide` — 查看活跃实例和转发开关状态",
+			"- `/ide on` — 开启转发模式（所有非命令消息自动投递到 IDE）",
+			"- `/ide off` — 关闭转发模式",
+			"- `/ide #序号 <消息>` — 多窗口时指定目标实例",
+			"- Agent 回复会自动返回到 IM，实现双向交互",
+			"",
 			"**基础指令**",
 			"- `/帮助` `/help` — 显示本帮助",
 			"- `/状态` `/status` — 查看服务状态",
@@ -128,10 +136,6 @@ export class CommandHandler {
 			"- `/新对话 --all` — 批量重置所有项目的会话",
 			"- `/终止 [项目名]` `/stop` — 终止正在执行的任务",
 			"- `/终止 --all` — 批量终止所有运行中的任务",
-			"- `/ide <消息>` — 投递消息到 IDE Feedback Gate 队列（需安装 cursor-feedback-gate 扩展）",
-			"- `/ide` — 查看活跃 Feedback Gate 实例",
-			"- `/ide on` / `/ide off` — 开启/关闭转发模式（非命令消息自动投递到 IDE）",
-			"- `/ide #序号 <消息>` — 多窗口时指定目标实例",
 			"",
 			"**热点 / 新闻**",
 			"- `/新闻` `/news` — **立即推送**今日热点（直接发 `/新闻`）；定时例：`/新闻 每天9点 推送10条`",
