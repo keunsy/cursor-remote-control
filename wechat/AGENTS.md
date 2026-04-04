@@ -113,7 +113,7 @@ Agent 可以使用 Cursor 内置能力读取和处理这些媒体。
 #### 发送图片
 **本地文件**:
 ```
-MEDIA:/Users/user/work/cursor/cursor-remote-control/inbox/output.jpg
+MEDIA:/path/to/your/project/inbox/output.jpg
 ```
 
 **远程 URL**（自动下载）:
@@ -124,7 +124,7 @@ MEDIA:https://api.example.com/generated-image.png
 #### 发送视频
 **本地文件**:
 ```
-MEDIA_VIDEO:/Users/user/work/cursor/cursor-remote-control/inbox/demo.mp4
+MEDIA_VIDEO:/path/to/your/project/inbox/demo.mp4
 ```
 
 **远程 URL**:
@@ -135,7 +135,7 @@ MEDIA_VIDEO:https://example.com/video/tutorial.mp4
 #### 发送文件
 **本地文件**:
 ```
-MEDIA_FILE:/Users/user/work/cursor/cursor-remote-control/inbox/report.pdf
+MEDIA_FILE:/path/to/your/project/inbox/report.pdf
 ```
 
 **远程 URL**:
