@@ -1383,7 +1383,7 @@ export class CommandHandler {
 			if (sessions.length === 0) {
 				CommandHandler.ideForwardEnabled.delete(options.chatId);
 				await this.adapter.reply('⚠️ IDE 转发模式已自动关闭（没有活跃的 Feedback Gate 实例）');
-				return false;
+				return true;
 			}
 			return this.handleIde(`/ide ${text}`, options.chatId);
 		}
