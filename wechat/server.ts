@@ -124,8 +124,8 @@ function markdownToPlainText(text: string): string {
 	// 2. 图片：完全移除
 	result = result.replace(/!\[[^\]]*\]\([^)]*\)/g, '');
 	
-	// 3. 链接：只保留显示文本
-	result = result.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1');
+	// 3. 链接：保留显示文本和 URL（微信不支持超链接，需展示原始 URL）
+	result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 $2');
 	
 	// 4. 表格：移除分隔符行，管道符转空格
 	result = result.replace(/^\|[\s:|-]+\|$/gm, '');
@@ -1425,8 +1425,8 @@ async function startWechatServer() {
 							media: {
 								encrypt_query_param: uploaded.downloadParam,
 								aes_key: uploaded.aeskeyBase64,
+								encrypt_type: 1,
 							},
-							hd_size: uploaded.fileSize,
 							mid_size: uploaded.fileSizeCiphertext,
 						},
 					},
@@ -1476,6 +1476,7 @@ async function startWechatServer() {
 							media: {
 								encrypt_query_param: uploaded.downloadParam,
 								aes_key: uploaded.aeskeyBase64,
+								encrypt_type: 1,
 							},
 							video_size: uploaded.fileSizeCiphertext,
 						},
@@ -1527,6 +1528,7 @@ async function startWechatServer() {
 							media: {
 								encrypt_query_param: uploaded.downloadParam,
 								aes_key: uploaded.aeskeyBase64,
+								encrypt_type: 1,
 							},
 							file_name: fileName,
 							len: String(uploaded.fileSize),

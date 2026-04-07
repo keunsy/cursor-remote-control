@@ -158,7 +158,7 @@ export async function uploadImageToCdn(params: {
 		console.log(`[媒体/上传] 密文: ${filesize} bytes, filekey: ${filekey}`);
 
 		// 2. 调用 getuploadurl 获取上传参数
-		const uploadUrlRes = await fetch(`${baseUrl}/getuploadurl`, {
+		const uploadUrlRes = await fetch(`${baseUrl}/ilink/bot/getuploadurl`, {
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json',
@@ -307,7 +307,7 @@ export async function uploadVideoToCdn(params: {
 		console.log(`[媒体/视频上传] 文件: ${filePath}, 原文件: ${rawsize} bytes, 密文: ${filesize} bytes`);
 
 		// 2. 调用 getuploadurl 获取上传参数
-		const uploadUrlRes = await fetch(`${baseUrl}/getuploadurl`, {
+		const uploadUrlRes = await fetch(`${baseUrl}/ilink/bot/getuploadurl`, {
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json',
@@ -443,7 +443,7 @@ export async function uploadFileToCdn(params: {
 		console.log(`[媒体/文件上传] 文件: ${filePath}, 原文件: ${rawsize} bytes, 密文: ${filesize} bytes`);
 
 		// 2. 调用 getuploadurl 获取上传参数
-		const uploadUrlRes = await fetch(`${baseUrl}/getuploadurl`, {
+		const uploadUrlRes = await fetch(`${baseUrl}/ilink/bot/getuploadurl`, {
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json',
