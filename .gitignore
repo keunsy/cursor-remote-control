@@ -94,6 +94,8 @@ feilian-*.md
 *-test-report.md
 TEST-*.md
 *-REPORT.md
+docs/cc-connect-comparison.md
+docs/similar-projects.md
 
 # 根目录 AGENTS.md（包含本机路径，使用 .cursor/AGENTS.md 代替）
 /AGENTS.md
