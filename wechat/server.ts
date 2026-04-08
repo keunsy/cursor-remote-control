@@ -124,8 +124,8 @@ function markdownToPlainText(text: string): string {
 	// 2. 图片：完全移除
 	result = result.replace(/!\[[^\]]*\]\([^)]*\)/g, '');
 	
-	// 3. 链接：保留显示文本和 URL（微信不支持超链接，需展示原始 URL）
-	result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 $2');
+	// 3. 链接：保留显示文本，URL 另起一行方便点击/复制
+	result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1\n$2');
 	
 	// 4. 表格：移除分隔符行，管道符转空格
 	result = result.replace(/^\|[\s:|-]+\|$/gm, '');

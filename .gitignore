@@ -86,6 +86,7 @@ cron-jobs-dingtalk.json
 cron-jobs-feishu.json
 cron-jobs-wecom.json
 cron-jobs-wechat.json
+cron-jobs-telegram.json
 
 # 临时研究文档（AI 生成的探索性文档）
 feilian-*.md
