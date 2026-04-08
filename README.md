@@ -93,48 +93,21 @@ Telegram ── Bot API ───────┤          │
 cursor-remote-control/
 ├── shared/                      # 共享模块（所有平台共用）
 │   ├── memory.ts                # 记忆管理器 v2（SQLite + 向量 + FTS5）
-│   ├── memory-tool.ts           # 记忆 CLI（统一版本，供 Agent 调用）
+│   ├── memory-tool.ts           # 记忆 CLI（供 Agent 调用）
 │   ├── scheduler.ts             # 定时任务调度
 │   ├── heartbeat.ts             # 心跳系统
-│   └── sync-apple-notes.ts      # Apple Notes 同步
+│   └── ...
 │
-├── feishu/                      # 飞书服务（独立）
-│   ├── server.ts                # 飞书主服务
-│   ├── bridge.ts                # OpenAI API 桥接
-│   ├── memory-tool.ts           # 记忆 CLI 包装（转发到 shared）
-│   ├── service.sh               # 飞书服务管理脚本
-│   └── README.md                # 飞书详细文档
-│
-├── dingtalk/                    # 钉钉服务（独立）
-│   ├── server.ts                # 钉钉主服务
-│   ├── dingtalk-client.ts       # 钉钉 Stream 客户端
-│   ├── memory-tool.ts           # 记忆 CLI 包装（转发到 shared）
-│   ├── service.sh               # 钉钉服务管理脚本
-│   └── README.md                # 钉钉详细文档
-│
-├── wecom/                       # 企业微信服务（独立）
-│   ├── server.ts                # 企业微信主服务
-│   ├── wecom-helper.ts          # 企业微信工具函数
-│   ├── memory-tool.ts           # 记忆 CLI 包装（转发到 shared）
-│   ├── service.sh               # 企业微信服务管理脚本
-│   └── README.md                # 企业微信详细文档
-│
-├── wechat/                      # 微信个人号服务（独立）
-│   ├── server.ts                # 微信主服务
-│   ├── wechat-helper.ts         # 微信工具函数
-│   ├── start.ts                 # 启动脚本
-│   └── README.md                # 微信详细文档
-│
-├── telegram/                    # Telegram 服务（独立）
-│   ├── server.ts                # Telegram 主服务
-│   └── README.md                # Telegram 详细文档
+├── feishu/                      # 飞书（含 bridge.ts OpenAI API 桥接）
+├── dingtalk/                    # 钉钉（含 dingtalk-client.ts Stream 客户端）
+├── wecom/                       # 企业微信
+├── wechat/                      # 微信个人号
+├── telegram/                    # Telegram
+│   └── 每个平台目录结构类似：
+│       server.ts / service.sh / README.md
 │
 ├── projects.json                # 项目路由配置（共享）
-├── cron-jobs-feishu.json        # 飞书定时任务
-├── cron-jobs-dingtalk.json      # 钉钉定时任务
-├── cron-jobs-wecom.json         # 企业微信定时任务
-├── cron-jobs-wechat.json        # 微信定时任务
-├── cron-jobs-telegram.json      # Telegram 定时任务
+├── cron-jobs-<platform>.json    # 各平台定时任务
 ├── manage-services.sh           # 统一服务管理脚本
 └── docs/                        # 通用文档
 ```
@@ -451,17 +424,13 @@ bun run send-file.ts /path/to/file.apk <接收人ID>
 
 ## 配置文件管理
 
-| 文件 | 用途 | Git 管理 |
-|------|------|---------|
-| `projects.json.example` | 项目路由模板 | ✅ 提交到仓库 |
-| `projects.json` | 你的实际项目路径 | ❌ 已忽略 |
-| `cron-jobs-*.json.example` | 空的定时任务模板 | ✅ 提交到仓库 |
-| `cron-jobs-*.json` | AI 创建的定时任务 | ❌ 已忽略 |
-| `config/news-sources.json` | 新闻数据源配置 | ✅ 提交到仓库 |
-| `feishu/.env` / `dingtalk/.env` / `wecom/.env` / `wechat/.env` / `telegram/.env` | 实际凭据 | ❌ 已忽略 |
+仓库提供 `.example` 模板文件，首次安装时复制并修改为实际配置。本地配置（`projects.json`、`cron-jobs-*.json`、各平台 `.env`）均已加入 `.gitignore`，不会被 `git pull` 覆盖。
 
-**首次安装**：从 `.example` 文件复制创建配置  
-**Git pull 更新**：你的本地配置不会被覆盖
+| 模板文件 | 用途 |
+|----------|------|
+| `projects.json.example` | 项目路由配置 |
+| `cron-jobs-*.json.example` | 定时任务配置 |
+| `config/news-sources.json` | 新闻数据源配置（直接编辑） |
 
 ---
 
