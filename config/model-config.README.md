@@ -21,7 +21,7 @@
       "name": "Claude Opus 4.6",
       "description": "最强模型（推荐）",
       "aliases": ["opus", "opus46"],
-      "fallbackChain": ["opus-4.6-thinking", "auto"],
+      "fallbackChain": ["auto"],
       "recommended": true
     }
     // ... 更多模型
@@ -32,9 +32,8 @@
 ### defaultModel
 
 **可选值**：
-- `opus-4.6` — 最强模型（推荐）
-- `opus-4.6-thinking` — 长思考链版本
-- `auto` — 自动选择（兜底模型）
+- `opus-4.6` — 最强模型（推荐），启用 CLI Feedback Gate 节约 request 配额
+- `auto` — 自动选择（兜底模型），配额充足，不启用 CLI Feedback Gate
 
 ### preferredModel
 

@@ -115,7 +115,7 @@ cursor-remote-control/
 ## 功能特性
 
 - 🚀 **多渠道支持**: 飞书、钉钉、企业微信、微信个人号、Telegram 等，独立部署，可同时运行，易于扩展新渠道
-- 💰 **配额节约**: 集成 [Feedback Gate](https://github.com/keunsy/cursor-feedback-gate)，单次请求内多轮反馈不消耗额外配额，500 次/月可实现数倍有效交互 ⭐
+- 💰 **配额节约**: 集成 [Feedback Gate](https://github.com/keunsy/cursor-feedback-gate)，Opus 模型下单次请求内多轮反馈不消耗额外配额，500 次/月可实现数倍有效交互；auto 模式配额充足，不启用 CLI Feedback Gate ⭐
 - 🖥️ **IDE 远程入队**: `/ide` 指令从 IM 直接向 Cursor IDE 队列投递消息，支持多窗口 PID 路由和双向反馈（依赖 [cursor-feedback-gate](https://github.com/keunsy/cursor-feedback-gate)）⭐
 - 🧠 **记忆系统**: 混合搜索（FTS5 + 向量）、时间衰减、MMR 去重、自动 Flush
 - ⏰ **定时任务**: AI 通过对话创建 Cron 任务，自动执行并推送通知
@@ -464,7 +464,7 @@ cd <platform> && bash service.sh logs     # 查看日志
 A: 不需要。运行 `agent login` 登录后会自动使用登录凭据。
 
 **Q: 为什么提示配额用完？**  
-A: 默认 `opus-4.6`。如果配额用尽，可切换：`/模型 auto`（省配额）或 `/模型 opust`（深度推理）。
+A: 默认 Opus 模型。如果配额用尽，系统自动 fallback 到 `auto`（免费模型），也可手动切换：`/模型 auto`。auto 模式下 CLI Feedback Gate 不启用（配额充足无需节约 request）。
 
 **Q: 所有渠道可以同时运行吗？**  
 A: 可以！飞书、钉钉、企业微信、微信、Telegram 等所有平台服务独立运行，互不干扰，共享 `projects.json` 配置和记忆系统。
