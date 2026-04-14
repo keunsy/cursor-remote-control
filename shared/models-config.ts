@@ -568,6 +568,13 @@ export function isBlacklisted(modelId: string): boolean {
 }
 
 /**
+ * Opus 模型且未被拉黑时启用 Feedback Gate（节约 request 配额）
+ */
+export function shouldEnableFeedbackGate(modelId: string): boolean {
+	return modelId.toLowerCase().includes('opus') && !isBlacklisted(modelId);
+}
+
+/**
  * 手动重置黑名单（清空所有记录）
  */
 export function resetBlacklist(): void {

@@ -39,7 +39,7 @@ if (!processLock.acquire()) {
 	process.exit(1);
 }
 import { humanizeCronInChinese } from 'cron-chinese';
-import { getAvailableModelChain, shouldFallback, isQuotaExhausted, addToBlacklist, isBlacklisted, getDefaultModel } from "../shared/models-config.js";
+import { getAvailableModelChain, shouldFallback, isQuotaExhausted, addToBlacklist, isBlacklisted, getDefaultModel, shouldEnableFeedbackGate } from "../shared/models-config.js";
 
 const HOME = process.env.HOME;
 if (!HOME) throw new Error("$HOME is not set");
@@ -1885,7 +1885,7 @@ async function runAgent(
 			const existingSessionId = getActiveSessionId(workspace);
 			const isNewSession = !existingSessionId;
 			
-			const isOpus = primaryModel.toLowerCase().includes('opus');
+			const isOpus = shouldEnableFeedbackGate(primaryModel);
 			
 			const onFeedbackRequested = chatId && isOpus
 				? async (req: FeedbackGateRequest) => {

@@ -16,6 +16,7 @@ import {
 	isQuotaExhausted,
 	addToBlacklist,
 	isBlacklisted,
+	shouldEnableFeedbackGate,
 } from '../shared/models-config.js';
 import * as qrcodeTerminal from 'qrcode-terminal';
 
@@ -2318,7 +2319,7 @@ async function startWechatServer() {
 				try {
 					const taskStart = Date.now();
 				const currentModel = config.CURSOR_MODEL || getDefaultModel();
-				const isOpus = currentModel.toLowerCase().includes('opus');
+				const isOpus = shouldEnableFeedbackGate(currentModel);
 				const ex = await execAgentWithFallback(
 				agentExecutor,
 				workspace,
