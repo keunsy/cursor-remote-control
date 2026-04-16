@@ -10,8 +10,8 @@ import { resolve as pathResolve, basename } from 'path';
 import { existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
 import { randomUUID } from 'crypto';
 
-/** 从各平台子目录启动时 cwd 在 feishu|dingtalk|wecom|wechat，定时任务 JSON 应在仓库根目录 */
-const CRON_JSON_AT_REPO_ROOT = new Set(['feishu', 'dingtalk', 'wecom', 'wechat']);
+/** 从各平台子目录启动时 cwd 在 feishu|dingtalk|wecom|wechat|telegram，定时任务 JSON 应在仓库根目录 */
+const CRON_JSON_AT_REPO_ROOT = new Set(['feishu', 'dingtalk', 'wecom', 'wechat', 'telegram']);
 
 function resolveCronJobsJsonPath(platform: string): string {
 	const name = `cron-jobs-${platform}.json`;
@@ -55,7 +55,7 @@ export interface AgentExecutorOptions {
 	model: string;
 	prompt: string;
 	sessionId?: string;
-	platform?: 'feishu' | 'dingtalk' | 'wecom' | 'wechat';
+	platform?: 'feishu' | 'dingtalk' | 'wecom' | 'wechat' | 'telegram';
 	webhook?: string;
 	
 	// 回调函数

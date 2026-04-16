@@ -19,6 +19,8 @@ import { MemoryManager } from '../shared/memory.js';
 import { HeartbeatRunner, getHeartbeatGlobalConfig, createSessionActivityGate, isHeartbeatEnabled } from '../shared/heartbeat.js';
 import { FeilianController, type OperationResult } from '../shared/feilian-control.js';
 import { fetchNews } from '../shared/news-fetcher.js';
+import { fetchWeather } from '../shared/weather-fetcher.js';
+import { fetchGithubTrending } from '../shared/github-trending-fetcher.js';
 import { getHealthStatus } from '../shared/news-sources/monitoring.js';
 import { humanizeCronInChinese } from 'cron-chinese';
 import { CommandHandler, type PlatformAdapter, type CommandContext } from '../shared/command-handler.js';
@@ -1031,6 +1033,20 @@ const scheduler = new Scheduler({
 					}
 					return { status: "ok" as const, result: messages[0] ?? "" };
 				}
+
+				case 'fetch-weather': {
+					const city = job.task.options?.city ?? '北京';
+					console.log(`[scheduler] 获取天气: ${city}`);
+					const card = await fetchWeather({ city, platform: 'wecom' });
+					return { status: 'ok' as const, result: card };
+				}
+
+				case 'fetch-github-trending': {
+					const opts = job.task.options ?? {};
+					console.log(`[scheduler] 获取 GitHub Trending: ${opts.since ?? 'daily'}`);
+					const card = await fetchGithubTrending(opts);
+					return { status: 'ok' as const, result: card };
+				}
 				
 				case 'agent-prompt': {
 					try {
@@ -1264,5 +1280,10 @@ process.on('SIGINT', async () => {
 	wsClient.disconnect();
 	
 	console.log('[退出] 清理完成，再见！');
+	process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+	console.log('[退出] 收到 SIGTERM');
 	process.exit(0);
 });

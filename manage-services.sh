@@ -15,6 +15,7 @@ SERVICES=(
     "com.dingtalk-cursor-claw"
     "com.wecom-cursor-claw"
     "com.wechat-cursor-claw"
+    "com.cursor-telegram"
 )
 
 # 检测是否已安装为 launchd 服务
@@ -40,7 +41,7 @@ detect_mode() {
     fi
     
     # 检查是否有手动启动的进程（精确匹配 start.ts 和 server.ts）
-    if pgrep -f "bun run.*(feishu|dingtalk|wecom|wechat)/(start|server)" > /dev/null 2>&1; then
+    if pgrep -f "bun run.*(feishu|dingtalk|wecom|wechat|telegram)/(start|server)" > /dev/null 2>&1; then
         echo "manual"
         return
     fi
@@ -57,7 +58,7 @@ install_launchd() {
     # 检查每个子项目的 service.sh
     local installed=0
     
-    for dir in feishu dingtalk wecom wechat; do
+    for dir in feishu dingtalk wecom wechat telegram; do
         if [ -f "$PROJECT_ROOT/$dir/service.sh" ]; then
             echo "  安装 $dir 服务..."
             cd "$PROJECT_ROOT/$dir"
@@ -132,8 +133,8 @@ stop_launchd() {
     sleep 2
     
     # 强制清理残留进程
-    ps aux | grep -E "bun run.*/(dingtalk|feishu|wecom|wechat)/" | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null || true
-    ps aux | grep -E "caffeinate.*/(dingtalk|feishu|wecom|wechat)/" | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null || true
+    ps aux | grep -E "bun run.*/(dingtalk|feishu|wecom|wechat|telegram)/" | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null || true
+    ps aux | grep -E "caffeinate.*/(dingtalk|feishu|wecom|wechat|telegram)/" | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null || true
     
     echo "  ✅ 所有服务已停止"
 }
@@ -159,6 +160,14 @@ start_manual() {
     nohup bun run start-with-keepawake.ts > /tmp/wechat-cursor.log 2>&1 &
     echo "  ✅ 微信个人号服务已启动 (PID: $!)"
     
+    if [ -f "$PROJECT_ROOT/telegram/.env" ]; then
+        cd "$PROJECT_ROOT/telegram"
+        nohup bun run start-with-keepawake.ts > /tmp/telegram-cursor.log 2>&1 &
+        echo "  ✅ Telegram 服务已启动 (PID: $!)"
+    else
+        echo "  ⚠️  Telegram: 跳过（.env 未配置）"
+    fi
+    
     sleep 3
     echo ""
     echo "✅ 所有服务已启动"
@@ -170,10 +179,10 @@ start_manual() {
 stop_manual() {
     echo "🛑 停止所有服务..."
     
-    pkill -9 -f "cursor-remote-control/(feishu|dingtalk|wecom|wechat)" 2>/dev/null || true
+    pkill -9 -f "cursor-remote-control/(feishu|dingtalk|wecom|wechat|telegram)" 2>/dev/null || true
     sleep 2
     
-    REMAINING=$(pgrep -f "cursor-remote-control/(feishu|dingtalk|wecom|wechat)" 2>/dev/null | wc -l || echo "0")
+    REMAINING=$(pgrep -f "cursor-remote-control/(feishu|dingtalk|wecom|wechat|telegram)" 2>/dev/null | wc -l || echo "0")
     if [[ "$REMAINING" -eq 0 ]]; then
         echo "  ✅ 所有服务已停止"
     else
@@ -256,26 +265,27 @@ show_status() {
     DINGTALK_PID=$(pgrep -f 'dingtalk/start.ts' | head -1 || echo "")
     WECOM_PID=$(pgrep -f 'wecom/start.ts' | grep -v keepawake | head -1 || echo "")
     WECHAT_PID=$(pgrep -f 'wechat/start.ts' | grep -v keepawake | head -1 || echo "")
+    TELEGRAM_PID=$(pgrep -f 'telegram/start.ts' | grep -v keepawake | head -1 || echo "")
     
     if [[ -n "$FEISHU_PID" ]]; then
         FEISHU_CAFF=$(pgrep -f "caffeinate.*feishu" | head -1 || echo "")
-        echo "  🟢 飞书:     PID $FEISHU_PID (caffeinate: $FEISHU_CAFF)"
+        echo "  🟢 飞书:       PID $FEISHU_PID (caffeinate: $FEISHU_CAFF)"
     else
-        echo "  🔴 飞书:     未运行"
+        echo "  🔴 飞书:       未运行"
     fi
     
     if [[ -n "$DINGTALK_PID" ]]; then
         DINGTALK_CAFF=$(pgrep -f "caffeinate.*dingtalk" | head -1 || echo "")
-        echo "  🟢 钉钉:     PID $DINGTALK_PID (caffeinate: $DINGTALK_CAFF)"
+        echo "  🟢 钉钉:       PID $DINGTALK_PID (caffeinate: $DINGTALK_CAFF)"
     else
-        echo "  🔴 钉钉:     未运行"
+        echo "  🔴 钉钉:       未运行"
     fi
     
     if [[ -n "$WECOM_PID" ]]; then
         WECOM_CAFF=$(pgrep -f "caffeinate.*wecom" | head -1 || echo "")
-        echo "  🟢 企业微信: PID $WECOM_PID (caffeinate: $WECOM_CAFF)"
+        echo "  🟢 企业微信:   PID $WECOM_PID (caffeinate: $WECOM_CAFF)"
     else
-        echo "  🔴 企业微信: 未运行"
+        echo "  🔴 企业微信:   未运行"
     fi
     
     if [[ -n "$WECHAT_PID" ]]; then
@@ -283,6 +293,17 @@ show_status() {
         echo "  🟢 微信个人号: PID $WECHAT_PID (caffeinate: $WECHAT_CAFF)"
     else
         echo "  🔴 微信个人号: 未运行"
+    fi
+    
+    if [[ -n "$TELEGRAM_PID" ]]; then
+        TELEGRAM_CAFF=$(pgrep -f "caffeinate.*telegram" | head -1 || echo "")
+        echo "  🟢 Telegram:   PID $TELEGRAM_PID (caffeinate: $TELEGRAM_CAFF)"
+    else
+        if [ -f "$PROJECT_ROOT/telegram/.env" ]; then
+            echo "  🔴 Telegram:   未运行"
+        else
+            echo "  ⚪ Telegram:   未配置（缺少 .env）"
+        fi
     fi
     
     echo ""
@@ -296,6 +317,7 @@ show_status() {
     echo "  钉钉:     tail -f /tmp/dingtalk-cursor.log"
     echo "  企业微信: tail -f /tmp/wecom-cursor.log"
     echo "  微信:     tail -f /tmp/wechat-cursor.log"
+    echo "  Telegram: tail -f /tmp/telegram-cursor.log"
 }
 
 # ========== 清理重复进程 ==========
@@ -305,7 +327,7 @@ clean_duplicates() {
     echo ""
     
     # 获取所有进程 PID
-    all_pids=$(ps aux | grep -E "bun run.*/(dingtalk|feishu|wecom|wechat)/" | grep -v grep | awk '{print $2}' | sort)
+    all_pids=$(ps aux | grep -E "bun run.*/(dingtalk|feishu|wecom|wechat|telegram)/" | grep -v grep | awk '{print $2}' | sort)
     
     if [ -z "$all_pids" ]; then
         echo "没有运行中的进程"
@@ -371,10 +393,13 @@ show_logs() {
         wechat)
             tail -f /tmp/wechat-cursor.log
             ;;
+        telegram)
+            tail -f /tmp/telegram-cursor.log
+            ;;
         *)
             echo "❌ 未知服务: $service"
             echo ""
-            echo "可用服务: feishu, dingtalk, wecom, wechat"
+            echo "可用服务: feishu, dingtalk, wecom, wechat, telegram"
             exit 1
             ;;
     esac
@@ -399,7 +424,7 @@ show_help() {
     echo ""
     echo "维护命令:"
     echo "  clean               清理重复进程"
-    echo "  logs <service>      查看日志（feishu/dingtalk/wecom/wechat）"
+    echo "  logs <service>      查看日志（feishu/dingtalk/wecom/wechat/telegram）"
     echo ""
     echo "示例:"
     echo "  bash manage-services.sh status          # 查看状态"

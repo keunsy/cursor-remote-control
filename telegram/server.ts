@@ -15,13 +15,16 @@
 import TelegramBot from 'node-telegram-bot-api';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, watchFile, unwatchFile, readdirSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { Scheduler } from '../shared/scheduler.js';
+import { Scheduler, type CronJob } from '../shared/scheduler.js';
 import { MemoryManager } from '../shared/memory.js';
-import { HeartbeatRunner } from '../shared/heartbeat.js';
+import { HeartbeatRunner, getHeartbeatGlobalConfig, isHeartbeatEnabled, createSessionActivityGate } from '../shared/heartbeat.js';
 import { CommandHandler, type PlatformAdapter, type CommandContext } from '../shared/command-handler.js';
 import { AgentExecutor } from '../shared/agent-executor.js';
-import { getDefaultModel } from '../shared/models-config.js';
+import { getDefaultModel, getAvailableModelChain, shouldFallback, isQuotaExhausted, addToBlacklist, isBlacklisted } from '../shared/models-config.js';
 import { ProcessLock } from '../shared/process-lock.js';
+import { fetchNews } from '../shared/news-fetcher.js';
+import { fetchWeather } from '../shared/weather-fetcher.js';
+import { fetchGithubTrending } from '../shared/github-trending-fetcher.js';
 
 const HOME = process.env.HOME!;
 
@@ -167,13 +170,174 @@ bot.on('webhook_error', (error) => {
 	console.error('[Telegram] Webhook 错误:', error.message);
 });
 
-// ── 共享模块初始化 ──────────────────────────────
-const scheduler = new Scheduler('telegram');
-const memory = config.VOLC_EMBEDDING_API_KEY
-	? new MemoryManager(config.VOLC_EMBEDDING_API_KEY, config.VOLC_EMBEDDING_MODEL)
-	: null;
+// ── 最近活跃会话（用于定时任务推送）─────
+let lastActiveTgChatId: number | undefined;
 
-const heartbeat = new HeartbeatRunner('telegram', `tg:system`);
+// ── 共享模块初始化 ──────────────────────────────
+const defaultWorkspaceGlobal = projectsConfig.projects[projectsConfig.default_project]?.path || ROOT;
+const cronStorePath = resolve(ROOT, 'cron-jobs-telegram.json');
+
+const scheduler = new Scheduler({
+	storePath: cronStorePath,
+	defaultWorkspace: defaultWorkspaceGlobal,
+	onExecute: async (job: CronJob) => {
+		if (job.task) {
+			switch (job.task.type) {
+				case 'fetch-news': {
+					const topN = job.task.options?.topN ?? 15;
+					const { messages } = await fetchNews({ topN, platform: 'telegram' });
+					if (messages.length > 1) {
+						return { status: 'ok' as const, result: JSON.stringify({ chunks: messages }) };
+					}
+					return { status: 'ok' as const, result: messages[0] ?? '' };
+				}
+
+				case 'fetch-weather': {
+					const city = job.task.options?.city ?? '北京';
+					const card = await fetchWeather({ city });
+					return { status: 'ok' as const, result: card };
+				}
+
+				case 'fetch-github-trending': {
+					const opts = job.task.options ?? {};
+					const card = await fetchGithubTrending(opts);
+					return { status: 'ok' as const, result: card };
+				}
+
+				case 'agent-prompt': {
+					try {
+						const workspace = job.workspace || defaultWorkspaceGlobal;
+						const primaryModel = job.model || config.CURSOR_MODEL || getDefaultModel();
+						const chain = getAvailableModelChain(primaryModel);
+						if (chain.length === 0) throw new Error('所有模型都已配额用尽');
+						let agentResult: string = '';
+						for (let i = 0; i < chain.length; i++) {
+							const m = chain[i];
+							if (!m) continue;
+							try {
+								const r = await agentExecutor.execute({
+									workspace,
+									model: m.id,
+									prompt: job.task.prompt,
+									platform: 'telegram',
+									apiKey: config.CURSOR_API_KEY || undefined,
+								});
+								agentResult = r.result;
+								break;
+							} catch (e) {
+								if (isQuotaExhausted(e as Error)) addToBlacklist(m.id);
+								if (!shouldFallback(e as Error) || i === chain.length - 1) throw e;
+								console.warn(`[定时 Fallback] ${m.id} 失败，尝试下一个`);
+							}
+						}
+						return { status: 'ok' as const, result: agentResult };
+					} catch (err) {
+						const errMsg = err instanceof Error ? err.message : String(err);
+						return { status: 'error' as const, error: errMsg, result: `❌ Agent 执行失败\n\n${errMsg}` };
+					}
+				}
+
+				case 'text':
+					return { status: 'ok' as const, result: job.task.content };
+			}
+		}
+		return { status: 'ok' as const, result: job.message };
+	},
+	onDelivery: async (job: CronJob, result: string) => {
+		const chatId = job.webhook ? Number(job.webhook) : lastActiveTgChatId;
+		if (!chatId) {
+			console.warn('[定时] 无 chat ID，跳过推送');
+			return;
+		}
+		let chunks: string[];
+		try {
+			const parsed = JSON.parse(result) as { chunks?: string[] };
+			chunks = parsed.chunks || [result];
+		} catch {
+			chunks = [result];
+		}
+		for (let i = 0; i < chunks.length; i++) {
+			const ch = chunks[i];
+			if (!ch) continue;
+			const title = chunks.length > 1
+				? `⏰ **${job.name}** (${i + 1}/${chunks.length})`
+				: `⏰ **定时：${job.name}**`;
+			try {
+				await bot.sendMessage(chatId, `${title}\n\n${ch.slice(0, 4000)}`);
+			} catch (err) {
+				console.error(`[定时] Telegram 推送失败:`, err);
+			}
+			if (i < chunks.length - 1) await new Promise(r => setTimeout(r, 500));
+		}
+	},
+	log: (m: string) => console.log(`[调度] ${m}`),
+});
+const memoryWorkspaceKeyGlobal = (projectsConfig as any).memory_workspace || projectsConfig.default_project;
+const memoryWorkspaceGlobal = projectsConfig.projects[memoryWorkspaceKeyGlobal]?.path || defaultWorkspaceGlobal;
+
+let memory: MemoryManager | undefined;
+try {
+	memory = new MemoryManager({
+		workspaceDir: memoryWorkspaceGlobal,
+		embeddingApiKey: config.VOLC_EMBEDDING_API_KEY,
+		embeddingModel: config.VOLC_EMBEDDING_MODEL,
+		embeddingEndpoint: 'https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal',
+		temporalDecayHalfLife: Number.isFinite(Number((config as any).MEMORY_TEMPORAL_DECAY_HALF_LIFE)) ? Number((config as any).MEMORY_TEMPORAL_DECAY_HALF_LIFE) : 30,
+		mmrLambda: Number.isFinite(Number((config as any).MEMORY_MMR_LAMBDA)) ? Number((config as any).MEMORY_MMR_LAMBDA) : 0.5,
+	});
+} catch (err) {
+	console.warn('[记忆] MemoryManager 初始化失败:', err);
+}
+
+const hbGlobal = getHeartbeatGlobalConfig();
+const heartbeat = new HeartbeatRunner({
+	config: {
+		enabled: isHeartbeatEnabled('telegram'),
+		everyMs: hbGlobal.everyMs,
+		workspaceDir: memoryWorkspaceGlobal,
+		...(hbGlobal.activeHours ? { activeHours: hbGlobal.activeHours } : {}),
+	},
+	shouldRun: createSessionActivityGate(memoryWorkspaceGlobal),
+	onExecute: async (prompt: string) => {
+		memory?.appendSessionLog(memoryWorkspaceGlobal, 'user', '[心跳检查] ' + prompt.slice(0, 200), config.CURSOR_MODEL);
+		const primaryModel = config.CURSOR_MODEL || getDefaultModel();
+		const chain = getAvailableModelChain(primaryModel);
+		let resultText = '';
+		for (let i = 0; i < chain.length; i++) {
+			const m = chain[i];
+			if (!m) continue;
+			try {
+				const r = await agentExecutor.execute({
+					workspace: defaultWorkspaceGlobal,
+					model: m.id,
+					prompt,
+					platform: 'telegram',
+					apiKey: config.CURSOR_API_KEY || undefined,
+				});
+				resultText = r.result;
+				break;
+			} catch (e) {
+				if (isQuotaExhausted(e as Error)) addToBlacklist(m.id);
+				if (!shouldFallback(e as Error) || i === chain.length - 1) throw e;
+				console.warn(`[心跳 Fallback] ${m.id} 失败，尝试下一个`);
+			}
+		}
+		memory?.appendSessionLog(memoryWorkspaceGlobal, 'assistant', resultText.slice(0, 3000), config.CURSOR_MODEL);
+		return resultText;
+	},
+	onDelivery: async (content: string) => {
+		if (!lastActiveTgChatId) {
+			console.warn('[心跳] 无活跃 Telegram 会话，跳过推送');
+			return;
+		}
+		try {
+			await bot.sendMessage(lastActiveTgChatId, content);
+		} catch (err) {
+			console.error('[心跳] Telegram 推送失败:', err);
+		}
+	},
+	log: (m: string) => console.log(`[心跳] ${m}`),
+});
 
 const agentExecutor = new AgentExecutor({
 	timeout: 30 * 60 * 1000,
@@ -442,25 +606,92 @@ class TelegramAdapter implements PlatformAdapter {
 	}
 }
 
-// ── 命令处理器 ──────────────────────────────────
-const commandHandler = new CommandHandler();
+// ── Telegram 文件下载 ──────────────────────────────
+async function downloadTgFile(fileId: string, ext: string): Promise<string> {
+	const file = await bot.getFile(fileId);
+	if (!file.file_path) throw new Error('无法获取文件路径');
+	const url = `https://api.telegram.org/file/bot${config.TELEGRAM_BOT_TOKEN}/${file.file_path}`;
+	const resp = await fetch(url);
+	if (!resp.ok) throw new Error(`下载失败: ${resp.status}`);
+	const buffer = Buffer.from(await resp.arrayBuffer());
+	const filename = `tg_${Date.now()}${ext}`;
+	const savePath = resolve(INBOX_DIR, filename);
+	writeFileSync(savePath, buffer);
+	console.log(`[下载] Telegram 文件已保存: ${savePath} (${buffer.length} bytes)`);
+	return savePath;
+}
 
 // ── 消息处理 ──────────────────────────────────────
 bot.on('message', async (msg) => {
 	const chatId = msg.chat.id;
-	const text = msg.text || '';
+	let text = msg.text || msg.caption || '';
 	
-	// 忽略空消息
-	if (!text.trim()) {
+	const hasMedia = !!(msg.photo || msg.video || msg.document || msg.voice || msg.audio);
+	if (!text.trim() && !hasMedia) {
 		console.log('[消息] 忽略空消息');
 		return;
 	}
 	
-	console.log(`[消息] 收到来自 ${chatId}: ${text.slice(0, 50)}...`);
+	console.log(`[消息] 收到来自 ${chatId}: ${text.slice(0, 50)}${hasMedia ? ' [含媒体]' : ''}...`);
+	lastActiveTgChatId = chatId;
 	
 	const adapter = new TelegramAdapter(bot, chatId, msg.message_id);
 	
-	// 构建命令上下文（使用闭包捕获 chatId）
+	// 处理媒体附件
+	try {
+		if (msg.photo && msg.photo.length > 0) {
+			const largest = msg.photo[msg.photo.length - 1];
+			const path = await downloadTgFile(largest.file_id, '.jpg');
+			const instruction = '\n\n**注意**：这张图片来自 Telegram 临时存储，请直接用 Read 工具读取分析。';
+			text = text
+				? `${text}\n\n图片：${path}${instruction}`
+				: `用户发了一张图片：${path}${instruction}\n\n请查看并回复。`;
+		}
+
+		if (msg.video) {
+			const path = await downloadTgFile(msg.video.file_id, '.mp4');
+			text = text
+				? `${text}\n\n视频：${path}`
+				: `用户发了一段视频：${path}\n\n请查看并回复。`;
+		}
+
+		if (msg.document) {
+			const origName = msg.document.file_name || 'file';
+			const dotIdx = origName.lastIndexOf('.');
+			const ext = dotIdx > 0 ? origName.slice(dotIdx) : '';
+			const path = await downloadTgFile(msg.document.file_id, ext);
+			text = text
+				? `${text}\n\n[附件: ${path}]`
+				: `用户发了文件 ${origName}，已保存到 ${path}`;
+		}
+
+		if (msg.voice) {
+			const path = await downloadTgFile(msg.voice.file_id, '.ogg');
+			text = text
+				? `${text}\n\n语音文件：${path}`
+				: `用户发了一条语音消息，音频文件在 ${path}，请处理并回复。`;
+		}
+
+		if (msg.audio) {
+			const origName = (msg.audio as any).file_name || msg.audio.title || 'audio.mp3';
+			const dotIdx = origName.lastIndexOf('.');
+			const ext = dotIdx > 0 ? origName.slice(dotIdx) : '.mp3';
+			const path = await downloadTgFile(msg.audio.file_id, ext);
+			text = text
+				? `${text}\n\n音频：${path}`
+				: `用户发了音频文件 ${origName}，已保存到 ${path}`;
+		}
+	} catch (err) {
+		console.error('[下载失败]', err);
+		await adapter.reply(`⚠️ 媒体文件下载失败: ${(err as Error).message}`);
+		if (!text.trim()) return;
+	}
+
+	if (!text.trim()) {
+		console.log('[消息] 无可处理内容');
+		return;
+	}
+
 	const defaultWorkspace = projectsConfig.projects[projectsConfig.default_project]?.path || ROOT;
 	const memoryWorkspaceKey = (projectsConfig as any).memory_workspace || projectsConfig.default_project;
 	const memoryWorkspace = projectsConfig.projects[memoryWorkspaceKey]?.path || defaultWorkspace;
@@ -472,7 +703,7 @@ bot.on('message', async (msg) => {
 		memoryWorkspace,
 		config,
 		scheduler,
-		memory,
+		memory: memory || null,
 		heartbeat,
 		agentExecutor,
 		busySessions,
@@ -486,8 +717,10 @@ bot.on('message', async (msg) => {
 		rootDir: ROOT,
 	};
 	
-	// 尝试命令处理
-	const handled = await commandHandler.handle(text, adapter, ctx);
+	const commandHandler = new CommandHandler(adapter, ctx);
+	const handled = await commandHandler.route(text, (newSessionId: string) => {
+		setActiveSessionId(chatId, defaultWorkspace, newSessionId);
+	}, { chatId: String(chatId) });
 	if (handled) {
 		return;
 	}
@@ -522,66 +755,117 @@ bot.on('message', async (msg) => {
 	busySessions.add(lockKey);
 	
 	try {
-		// 获取会话 ID
 		const sessionId = getActiveSessionId(chatId, workspace);
-		
-		// 发送处理中提示
 		const processingMsg = await bot.sendMessage(chatId, '🤔 思考中...');
-		
-		// 执行 Agent
 		const startTime = Date.now();
-		const result = await agentExecutor.execute({
-			workspace,
-			model: config.CURSOR_MODEL || getDefaultModel(),
-			prompt: actualText,
-			sessionId: sessionId || undefined,
-			platform: 'telegram',
-			webhook: `tg:${chatId}`,
-			apiKey: config.CURSOR_API_KEY || undefined,
-			onProgress: async (progress) => {
-				const elapsed = Math.floor(progress.elapsed / 1000);
-				const phaseEmoji = progress.phase === 'thinking' ? '🤔' :
-				                   progress.phase === 'tool_call' ? '🛠️' : '✍️';
-				const phaseText = progress.phase === 'thinking' ? '思考中' :
-				                  progress.phase === 'tool_call' ? '执行工具' : '生成回复';
-				
-				// 提取最近的代码片段（最后 3 行）
-				const snippet = progress.snippet
-					.split('\n')
-					.filter(l => l.trim())
-					.slice(-3)
-					.join('\n')
-					.slice(0, 100); // 限制长度
-				
-				const status = snippet
-					? `${phaseEmoji} **${phaseText}** (${elapsed}秒)\n\n\`\`\`\n${snippet}\n...\n\`\`\``
-					: `${phaseEmoji} **${phaseText}** (${elapsed}秒)`;
-				
-				try {
-					await bot.editMessageText(status, {
-						chat_id: chatId,
-						message_id: processingMsg.message_id,
-						parse_mode: 'Markdown',
-					});
-				} catch {
-					// 忽略编辑失败（消息可能未改变或更新太频繁）
+		const primaryModel = config.CURSOR_MODEL || getDefaultModel();
+
+		const onProgress = async (progress: { elapsed: number; phase: string; snippet: string }) => {
+			const elapsed = Math.floor(progress.elapsed / 1000);
+			const phaseEmoji = progress.phase === 'thinking' ? '🤔' :
+			                   progress.phase === 'tool_call' ? '🛠️' : '✍️';
+			const phaseText = progress.phase === 'thinking' ? '思考中' :
+			                  progress.phase === 'tool_call' ? '执行工具' : '生成回复';
+			const snippet = progress.snippet
+				.split('\n')
+				.filter((l: string) => l.trim())
+				.slice(-3)
+				.join('\n')
+				.slice(0, 100);
+			const status = snippet
+				? `${phaseEmoji} **${phaseText}** (${elapsed}秒)\n\n\`\`\`\n${snippet}\n...\n\`\`\``
+				: `${phaseEmoji} **${phaseText}** (${elapsed}秒)`;
+			try {
+				await bot.editMessageText(status, {
+					chat_id: chatId,
+					message_id: processingMsg.message_id,
+					parse_mode: 'Markdown',
+				});
+			} catch {}
+		};
+
+		// 模型链 fallback 执行
+		const modelChain = getAvailableModelChain(primaryModel);
+		if (modelChain.length === 0) {
+			throw new Error('所有模型都已配额用尽，请稍后再试。');
+		}
+
+		const wasBlacklisted = isBlacklisted(primaryModel);
+		if (wasBlacklisted) {
+			console.log(`[智能跳过] ${primaryModel} 在黑名单中，静默切换到 ${modelChain[0]?.id}`);
+		}
+
+		let lastError: Error | null = null;
+		let finalResult: { result: string; sessionId?: string; toolSummary?: string[] } | null = null;
+		let usedFallback = false;
+		let fallbackModel: string | undefined;
+
+		for (let i = 0; i < modelChain.length; i++) {
+			const model = modelChain[i];
+			if (!model) continue;
+			const isFallback = i > 0 || wasBlacklisted;
+
+			if (isFallback && !wasBlacklisted) {
+				console.log(`[Fallback ${i}/${modelChain.length - 1}] 尝试 ${model.id}（原模型：${primaryModel}）`);
+			}
+
+			try {
+				const result = await agentExecutor.execute({
+					workspace,
+					model: model.id,
+					prompt: actualText,
+					sessionId: sessionId || undefined,
+					platform: 'telegram',
+					webhook: `tg:${chatId}`,
+					apiKey: config.CURSOR_API_KEY || undefined,
+					onProgress,
+				});
+				finalResult = result;
+				if (isFallback && !(wasBlacklisted && i === 0)) {
+					usedFallback = true;
+					fallbackModel = model.id;
 				}
-			},
-		});
-		
-		// 删除处理中提示
+				break;
+			} catch (error) {
+				lastError = error as Error;
+				if (isQuotaExhausted(lastError)) {
+					addToBlacklist(model.id);
+				}
+				if (!shouldFallback(lastError) || i === modelChain.length - 1) {
+					console.error(`[失败] 模型 ${model.id} 执行失败，无更多 fallback`, lastError.message);
+					throw error;
+				}
+				console.warn(`[失败] 模型 ${model.id} 失败: ${lastError.message.slice(0, 200)}`);
+			}
+		}
+
+		if (!finalResult) {
+			throw new Error(`所有模型都失败了（${modelChain.map(m => m.id).join(' → ')}）`);
+		}
+
 		try {
 			await bot.deleteMessage(chatId, processingMsg.message_id);
 		} catch {}
-		
-		// 发送结果
+
 		const elapsed = Math.floor((Date.now() - startTime) / 1000);
-		const response = `${result.result}\n\n⏱️ 用时: ${elapsed}秒`;
-		await adapter.reply(response);
+		let response = finalResult.result;
 		
-		// 更新会话 ID
-		if (result.sessionId) {
-			setActiveSessionId(chatId, workspace, result.sessionId);
+		if (finalResult.toolSummary && finalResult.toolSummary.length > 0) {
+			const summary = buildToolSummary(finalResult.toolSummary);
+			if (summary) {
+				response = summary + '\n\n---\n\n' + response;
+			}
+		}
+		
+		if (usedFallback && fallbackModel) {
+			response = `⚠️ **模型降级**\n\n\`${primaryModel}\` 不可用，已改用 \`${fallbackModel}\` 完成。\n\n---\n\n` + response;
+		}
+		
+		response += `\n\n⏱️ 用时: ${elapsed}秒`;
+		await adapter.reply(response);
+
+		if (finalResult.sessionId) {
+			setActiveSessionId(chatId, workspace, finalResult.sessionId);
 		}
 	} catch (err) {
 		console.error('[错误]', err);
@@ -590,6 +874,45 @@ bot.on('message', async (msg) => {
 		busySessions.delete(lockKey);
 	}
 });
+
+// ── 工具调用摘要 ──────────────────────────────────
+const TOOL_LABELS: Record<string, string> = {
+	read: "📖 读取", write: "✏️ 写入", strReplace: "✏️ 编辑",
+	shell: "⚡ 执行", grep: "🔍 搜索", glob: "📂 查找",
+	semanticSearch: "🔎 语义搜索", webSearch: "🌐 搜索网页", webFetch: "🌐 抓取网页",
+	delete: "🗑️ 删除", editNotebook: "📓 编辑笔记本",
+	callMcpTool: "🔌 MCP工具", task: "🤖 子任务",
+};
+
+function buildToolSummary(tools: string[]): string {
+	if (tools.length === 0) return "";
+	
+	const groups = new Map<string, { emoji: string; items: string[] }>();
+	
+	for (const tool of tools) {
+		const match = tool.match(/^([🔧📖✏️⚡🔍📂🔎🌐🗑️📓🔌🤖]+)\s+(.+)/);
+		if (!match) continue;
+		const emoji = match[1];
+		const detail = match[2];
+		if (emoji === undefined || detail === undefined) continue;
+		
+		if (!groups.has(emoji)) {
+			groups.set(emoji, { emoji, items: [] });
+		}
+		groups.get(emoji)!.items.push(detail);
+	}
+	
+	const lines: string[] = ['📋 **本次操作：**'];
+	for (const { emoji, items } of groups.values()) {
+		const label = Object.values(TOOL_LABELS).find(l => l.startsWith(emoji))?.replace(/^.+?\s/, '') || '操作';
+		lines.push(`${emoji} **${label}** (${items.length}个)：`);
+		for (const item of items) {
+			lines.push(`  · ${item}`);
+		}
+	}
+	
+	return lines.join('\n');
+}
 
 // ── 优雅关闭 ──────────────────────────────────────
 async function gracefulShutdown(signal: string) {

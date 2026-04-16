@@ -14,6 +14,8 @@ import type { HeartbeatRunner } from "./heartbeat.js";
 import type { AgentExecutor } from "./agent-executor.js";
 import { FeilianController, type OperationResult } from "./feilian-control.js";
 import { fetchNews } from "./news-fetcher.js";
+import { fetchWeather, getSupportedCities } from "./weather-fetcher.js";
+import { fetchGithubTrending } from "./github-trending-fetcher.js";
 import { getHealthStatus } from "./news-sources/monitoring.js";
 import { humanizeCronInChinese } from "cron-chinese";
 import { findModel, formatModelList, getModelChain, getBlacklistStatus, resetBlacklist, getDefaultModel } from "./models-config.js";
@@ -40,7 +42,7 @@ export interface PlatformAdapter {
 // ──────────────────────────────────────────────────
 
 export interface CommandContext {
-	platform: "feishu" | "dingtalk" | "wecom" | "wechat";
+	platform: "feishu" | "dingtalk" | "wecom" | "wechat" | "telegram";
 	projectsConfig: any;
 	defaultWorkspace: string;
 	memoryWorkspace: string;
@@ -76,6 +78,50 @@ function formatElapsed(seconds: number): string {
 		return `${hrs}时${remainMins}分${secs}秒`;
 	}
 	return secs > 0 ? `${mins}分${secs}秒` : `${mins}分钟`;
+}
+
+/**
+ * 解析中文时间调度文本，返回 cron 表达式和剩余文本。
+ * 支持格式：每天10点、每天9:30、每天上午10点、工作日8点、每小时等
+ * 返回 null 表示未检测到调度语法。
+ */
+function parseChineseSchedule(text: string): { cronExpr: string; label: string; remaining: string } | null {
+	const patterns: { regex: RegExp; toCron: (m: RegExpMatchArray) => { expr: string; label: string } }[] = [
+		{
+			regex: /(?:每天|每日)\s*(?:上午|早上|am)?\s*(\d{1,2})[点时:：](\d{1,2})?/i,
+			toCron: (m) => {
+				const h = parseInt(m[1]!, 10);
+				const min = m[2] ? parseInt(m[2], 10) : 0;
+				return { expr: `${min} ${h} * * *`, label: `每天${h}:${String(min).padStart(2, '0')}` };
+			}
+		},
+		{
+			regex: /(?:每天|每日)\s*(?:下午|pm)\s*(\d{1,2})[点时:：](\d{1,2})?/i,
+			toCron: (m) => {
+				const h = parseInt(m[1]!, 10) + (parseInt(m[1]!, 10) < 12 ? 12 : 0);
+				const min = m[2] ? parseInt(m[2], 10) : 0;
+				return { expr: `${min} ${h} * * *`, label: `每天${h}:${String(min).padStart(2, '0')}` };
+			}
+		},
+		{
+			regex: /(?:工作日|周一到周五)\s*(\d{1,2})[点时:：](\d{1,2})?/i,
+			toCron: (m) => {
+				const h = parseInt(m[1]!, 10);
+				const min = m[2] ? parseInt(m[2], 10) : 0;
+				return { expr: `${min} ${h} * * 1-5`, label: `工作日${h}:${String(min).padStart(2, '0')}` };
+			}
+		},
+	];
+
+	for (const { regex, toCron } of patterns) {
+		const match = text.match(regex);
+		if (match) {
+			const { expr, label } = toCron(match);
+			const remaining = text.replace(regex, '').trim();
+			return { cronExpr: expr, label, remaining };
+		}
+	}
+	return null;
 }
 
 function formatRelativeTime(timestamp: number): string {
@@ -116,7 +162,9 @@ export class CommandHandler {
 					? "钉钉"
 					: this.ctx.platform === "wechat"
 						? "微信个人号"
-						: "企业微信";
+						: this.ctx.platform === "telegram"
+							? "Telegram"
+							: "企业微信";
 		const projects = Object.keys(this.ctx.projectsConfig.projects).map(k => `\`${k}\``).join("、");
 
 		const helpText = [
@@ -129,10 +177,12 @@ export class CommandHandler {
 			"- `/终止 [项目名]` `/stop` — 终止正在执行的任务",
 			"- `/终止 --all` — 批量终止所有运行中的任务",
 			"",
-			"**热点 / 新闻**",
+			"**热点 / 新闻 / 天气**",
 			"- `/新闻` `/news` — **立即推送**今日热点（直接发 `/新闻`）；定时例：`/新闻 每天9点 推送10条`",
 			"- `/新闻状态` `/news status` — 各数据源是否可用",
 			"- 也可说：「每天9点推送热点」「30分钟后推送10条新闻」等自动建定时任务",
+			"- `/天气` `/weather` — 查询北京天气；`/天气 上海` 查指定城市；定时例：`/天气 每天10点 北京`",
+			"- `/github` — GitHub Trending 今日热榜 Top20；`/github weekly` 本周榜；`/github 10 python` 指定数量和语言；定时例：`/github 每天10点`",
 			"",
 			"**会话管理**",
 			"- `/会话` `/sessions` — 查看最近会话列表",
@@ -203,7 +253,9 @@ export class CommandHandler {
 
 		// 平台特定的配置预览
 		let credentialPreview = "";
-		if (this.ctx.platform === "wecom") {
+		if (this.ctx.platform === "telegram") {
+			credentialPreview = config.TELEGRAM_BOT_TOKEN ? `\`Bot ...${config.TELEGRAM_BOT_TOKEN.slice(-6)}\`` : "**未设置**";
+		} else if (this.ctx.platform === "wecom") {
 			credentialPreview = config.WECOM_BOT_ID ? `\`...${config.WECOM_BOT_ID.slice(-8)}\`` : "**未设置**";
 		} else if (this.ctx.platform === "feishu") {
 			credentialPreview = config.FEISHU_APP_ID ? `\`...${config.FEISHU_APP_ID.slice(-8)}\`` : "**未设置**";
@@ -540,7 +592,7 @@ export class CommandHandler {
 				`✅ **已切换模型（全局）**\n\n` +
 				`**之前：** \`${prevModel}\`\n` +
 				`**现在：** \`${targetModel.id}\`${fallbackInfo}${restartMsg}\n\n` +
-				`✨ 已更新全局配置，三个平台（飞书/钉钉/企微）同步生效。`
+				`✨ 已更新全局配置，所有平台同步生效。`
 			);
 		} catch (error) {
 			console.error("[模型切换] 写入全局配置失败", error);
@@ -1025,6 +1077,134 @@ export class CommandHandler {
 	}
 
 	// ──────────────────────────────────────────────────
+	// /github - GitHub Trending 热榜
+	// ──────────────────────────────────────────────────
+
+	async handleGithubTrending(args?: string): Promise<void> {
+		try {
+			const schedule = args ? parseChineseSchedule(args) : null;
+			
+			if (schedule) {
+				let since: 'daily' | 'weekly' | 'monthly' = 'daily';
+				let language = '';
+				let topN = 20;
+				
+				if (schedule.remaining) {
+					for (const part of schedule.remaining.split(/\s+/)) {
+						if (['daily', 'weekly', 'monthly'].includes(part.toLowerCase())) {
+							since = part.toLowerCase() as 'daily' | 'weekly' | 'monthly';
+						} else if (['今日', '今天', '日'].includes(part)) {
+							since = 'daily';
+						} else if (['本周', '周'].includes(part)) {
+							since = 'weekly';
+						} else if (['本月', '月'].includes(part)) {
+							since = 'monthly';
+						} else if (/^\d+$/.test(part)) {
+							topN = Math.min(50, Math.max(1, parseInt(part, 10)));
+						} else if (part) {
+							language = part;
+						}
+					}
+				}
+				
+				const sinceLabel = since === 'daily' ? '今日' : since === 'weekly' ? '本周' : '本月';
+				const job = await this.ctx.scheduler.add({
+					name: `${schedule.label} GitHub Trending ${sinceLabel}Top${topN}`,
+					enabled: true,
+					schedule: { kind: 'cron', expr: schedule.cronExpr, tz: 'Asia/Shanghai' },
+					task: { type: 'fetch-github-trending', options: { since, language: language || undefined, topN, translateDesc: true } },
+					message: 'fetch-github-trending',
+					platform: this.ctx.platform,
+				});
+				await this.adapter.reply(
+					`✅ **GitHub Trending 定时任务已创建**\n\n` +
+					`📋 ${job.name}\n` +
+					`⏰ ${schedule.label}\n` +
+					`🔥 ${sinceLabel}热榜 Top${topN}${language ? `（${language}）` : ''}\n\n` +
+					`管理任务：\`/任务\``
+				);
+				console.log(`[命令] /github 创建定时任务: ${schedule.label} ${sinceLabel} top${topN}`);
+				return;
+			}
+
+			let since: 'daily' | 'weekly' | 'monthly' = 'daily';
+			let language = '';
+			let topN = 20;
+
+			if (args) {
+				const parts = args.trim().split(/\s+/);
+				for (const part of parts) {
+					if (['daily', 'weekly', 'monthly'].includes(part.toLowerCase())) {
+						since = part.toLowerCase() as 'daily' | 'weekly' | 'monthly';
+					} else if (['今日', '今天', '日'].includes(part)) {
+						since = 'daily';
+					} else if (['本周', '周'].includes(part)) {
+						since = 'weekly';
+					} else if (['本月', '月'].includes(part)) {
+						since = 'monthly';
+					} else if (/^\d+$/.test(part)) {
+						topN = Math.min(50, Math.max(1, parseInt(part, 10)));
+					} else {
+						language = part;
+					}
+				}
+			}
+
+			const sinceLabel = since === 'daily' ? '今日' : since === 'weekly' ? '本周' : '本月';
+			await this.adapter.reply(`🔥 正在获取 GitHub Trending ${sinceLabel}热榜 Top${topN}${language ? `（${language}）` : ''}...`);
+
+			const card = await fetchGithubTrending({ since, language, topN, translateDesc: true });
+			await this.adapter.reply(card);
+			console.log(`[命令] /github ${since} top${topN} ${language} 推送完成`);
+		} catch (error) {
+			console.error("[命令] /github 查询失败", error);
+			await this.adapter.reply(`❌ GitHub Trending 查询失败\n\n${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	// ──────────────────────────────────────────────────
+	// /天气 - 查询天气
+	// ──────────────────────────────────────────────────
+
+	async handleWeatherNow(args?: string): Promise<void> {
+		try {
+			const schedule = args ? parseChineseSchedule(args) : null;
+			
+			if (schedule) {
+				const city = schedule.remaining || '北京';
+				const job = await this.ctx.scheduler.add({
+					name: `${schedule.label} ${city}天气`,
+					enabled: true,
+					schedule: { kind: 'cron', expr: schedule.cronExpr, tz: 'Asia/Shanghai' },
+					task: { type: 'fetch-weather', options: { city } },
+					message: 'fetch-weather',
+					platform: this.ctx.platform,
+				});
+				await this.adapter.reply(
+					`✅ **天气定时任务已创建**\n\n` +
+					`📋 ${job.name}\n` +
+					`⏰ ${schedule.label}\n` +
+					`🏙️ ${city}\n\n` +
+					`管理任务：\`/任务\``
+				);
+				console.log(`[命令] /天气 创建定时任务: ${schedule.label} ${city}`);
+				return;
+			}
+
+			const targetCity = args?.trim() || '北京';
+			await this.adapter.reply(`🌤️ 正在查询${targetCity}天气...`);
+
+			const card = await fetchWeather({ city: targetCity, platform: this.ctx.platform });
+			await this.adapter.reply(card);
+			console.log(`[命令] /天气 ${targetCity} 推送完成`);
+		} catch (error) {
+			console.error("[命令] /天气 查询失败", error);
+			const errMsg = error instanceof Error ? error.message : String(error);
+			await this.adapter.reply(`❌ 天气查询失败\n\n${errMsg}`);
+		}
+	}
+
+	// ──────────────────────────────────────────────────
 	// /新闻 - 立即推送新闻
 	// ──────────────────────────────────────────────────
 
@@ -1495,6 +1675,20 @@ export class CommandHandler {
 			return true;
 		}
 
+		// /github - GitHub Trending
+		const githubMatch = text.match(/^\/(github|trending|GitHub)\s*(.*)/i);
+		if (githubMatch) {
+			await this.handleGithubTrending((githubMatch[2] ?? "").trim() || undefined);
+			return true;
+		}
+
+		// /天气 - 查询天气
+		const weatherMatch = text.match(/^\/(天气|weather)\s*(.*)/i);
+		if (weatherMatch) {
+			await this.handleWeatherNow((weatherMatch[2] ?? "").trim() || undefined);
+			return true;
+		}
+
 		// /新闻 - 立即推送
 		const newsNowMatch = text.match(/^\/(新闻|news)\s*$/i);
 		if (newsNowMatch) {
@@ -1522,7 +1716,46 @@ export class CommandHandler {
 		return true;
 	}
 
-		// 未匹配任何命令
-		return false;
+	// 自然语言定时任务检测（不以 / 开头的调度请求）
+	const nlSchedule = parseChineseSchedule(text);
+	if (nlSchedule) {
+		const remaining = nlSchedule.remaining.toLowerCase();
+		
+		if (/天气|weather|气温|穿衣/.test(remaining)) {
+			await this.handleWeatherNow(`${text}`);
+			return true;
+		}
+		
+		if (/github|trending|热榜|趋势/.test(remaining)) {
+			const cleanArgs = remaining.replace(/(?:推送|发送|给我|通知|提醒)\s*/g, '').replace(/github\s*trending?/i, '').trim();
+			const schedText = text.match(/(每天|每日|工作日).*?[点时]/)?.[0] || '';
+			await this.handleGithubTrending(`${schedText} ${cleanArgs}`.trim());
+			return true;
+		}
+		
+		if (/新闻|热点|news|资讯/.test(remaining)) {
+			const topNMatch = remaining.match(/(\d+)\s*条/);
+			const topN = topNMatch ? parseInt(topNMatch[1]!, 10) : 15;
+			const job = await this.ctx.scheduler.add({
+				name: `${nlSchedule.label} 推送${topN}条热点`,
+				enabled: true,
+				schedule: { kind: 'cron', expr: nlSchedule.cronExpr, tz: 'Asia/Shanghai' },
+				task: { type: 'fetch-news', options: { topN } },
+				message: 'fetch-news',
+				platform: this.ctx.platform,
+			});
+			await this.adapter.reply(
+				`✅ **新闻定时任务已创建**\n\n` +
+				`📋 ${job.name}\n` +
+				`⏰ ${nlSchedule.label}\n` +
+				`📰 每次推送 ${topN} 条\n\n` +
+				`管理任务：\`/任务\``
+			);
+			return true;
+		}
+	}
+
+	// 未匹配任何命令
+	return false;
 	}
 }

@@ -26,6 +26,8 @@ import { MemoryManager } from '../shared/memory.js';
 import { HeartbeatRunner, getHeartbeatGlobalConfig, createSessionActivityGate, isHeartbeatEnabled } from '../shared/heartbeat.js';
 import { FeilianController, type OperationResult } from '../shared/feilian-control.js';
 import { fetchNews } from '../shared/news-fetcher.js';
+import { fetchWeather } from '../shared/weather-fetcher.js';
+import { fetchGithubTrending } from '../shared/github-trending-fetcher.js';
 import { getHealthStatus } from '../shared/news-sources/monitoring.js';
 import { CommandHandler, type PlatformAdapter, type CommandContext } from '../shared/command-handler.js';
 import { ProcessLock } from '../shared/process-lock.js';
@@ -1594,6 +1596,20 @@ async function startWechatServer() {
 							return { status: 'ok' as const, result: JSON.stringify({ chunks: messages }) };
 						}
 						return { status: 'ok' as const, result: messages[0] ?? '' };
+					}
+
+					case 'fetch-weather': {
+						const city = job.task.options?.city ?? '北京';
+						console.log(`[定时任务] 获取天气: ${city}`);
+						const card = await fetchWeather({ city, platform: 'wechat' });
+						return { status: 'ok' as const, result: card };
+					}
+
+					case 'fetch-github-trending': {
+						const opts = job.task.options ?? {};
+						console.log(`[定时任务] 获取 GitHub Trending: ${opts.since ?? 'daily'}`);
+						const card = await fetchGithubTrending(opts);
+						return { status: 'ok' as const, result: card };
 					}
 					
 					case 'agent-prompt': {

@@ -25,7 +25,9 @@ export type CronSchedule =
 export type CronTaskPayload =
 	| { type: 'text'; content: string }
 	| { type: 'agent-prompt'; prompt: string; options?: { timeoutMs?: number } }
-	| { type: 'fetch-news'; options?: { topN?: number } };
+	| { type: 'fetch-news'; options?: { topN?: number } }
+	| { type: 'fetch-weather'; options?: { city?: string } }
+	| { type: 'fetch-github-trending'; options?: { since?: 'daily' | 'weekly' | 'monthly'; language?: string; topN?: number; translateDesc?: boolean } };
 
 export type CronJob = {
 	id: string;
@@ -42,7 +44,7 @@ export type CronJob = {
 	
 	workspace?: string;
 	model?: string;
-	platform?: 'feishu' | 'dingtalk' | 'wecom' | 'wechat';  // 创建任务的平台
+	platform?: 'feishu' | 'dingtalk' | 'wecom' | 'wechat' | 'telegram';  // 创建任务的平台
 	webhook?: string;  // 创建任务时的回调地址（钉钉）或 chatId（飞书/企业微信）
 	createdAt: string;
 	updatedAt: string;
