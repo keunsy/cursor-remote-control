@@ -376,6 +376,12 @@ export class AgentExecutor {
 						
 						case 'assistant':
 							phase = 'responding';
+							// With --stream-partial-output, the CLI emits 3 kinds of assistant events:
+							//   1. Streaming delta (timestamp_ms present, model_call_id absent) → new text
+							//   2. Buffered flush before tool call (both present) → duplicate, skip
+							//   3. Final flush at end of turn (both absent) → duplicate, skip
+							if (ev.model_call_id) break;
+							if (!ev.timestamp_ms) break;
 							if (ev.message?.content) {
 								for (const c of ev.message.content) {
 									if (c.type === 'text' && c.text) {
@@ -473,7 +479,15 @@ export class AgentExecutor {
 							
 						const data = trigger.data || {};
 						const triggerId = data.trigger_id || '';
-						const isKeepalive = feedbackGateKeepalivePending;
+						const userRepliedFlag = pathResolve(tmpDir, 'feedback_gate_user_replied.flag');
+						let userRepliedRecently = false;
+						try {
+							if (existsSync(userRepliedFlag)) {
+								unlinkSync(userRepliedFlag);
+								userRepliedRecently = true;
+							}
+						} catch {}
+						const isKeepalive = userRepliedRecently ? false : feedbackGateKeepalivePending;
 						feedbackGateKeepalivePending = false;
 						feedbackGateActive = true;
 						feedbackGatePending = true;
@@ -514,6 +528,7 @@ export class AgentExecutor {
 						});
 						if (!isKeepalive) {
 							assistantBuf = '';
+							lastSegment = '';
 						}
 					} catch {
 						// invalid file, skip
@@ -709,6 +724,10 @@ export function writeFeedbackGateResponse(triggerId: string, userInput: string):
 		source: 'cursor-remote-control',
 	};
 	writeFileSync(responseFile, JSON.stringify(data, null, 2));
+
+	const userRepliedFlag = pathResolve(tmpDir, 'feedback_gate_user_replied.flag');
+	writeFileSync(userRepliedFlag, triggerId);
+
 	console.log(`[FeedbackGate] Response written: ${responseFile}`);
 }
 

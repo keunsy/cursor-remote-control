@@ -345,6 +345,35 @@ const agentExecutor = new AgentExecutor({
 });
 
 // ── 工具函数 ──────────────────────────────────────
+
+function isFeedbackGateDuplicate(fgOutput: string, finalOutput: string): boolean {
+	const fg = fgOutput.trim();
+	const fo = finalOutput.trim();
+	if (!fg || !fo) return false;
+	if (fg === fo) return true;
+	if (fg.includes(fo) || fo.includes(fg)) return true;
+
+	const normalize = (s: string) => s.replace(/\s+/g, ' ').trim();
+	const nfg = normalize(fg);
+	const nfo = normalize(fo);
+	if (nfg === nfo) return true;
+	if (nfg.includes(nfo) || nfo.includes(nfg)) return true;
+
+	// Head match: final output starts with same content as FG output
+	const headLen = Math.min(300, nfg.length, nfo.length);
+	if (headLen > 50 && nfg.slice(0, headLen) === nfo.slice(0, headLen)) return true;
+
+	// High overlap ratio: if >70% of final output lines already appeared in FG output
+	const fgLines = new Set(fg.split('\n').map(l => l.trim()).filter(Boolean));
+	const foLines = fo.split('\n').map(l => l.trim()).filter(Boolean);
+	if (foLines.length > 0 && fgLines.size > 0) {
+		const overlap = foLines.filter(l => fgLines.has(l)).length;
+		if (overlap / foLines.length > 0.7) return true;
+	}
+
+	return false;
+}
+
 function formatElapsed(seconds: number): string {
 	if (seconds < 60) return `${seconds}秒`;
 	const mins = Math.floor(seconds / 60);
@@ -2336,6 +2365,7 @@ async function startWechatServer() {
 					const taskStart = Date.now();
 				const currentModel = config.CURSOR_MODEL || getDefaultModel();
 				const isOpus = shouldEnableFeedbackGate(currentModel);
+				let lastFeedbackGateOutput = '';
 				const ex = await execAgentWithFallback(
 				agentExecutor,
 				workspace,
@@ -2376,6 +2406,9 @@ async function startWechatServer() {
 								existingFG.triggerId = req.triggerId;
 								existingFG.createdAt = Date.now();
 							}
+							if (req.agentOutput) {
+								lastFeedbackGateOutput = req.agentOutput;
+							}
 							return;
 						}
 						const fpCleanup = activeTypingCleanup.get(uid);
@@ -2390,6 +2423,7 @@ async function startWechatServer() {
 							createdAt: Date.now(),
 						});
 						if (req.agentOutput) {
+							lastFeedbackGateOutput = req.agentOutput;
 							await sendWechatText(uid, req.agentOutput, contextToken);
 						}
 						const round = (feedbackRoundCounter.get(uid) || 0) + 1;
@@ -2418,7 +2452,11 @@ async function startWechatServer() {
 			await fixCronJobsLocationWechat(workspace, uid);
 			scheduler.reload().catch(() => {});
 
-			// ── 处理回复内容（文本 + 可能的图片）────────────────
+		// ── 处理回复内容（文本 + 可能的图片）────────────────
+		if (lastFeedbackGateOutput && cleanOutput && isFeedbackGateDuplicate(lastFeedbackGateOutput, cleanOutput)) {
+			console.log(`[FeedbackGate] 跳过重复最终输出 (与中间结果重叠, fgLen=${lastFeedbackGateOutput.length} finalLen=${cleanOutput.length})`);
+			cleanOutput = '';
+		}
 			if (cleanOutput) {
 				// 检测 MEDIA: / MEDIA_VIDEO: / MEDIA_FILE: 指令
 				const mediaRegex = /^(MEDIA(?:_VIDEO|_FILE)?):(.+)$/gm;
@@ -2517,7 +2555,7 @@ async function startWechatServer() {
 					// 纯文本回复
 					await sendWechatText(uid, cleanOutput, contextToken);
 				}
-			} else {
+			} else if (!lastFeedbackGateOutput) {
 				await sendWechatText(uid, '✅ 任务已完成（无输出）', contextToken);
 			}
 			
