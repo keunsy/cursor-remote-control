@@ -30,6 +30,7 @@ import { fetchWeather } from '../shared/weather-fetcher.js';
 import { fetchGithubTrending } from '../shared/github-trending-fetcher.js';
 import { getHealthStatus } from '../shared/news-sources/monitoring.js';
 import { CommandHandler, type PlatformAdapter, type CommandContext } from '../shared/command-handler.js';
+import { parseReminder } from '../shared/reminder-parser.js';
 import { ProcessLock } from '../shared/process-lock.js';
 import { IdeReplyWatcher } from '../shared/ide-reply-watcher.js';
 import { humanizeCronInChinese } from 'cron-chinese';
@@ -2207,6 +2208,35 @@ async function startWechatServer() {
 						`✅ 已创建定时任务\n\n⏰ 执行时间：${timeDesc}\n📰 推送内容：今日热点新闻（前 ${topN} 条）\n📱 到时会通过**微信**推送给你\n\n发送 \`/任务\` 可查看所有任务`,
 						contextToken,
 					);
+				} catch (error) {
+					await sendWechatText(
+						uid,
+						`❌ 创建定时任务失败\n\n${error instanceof Error ? error.message : String(error)}`,
+						contextToken,
+					);
+				}
+				return;
+			}
+
+			// 检测自然语言提醒请求（"3点提醒我开会"、"明天下午2点提醒我xxx"等），服务器端直接创建
+			const reminderResult = parseReminder(text);
+			if (reminderResult) {
+				try {
+					await scheduler.add({
+						name: reminderResult.taskName,
+						enabled: true,
+						deleteAfterRun: reminderResult.deleteAfterRun,
+						schedule: reminderResult.schedule,
+						message: reminderResult.taskMessage,
+						platform: 'wechat',
+						webhook: uid,
+					});
+					await sendWechatText(
+						uid,
+						`✅ 已设置好，**${reminderResult.timeDesc}** 通过微信提醒你：\n\n${reminderResult.taskMessage}\n\n发送 \`/cron\` 可查看所有任务。`,
+						contextToken,
+					);
+					console.log(`[任务] 服务器端创建 (自然语言): ${reminderResult.taskName} → ${reminderResult.timeDesc}`);
 				} catch (error) {
 					await sendWechatText(
 						uid,

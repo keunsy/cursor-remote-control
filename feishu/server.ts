@@ -26,6 +26,7 @@ import { fetchWeather } from "../shared/weather-fetcher.js";
 import { fetchGithubTrending } from "../shared/github-trending-fetcher.js";
 import { getHealthStatus } from "../shared/news-sources/monitoring.js";
 import { CommandHandler, type PlatformAdapter, type CommandContext } from "../shared/command-handler.js";
+import { parseReminder } from "../shared/reminder-parser.js";
 import { AgentExecutor, writeFeedbackGateResponse, type FeedbackGateRequest } from "../shared/agent-executor.js";
 import { ProcessLock } from "../shared/process-lock.js";
 import { IdeReplyWatcher } from "../shared/ide-reply-watcher.js";
@@ -2544,6 +2545,23 @@ async function handleInner(
 		console.log(`[任务] 服务器端创建: ${task.name} @ ${timeStr}`);
 		return;
 		}
+	}
+
+	// 检测自然语言提醒请求（"3点提醒我开会"、"明天下午2点提醒我xxx"等），服务器端直接创建
+	const reminderResult = parseReminder(text);
+	if (reminderResult) {
+		const task = await scheduler.add({
+			name: reminderResult.taskName,
+			enabled: true,
+			deleteAfterRun: reminderResult.deleteAfterRun,
+			schedule: reminderResult.schedule,
+			message: reminderResult.taskMessage,
+			platform: "feishu",
+			webhook: chatId,
+		});
+		await replyCard(messageId, `✅ 已设置好，**${reminderResult.timeDesc}** 通过飞书提醒你：\n\n${reminderResult.taskMessage}\n\n发送 \`/cron\` 可查看所有任务。`, { title: "⏰ 定时任务已创建", color: "green" });
+		console.log(`[任务] 服务器端创建 (自然语言): ${task.name} → ${reminderResult.timeDesc}`);
+		return;
 	}
 	
 	// 路由解析（传入 intent 避免重复检测）

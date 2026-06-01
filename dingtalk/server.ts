@@ -28,6 +28,7 @@ import { FeilianController, type OperationResult } from '../shared/feilian-contr
 import { humanizeCronInChinese } from 'cron-chinese';
 import { CommandHandler, type PlatformAdapter, type CommandContext } from '../shared/command-handler.js';
 import { AgentExecutor } from '../shared/agent-executor.js';
+import { parseReminder } from '../shared/reminder-parser.js';
 import { ProcessLock } from '../shared/process-lock.js';
 import { IdeReplyWatcher } from '../shared/ide-reply-watcher.js';
 // import { ReconnectManager } from '../shared/reconnect-manager.js';  // 已移除，SDK 自带重连
@@ -1586,6 +1587,23 @@ async function handleMessage(msg: any) {
 			console.log(`[任务] 服务器端创建: ${task.name} @ ${timeStr}`);
 			return;
 			}
+		}
+
+		// 检测自然语言提醒请求（"3点提醒我开会"、"明天下午2点提醒我xxx"等），服务器端直接创建
+		const reminderResult = parseReminder(text);
+		if (reminderResult) {
+			await scheduler.add({
+				name: reminderResult.taskName,
+				enabled: true,
+				deleteAfterRun: reminderResult.deleteAfterRun,
+				schedule: reminderResult.schedule,
+				message: reminderResult.taskMessage,
+				platform: 'dingtalk',
+				webhook: sessionWebhook,
+			});
+			await sendMarkdown(sessionWebhook, `✅ 已设置好，**${reminderResult.timeDesc}** 通过钉钉提醒你：\n\n${reminderResult.taskMessage}\n\n发送 \`/cron\` 可查看所有任务。`, '⏰ 定时任务已创建');
+			console.log(`[任务] 服务器端创建 (自然语言): ${reminderResult.taskName} → ${reminderResult.timeDesc}`);
+			return;
 		}
 		
 		// 解析项目路由（传入 intent 避免重复检测）
