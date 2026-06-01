@@ -19,6 +19,8 @@ export type ReminderParseResult = {
 	taskName: string;
 	taskMessage: string;
 	timeDesc: string;
+	/** 当用户未指定日期且时间已过时，自动推到明天 */
+	autoPostponed?: boolean;
 };
 
 const CN_DIGITS: Record<string, number> = {
@@ -181,18 +183,19 @@ function buildResult(
 	const now = new Date();
 	const target = new Date();
 	target.setHours(hour, minute, 0, 0);
+	let autoPostponed = false;
 
 	if (dayPrefix && DAY_OFFSETS[dayPrefix] !== undefined) {
 		const offset = DAY_OFFSETS[dayPrefix]!;
 		target.setDate(target.getDate() + offset);
-		// 今天且已过期 → 不自动推到明天，但给个提示
 		if (offset === 0 && target.getTime() <= now.getTime()) {
 			target.setDate(target.getDate() + 1);
+			autoPostponed = true;
 		}
 	} else {
-		// 没有日期前缀：已过则推到明天
 		if (target.getTime() <= now.getTime()) {
 			target.setDate(target.getDate() + 1);
+			autoPostponed = true;
 		}
 	}
 
@@ -204,5 +207,6 @@ function buildResult(
 		taskName: `${dayLabel}${timeStr}提醒`,
 		taskMessage,
 		timeDesc: `${dayLabel} ${timeStr}`,
+		autoPostponed,
 	};
 }

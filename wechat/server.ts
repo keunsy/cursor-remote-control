@@ -2231,9 +2231,10 @@ async function startWechatServer() {
 						platform: 'wechat',
 						webhook: uid,
 					});
+					const postponeHint = reminderResult.autoPostponed ? '\n\n⏩ 今天该时间已过，已自动设置为明天' : '';
 					await sendWechatText(
 						uid,
-						`✅ 已设置好，**${reminderResult.timeDesc}** 通过微信提醒你：\n\n${reminderResult.taskMessage}\n\n发送 \`/cron\` 可查看所有任务。`,
+						`✅ 已设置好，**${reminderResult.timeDesc}** 通过微信提醒你：\n\n${reminderResult.taskMessage}\n\n发送 \`/cron\` 可查看所有任务。${postponeHint}`,
 						contextToken,
 					);
 					console.log(`[任务] 服务器端创建 (自然语言): ${reminderResult.taskName} → ${reminderResult.timeDesc}`);

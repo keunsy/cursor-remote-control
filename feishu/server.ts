@@ -2559,7 +2559,8 @@ async function handleInner(
 			platform: "feishu",
 			webhook: chatId,
 		});
-		await replyCard(messageId, `✅ 已设置好，**${reminderResult.timeDesc}** 通过飞书提醒你：\n\n${reminderResult.taskMessage}\n\n发送 \`/cron\` 可查看所有任务。`, { title: "⏰ 定时任务已创建", color: "green" });
+		const postponeHint = reminderResult.autoPostponed ? '\n\n> ⏩ 今天该时间已过，已自动设置为明天' : '';
+		await replyCard(messageId, `✅ 已设置好，**${reminderResult.timeDesc}** 通过飞书提醒你：\n\n${reminderResult.taskMessage}\n\n发送 \`/cron\` 可查看所有任务。${postponeHint}`, { title: "⏰ 定时任务已创建", color: "green" });
 		console.log(`[任务] 服务器端创建 (自然语言): ${task.name} → ${reminderResult.timeDesc}`);
 		return;
 	}

@@ -1601,7 +1601,8 @@ async function handleMessage(msg: any) {
 				platform: 'dingtalk',
 				webhook: sessionWebhook,
 			});
-			await sendMarkdown(sessionWebhook, `✅ 已设置好，**${reminderResult.timeDesc}** 通过钉钉提醒你：\n\n${reminderResult.taskMessage}\n\n发送 \`/cron\` 可查看所有任务。`, '⏰ 定时任务已创建');
+			const postponeHint = reminderResult.autoPostponed ? '\n\n> ⏩ 今天该时间已过，已自动设置为明天' : '';
+			await sendMarkdown(sessionWebhook, `✅ 已设置好，**${reminderResult.timeDesc}** 通过钉钉提醒你：\n\n${reminderResult.taskMessage}\n\n发送 \`/cron\` 可查看所有任务。${postponeHint}`, '⏰ 定时任务已创建');
 			console.log(`[任务] 服务器端创建 (自然语言): ${reminderResult.taskName} → ${reminderResult.timeDesc}`);
 			return;
 		}
