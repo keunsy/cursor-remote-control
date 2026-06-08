@@ -116,6 +116,9 @@ docs/similar-projects.md
 !/docs/MEMORY-SYSTEM.md
 !/docs/test-plan-*.md
 
+# 私人定制模块（业务定制代码，不提交）
+shared/personal/
+
 # 私人配置文件（每人不同，不提交）
 config/news-sources.json
 config/model-config.json
@@ -134,3 +137,6 @@ REFACTOR-SUMMARY.md
 wechat/.wechat_token.json
 wechat/.wechat_sync_buf
 wechat/.sessions.json
+
+# 钉钉群 ID 缓存
+dingtalk/known-groups.json

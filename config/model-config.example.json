@@ -1,10 +1,10 @@
 {
-  "defaultModel": "opus-4.6",
+  "defaultModel": "claude-4.6-opus-high",
   "blacklistResetCron": "0 0 1 * *",
   "models": [
     {
-      "id": "opus-4.6",
-      "name": "Claude Opus 4.6",
+      "id": "claude-4.6-opus-high",
+      "name": "Claude Opus 4.6 High",
       "description": "最强模型（推荐）",
       "aliases": ["opus-4.6", "opus", "opus46", "opust"],
       "fallbackChain": ["auto"],

@@ -124,6 +124,30 @@ function parseChineseSchedule(text: string): { cronExpr: string; label: string; 
 	return null;
 }
 
+function parseGithubTrendingArgs(argsStr?: string): { since: 'daily' | 'weekly' | 'monthly'; language: string; topN: number } {
+	let since: 'daily' | 'weekly' | 'monthly' = 'daily';
+	let language = '';
+	let topN = 20;
+	if (argsStr) {
+		for (const part of argsStr.trim().split(/\s+/)) {
+			if (['daily', 'weekly', 'monthly'].includes(part.toLowerCase())) {
+				since = part.toLowerCase() as 'daily' | 'weekly' | 'monthly';
+			} else if (['今日', '今天', '日'].includes(part)) {
+				since = 'daily';
+			} else if (['本周', '周'].includes(part)) {
+				since = 'weekly';
+			} else if (['本月', '月'].includes(part)) {
+				since = 'monthly';
+			} else if (/^\d+$/.test(part)) {
+				topN = Math.min(50, Math.max(1, parseInt(part, 10)));
+			} else if (part) {
+				language = part;
+			}
+		}
+	}
+	return { since, language, topN };
+}
+
 function formatRelativeTime(timestamp: number): string {
 	const diff = Date.now() - timestamp;
 	if (diff < 60000) return "刚刚";
@@ -1083,31 +1107,10 @@ export class CommandHandler {
 	async handleGithubTrending(args?: string): Promise<void> {
 		try {
 			const schedule = args ? parseChineseSchedule(args) : null;
-			
+			const { since, language, topN } = parseGithubTrendingArgs(schedule?.remaining ?? (schedule ? '' : args));
+			const sinceLabel = since === 'daily' ? '今日' : since === 'weekly' ? '本周' : '本月';
+
 			if (schedule) {
-				let since: 'daily' | 'weekly' | 'monthly' = 'daily';
-				let language = '';
-				let topN = 20;
-				
-				if (schedule.remaining) {
-					for (const part of schedule.remaining.split(/\s+/)) {
-						if (['daily', 'weekly', 'monthly'].includes(part.toLowerCase())) {
-							since = part.toLowerCase() as 'daily' | 'weekly' | 'monthly';
-						} else if (['今日', '今天', '日'].includes(part)) {
-							since = 'daily';
-						} else if (['本周', '周'].includes(part)) {
-							since = 'weekly';
-						} else if (['本月', '月'].includes(part)) {
-							since = 'monthly';
-						} else if (/^\d+$/.test(part)) {
-							topN = Math.min(50, Math.max(1, parseInt(part, 10)));
-						} else if (part) {
-							language = part;
-						}
-					}
-				}
-				
-				const sinceLabel = since === 'daily' ? '今日' : since === 'weekly' ? '本周' : '本月';
 				const job = await this.ctx.scheduler.add({
 					name: `${schedule.label} GitHub Trending ${sinceLabel}Top${topN}`,
 					enabled: true,
@@ -1126,31 +1129,6 @@ export class CommandHandler {
 				console.log(`[命令] /github 创建定时任务: ${schedule.label} ${sinceLabel} top${topN}`);
 				return;
 			}
-
-			let since: 'daily' | 'weekly' | 'monthly' = 'daily';
-			let language = '';
-			let topN = 20;
-
-			if (args) {
-				const parts = args.trim().split(/\s+/);
-				for (const part of parts) {
-					if (['daily', 'weekly', 'monthly'].includes(part.toLowerCase())) {
-						since = part.toLowerCase() as 'daily' | 'weekly' | 'monthly';
-					} else if (['今日', '今天', '日'].includes(part)) {
-						since = 'daily';
-					} else if (['本周', '周'].includes(part)) {
-						since = 'weekly';
-					} else if (['本月', '月'].includes(part)) {
-						since = 'monthly';
-					} else if (/^\d+$/.test(part)) {
-						topN = Math.min(50, Math.max(1, parseInt(part, 10)));
-					} else {
-						language = part;
-					}
-				}
-			}
-
-			const sinceLabel = since === 'daily' ? '今日' : since === 'weekly' ? '本周' : '本月';
 			await this.adapter.reply(`🔥 正在获取 GitHub Trending ${sinceLabel}热榜 Top${topN}${language ? `（${language}）` : ''}...`);
 
 			const card = await fetchGithubTrending({ since, language, topN, translateDesc: true });
@@ -1703,59 +1681,59 @@ export class CommandHandler {
 			return true;
 		}
 
-	// /apk、/sendapk（所有平台支持）
-	if (/^\/(apk|sendapk)\s*$/i.test(text.trim())) {
-		await this.handleSendApk();
-		return true;
-	}
-
-	// /发送文件（所有平台支持）
-	const sendFileMatch = text.match(/^\/(发送文件|sendfile|send|发送)[\s:：]+(.+)/i);
-	if (sendFileMatch && sendFileMatch[2] != null) {
-		await this.handleSendFile(sendFileMatch[2].trim());
-		return true;
-	}
-
-	// 自然语言定时任务检测（不以 / 开头的调度请求）
-	const nlSchedule = parseChineseSchedule(text);
-	if (nlSchedule) {
-		const remaining = nlSchedule.remaining.toLowerCase();
-		
-		if (/天气|weather|气温|穿衣/.test(remaining)) {
-			await this.handleWeatherNow(`${text}`);
+		// /apk、/sendapk（所有平台支持）
+		if (/^\/(apk|sendapk)\s*$/i.test(text.trim())) {
+			await this.handleSendApk();
 			return true;
 		}
-		
-		if (/github|trending|热榜|趋势/.test(remaining)) {
-			const cleanArgs = remaining.replace(/(?:推送|发送|给我|通知|提醒)\s*/g, '').replace(/github\s*trending?/i, '').trim();
-			const schedText = text.match(/(每天|每日|工作日).*?[点时]/)?.[0] || '';
-			await this.handleGithubTrending(`${schedText} ${cleanArgs}`.trim());
-			return true;
-		}
-		
-		if (/新闻|热点|news|资讯/.test(remaining)) {
-			const topNMatch = remaining.match(/(\d+)\s*条/);
-			const topN = topNMatch ? parseInt(topNMatch[1]!, 10) : 15;
-			const job = await this.ctx.scheduler.add({
-				name: `${nlSchedule.label} 推送${topN}条热点`,
-				enabled: true,
-				schedule: { kind: 'cron', expr: nlSchedule.cronExpr, tz: 'Asia/Shanghai' },
-				task: { type: 'fetch-news', options: { topN } },
-				message: 'fetch-news',
-				platform: this.ctx.platform,
-			});
-			await this.adapter.reply(
-				`✅ **新闻定时任务已创建**\n\n` +
-				`📋 ${job.name}\n` +
-				`⏰ ${nlSchedule.label}\n` +
-				`📰 每次推送 ${topN} 条\n\n` +
-				`管理任务：\`/任务\``
-			);
-			return true;
-		}
-	}
 
-	// 未匹配任何命令
-	return false;
+		// /发送文件（所有平台支持）
+		const sendFileMatch = text.match(/^\/(发送文件|sendfile|send|发送)[\s:：]+(.+)/i);
+		if (sendFileMatch && sendFileMatch[2] != null) {
+			await this.handleSendFile(sendFileMatch[2].trim());
+			return true;
+		}
+
+		// 自然语言定时任务检测（不以 / 开头的调度请求）
+		const nlSchedule = parseChineseSchedule(text);
+		if (nlSchedule) {
+			const remaining = nlSchedule.remaining.toLowerCase();
+			
+			if (/天气|weather|气温|穿衣/.test(remaining)) {
+				await this.handleWeatherNow(`${text}`);
+				return true;
+			}
+			
+			if (/github|trending|热榜|趋势/.test(remaining)) {
+				const cleanArgs = remaining.replace(/(?:推送|发送|给我|通知|提醒)\s*/g, '').replace(/github\s*trending?/i, '').trim();
+				const schedText = text.match(/(每天|每日|工作日).*?[点时]/)?.[0] || '';
+				await this.handleGithubTrending(`${schedText} ${cleanArgs}`.trim());
+				return true;
+			}
+			
+			if (/新闻|热点|news|资讯/.test(remaining)) {
+				const topNMatch = remaining.match(/(\d+)\s*条/);
+				const topN = topNMatch ? parseInt(topNMatch[1]!, 10) : 15;
+				const job = await this.ctx.scheduler.add({
+					name: `${nlSchedule.label} 推送${topN}条热点`,
+					enabled: true,
+					schedule: { kind: 'cron', expr: nlSchedule.cronExpr, tz: 'Asia/Shanghai' },
+					task: { type: 'fetch-news', options: { topN } },
+					message: 'fetch-news',
+					platform: this.ctx.platform,
+				});
+				await this.adapter.reply(
+					`✅ **新闻定时任务已创建**\n\n` +
+					`📋 ${job.name}\n` +
+					`⏰ ${nlSchedule.label}\n` +
+					`📰 每次推送 ${topN} 条\n\n` +
+					`管理任务：\`/任务\``
+				);
+				return true;
+			}
+		}
+
+		// 未匹配任何命令
+		return false;
 	}
 }

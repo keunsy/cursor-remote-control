@@ -446,7 +446,43 @@ export class AgentExecutor {
 		// Two-layer filtering to avoid consuming triggers from IDE MCP instances:
 		//   1. routing.session must match our fgSessionToken  (if present)
 		//   2. trigger.ppid must equal our child.pid  (MCP's parent = our Agent CLI)
-		if (options.feedbackGate?.chatId && options.onFeedbackRequested) {
+		//
+		// When feedbackGate is NOT configured (e.g. alarm-push background tasks),
+		// we still need to intercept FG triggers from our child process to prevent
+		// the Agent from looping indefinitely on feedback_gate_chat calls.
+		if (!options.feedbackGate?.chatId) {
+			const tmpDir = process.platform === 'win32'
+				? (process.env.TEMP || process.env.TMP || 'C:\\Temp')
+				: '/tmp';
+			const agentCliPid = child.pid!;
+			feedbackGateTimer = setInterval(() => {
+				if (done) return;
+				try {
+					const files = readdirSync(tmpDir).filter(f => f.startsWith('feedback_gate_trigger_pid') && f.endsWith('.json'));
+					for (const file of files) {
+						const fullPath = pathResolve(tmpDir, file);
+						try {
+							const content = readFileSync(fullPath, 'utf-8');
+							const trigger = JSON.parse(content);
+							if (trigger.ppid && trigger.ppid !== agentCliPid) continue;
+							if (!trigger.ppid) continue;
+							const triggerId = trigger.data?.trigger_id || '';
+							console.log(`[FeedbackGate] No-FG mode: auto-completing trigger ${triggerId} from pid=${trigger.ppid}`);
+							try { unlinkSync(fullPath); } catch {}
+							try { unlinkSync(pathResolve(tmpDir, 'feedback_gate_trigger.json')); } catch {}
+							writeFeedbackGateAck(triggerId);
+							const responseFile = pathResolve(tmpDir, `feedback_gate_response_${triggerId}.json`);
+							writeFileSync(responseFile, JSON.stringify({
+								timestamp: new Date().toISOString(),
+								trigger_id: triggerId,
+								user_input: 'TASK_COMPLETE',
+								source: 'cursor-remote-control-auto-complete',
+							}, null, 2));
+						} catch {}
+					}
+				} catch {}
+			}, 1000);
+		} else if (options.onFeedbackRequested) {
 			const fgChatId = options.feedbackGate.chatId;
 			const fgPlatform = options.feedbackGate.platform || '';
 			const tmpDir = process.platform === 'win32'

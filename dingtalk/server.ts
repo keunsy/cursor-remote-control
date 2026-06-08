@@ -27,12 +27,12 @@ import { HeartbeatRunner, getHeartbeatGlobalConfig, createSessionActivityGate, i
 import { FeilianController, type OperationResult } from '../shared/feilian-control.js';
 import { humanizeCronInChinese } from 'cron-chinese';
 import { CommandHandler, type PlatformAdapter, type CommandContext } from '../shared/command-handler.js';
-import { AgentExecutor } from '../shared/agent-executor.js';
+import { AgentExecutor, writeFeedbackGateResponse, type FeedbackGateRequest } from '../shared/agent-executor.js';
 import { parseReminder } from '../shared/reminder-parser.js';
 import { ProcessLock } from '../shared/process-lock.js';
 import { IdeReplyWatcher } from '../shared/ide-reply-watcher.js';
 // import { ReconnectManager } from '../shared/reconnect-manager.js';  // 已移除，SDK 自带重连
-import { getAvailableModelChain, shouldFallback, isQuotaExhausted, addToBlacklist, isBlacklisted, getDefaultModel, type ModelConfig } from '../shared/models-config.js';
+import { getAvailableModelChain, shouldFallback, isQuotaExhausted, addToBlacklist, isBlacklisted, getDefaultModel, shouldEnableFeedbackGate, type ModelConfig } from '../shared/models-config.js';
 import { uploadFileDingtalk, sendFileDingtalk } from './send-file-dingtalk.js';
 
 // ── 进程锁（防止多实例运行）──────────────────────
@@ -74,6 +74,33 @@ process.on('unhandledRejection', (reason) => {
 });
 
 // ── 工具函数 ──────────────────────────────────────
+
+function isFeedbackGateDuplicate(fgOutput: string, finalOutput: string): boolean {
+	const fg = fgOutput.trim();
+	const fo = finalOutput.trim();
+	if (!fg || !fo) return false;
+	if (fg === fo) return true;
+	if (fg.includes(fo) || fo.includes(fg)) return true;
+
+	const normalize = (s: string) => s.replace(/\s+/g, ' ').trim();
+	const nfg = normalize(fg);
+	const nfo = normalize(fo);
+	if (nfg === nfo) return true;
+	if (nfg.includes(nfo) || nfo.includes(nfg)) return true;
+
+	const headLen = Math.min(300, nfg.length, nfo.length);
+	if (headLen > 50 && nfg.slice(0, headLen) === nfo.slice(0, headLen)) return true;
+
+	const fgLines = new Set(fg.split('\n').map(l => l.trim()).filter(Boolean));
+	const foLines = fo.split('\n').map(l => l.trim()).filter(Boolean);
+	if (foLines.length > 0 && fgLines.size > 0) {
+		const overlap = foLines.filter(l => fgLines.has(l)).length;
+		if (overlap / foLines.length > 0.7) return true;
+	}
+
+	return false;
+}
+
 function formatElapsed(seconds: number): string {
 	if (seconds < 60) return `${seconds}秒`;
 	const mins = Math.floor(seconds / 60);
@@ -162,6 +189,21 @@ watchFile(ENV_PATH, { interval: 2000 }, () => {
 	try {
 		const prev = config.CURSOR_API_KEY;
 		const prevModel = config.CURSOR_MODEL;
+		// 同步所有 .env 变量到 process.env（供 alarm-push / complaint-push 等动态读取）
+		const raw = readFileSync(ENV_PATH, 'utf-8');
+		for (const line of raw.split('\n')) {
+			const trimmed = line.trim();
+			if (!trimmed || trimmed.startsWith('#')) continue;
+			const eqIdx = trimmed.indexOf('=');
+			if (eqIdx < 0) continue;
+			const key = trimmed.slice(0, eqIdx).trim();
+			if (!key) continue;
+			let val = trimmed.slice(eqIdx + 1).trim();
+			if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+				val = val.slice(1, -1);
+			}
+			process.env[key] = val;
+		}
 		const newConfig = loadEnv();
 		Object.assign(config, newConfig);
 		if (config.CURSOR_API_KEY !== prev) {
@@ -404,6 +446,47 @@ function getWebhook(conversationId?: string): string | undefined {
 	return lastActiveWebhook;  // 返回最近活跃的
 }
 
+// ── 群 ID 持久化记录 ─────────────────────────────
+interface GroupRecord {
+	openConversationId: string;
+	title?: string;
+	lastActiveAt: string;
+	senderNick?: string;
+}
+
+const GROUP_STORE_PATH = resolve(ROOT, 'dingtalk', 'known-groups.json');
+
+function loadKnownGroups(): Record<string, GroupRecord> {
+	try {
+		if (existsSync(GROUP_STORE_PATH)) return JSON.parse(readFileSync(GROUP_STORE_PATH, 'utf-8'));
+	} catch {}
+	return {};
+}
+
+function saveGroupRecord(data: any) {
+	if (data.conversationType !== '2') return;
+	const openConvId = data.conversationId;
+	if (!openConvId) return;
+	
+	const groups = loadKnownGroups();
+	const existing = groups[openConvId];
+	groups[openConvId] = {
+		openConversationId: openConvId,
+		title: data.conversationTitle || existing?.title || undefined,
+		lastActiveAt: new Date().toISOString(),
+		senderNick: data.senderNick || existing?.senderNick || undefined,
+	};
+	try {
+		writeFileSync(GROUP_STORE_PATH, JSON.stringify(groups, null, 2));
+	} catch (e) {
+		console.error('[群记录] 保存失败:', e);
+	}
+}
+
+function getKnownGroups(): GroupRecord[] {
+	return Object.values(loadKnownGroups());
+}
+
 // ── 消息发送 ─────────────────────────────────────
 async function sendMarkdown(webhook: string, markdown: string, title?: string, color?: string) {
 	try {
@@ -436,6 +519,32 @@ async function sendMarkdown(webhook: string, markdown: string, title?: string, c
 	} catch (error) {
 		console.error('[发送失败]', error instanceof Error ? error.message : error);
 		throw error;
+	}
+}
+
+// ── 主动消息发送（OpenAPI，无需 webhook） ─────────
+async function sendProactiveMessage(
+	target: { type: 'user'; userId: string } | { type: 'group'; openConversationId: string },
+	content: { title: string; text: string }
+): Promise<void> {
+	await ensureToken();
+	const headers = { 'x-acs-dingtalk-access-token': accessToken };
+
+	const axiosOpts = { headers, timeout: 30_000 };
+	if (target.type === 'user') {
+		await axios.post('https://api.dingtalk.com/v1.0/robot/oToMessages/batchSend', {
+			robotCode: config.DINGTALK_APP_KEY,
+			userIds: [target.userId],
+			msgKey: 'sampleMarkdown',
+			msgParam: JSON.stringify({ title: content.title, text: content.text }),
+		}, axiosOpts);
+	} else {
+		await axios.post('https://api.dingtalk.com/v1.0/robot/groupMessages/send', {
+			robotCode: config.DINGTALK_APP_KEY,
+			openConversationId: target.openConversationId,
+			msgKey: 'sampleMarkdown',
+			msgParam: JSON.stringify({ title: content.title, text: content.text }),
+		}, axiosOpts);
 	}
 }
 
@@ -636,6 +745,20 @@ async function withSessionLock<T>(lockKey: string, fn: () => Promise<T>): Promis
 // 同会话串行执行，不同会话可并行
 const busySessions = new Set<string>();
 
+// ── Feedback Gate：等待 IM 用户回复的请求（内存，不持久化）──────
+interface PendingFeedbackGate {
+	triggerId: string;
+	message: string;
+	title: string;
+	conversationId: string;
+	webhook: string;
+	createdAt: number;
+}
+const pendingFeedbackGates = new Map<string, PendingFeedbackGate>();
+const recentFeedbackConsumed = new Map<string, number>();
+const feedbackRoundCounter = new Map<string, number>();
+const FEEDBACK_GATE_TIMEOUT = 24 * 60 * 60 * 1000; // 24h
+
 // 统一 Agent 执行器（超时保护、并发限制、僵尸清理）
 const agentExecutor = new AgentExecutor({
 	timeout: 60 * 60 * 1000, // 60 分钟（统一超时）
@@ -784,6 +907,8 @@ async function runAgent(
 		webhook?: string;
 		/** 成功完成时回调，用于更新 session.agentId 以便后续 --resume */
 		onSessionId?: (sessionId: string) => void;
+		feedbackGate?: { chatId?: string; platform?: string; enabledModel?: string };
+		onFeedbackRequested?: (req: FeedbackGateRequest) => void;
 	}
 ): Promise<RunAgentResult> {
 	const primaryModel = config.CURSOR_MODEL || getDefaultModel();
@@ -811,6 +936,8 @@ async function runAgent(
 				platform: context?.platform as 'dingtalk' | undefined,
 				webhook: context?.webhook,
 				apiKey: config.CURSOR_API_KEY,
+				feedbackGate: context?.feedbackGate,
+				onFeedbackRequested: context?.onFeedbackRequested,
 			});
 			
 			// 构建工具调用摘要（添加到回复开头）
@@ -1238,8 +1365,21 @@ async function handleMessage(msg: any) {
 	const chatType = data.conversationType === '1' ? 'private' : 'group';  // 1=单聊, 2=群聊
 	const isGroup = chatType === 'group';
 	
+	const allowedRaw = process.env.ALLOWED_USER_IDS || '';
+	if (allowedRaw) {
+		const allowed = new Set(allowedRaw.split(',').map(s => s.trim()).filter(Boolean));
+		if (!allowed.has(senderId)) {
+			console.log(`[白名单] ⛔ 拒绝用户 ${senderId}（不在 ALLOWED_USER_IDS 中）`);
+			await sendMarkdown(sessionWebhook, '抱歉，当前配额不足，暂未开放使用 🙏', '提示');
+			return;
+		}
+	}
+	
 	// 缓存 webhook（用于定时任务推送）
 	cacheWebhook(conversationId, sessionWebhook);
+	
+	// 群消息自动记录群 ID
+	if (isGroup) saveGroupRecord(data);
 	
 	console.log(`[收到消息] msgId=${messageId.slice(0, 20)} type=${msgtype} chatType=${chatType} conversation=${conversationId.slice(0, 20)} sender=${senderId} webhook=${sessionWebhook.slice(0, 50)}`);
 	
@@ -1366,6 +1506,41 @@ async function handleMessage(msg: any) {
 	// 创建命令处理器
 	const commandHandler = new CommandHandler(dingtalkAdapter, commandContext);
 	
+	// ── Feedback Gate: 拦截用户回复 ──
+	const fgKey = `${conversationId}:${senderId}`;
+	const pendingFG = pendingFeedbackGates.get(fgKey);
+	if (pendingFG && !text.trim().startsWith('/') && !CommandHandler.isIdeForwardEnabled(fgKey)) {
+		const age = Date.now() - pendingFG.createdAt;
+		if (age < FEEDBACK_GATE_TIMEOUT) {
+			const isDone = /^(done|完成|ok|好的|结束|没了|没有了|task_complete)$/i.test(text.trim());
+			const responseText = isDone ? 'TASK_COMPLETE' : text;
+			console.log(`[FeedbackGate] Replying to triggerId=${pendingFG.triggerId} isDone=${isDone}: ${text.slice(0, 100)}`);
+			writeFeedbackGateResponse(pendingFG.triggerId, responseText);
+			pendingFeedbackGates.delete(fgKey);
+			recentFeedbackConsumed.set(fgKey, Date.now());
+			if (isDone) feedbackRoundCounter.delete(fgKey);
+
+			const lockKeyForFG = getLockKey(defaultWorkspace);
+			if (!busySessions.has(lockKeyForFG)) {
+				console.log(`[FeedbackGate] Agent already finished, treating reply as new message`);
+			} else {
+				await sendMarkdown(sessionWebhook, isDone ? '✅ 对话已结束' : `✅ 反馈已提交，AI 正在继续处理...\n\n> ${text.slice(0, 200)}`, isDone ? '✅ 完成' : '💬 反馈已提交');
+				return;
+			}
+		} else {
+			pendingFeedbackGates.delete(fgKey);
+			feedbackRoundCounter.delete(fgKey);
+			console.log(`[FeedbackGate] Expired pending for ${fgKey.slice(0, 20)}...`);
+		}
+	} else if (!pendingFG && !text.trim().startsWith('/') && !CommandHandler.isIdeForwardEnabled(fgKey)) {
+		const lastConsumed = recentFeedbackConsumed.get(fgKey);
+		if (lastConsumed && Date.now() - lastConsumed < 10_000) {
+			console.log(`[FeedbackGate] Duplicate message within cooldown for ${fgKey.slice(0, 20)}...`);
+			await sendMarkdown(sessionWebhook, '💡 反馈已提交，无需重复发送，AI 正在处理中...', '提示');
+			return;
+		}
+	}
+
 	// Bug #26 修复：/apikey 群聊保护（钉钉特定）
 	const apikeyMatch = text.match(/^\/?(?:apikey|api\s*key|密钥|换key|更换密钥)[\s:：]*(.*)/i);
 	if (apikeyMatch) {
@@ -1375,6 +1550,48 @@ async function handleMessage(msg: any) {
 		}
 		// 私聊模式：委托给统一处理器（不需要更新 session）
 		await commandHandler.route(text, () => {}, { chatId: conversationId });
+		return;
+	}
+
+	// /绑定告警群 — 将当前群设为告警推送群（隐藏指令，不在 /help 中展示）
+	if (/^\/?绑定告警群$/.test(text.trim())) {
+		if (!isGroup) {
+			await sendMarkdown(sessionWebhook, '⚠️ 此指令仅在群聊中有效，请在目标群里发送。', '⚠️ 提示');
+			return;
+		}
+		try {
+			await import('../shared/personal/alarm-push');
+		} catch {
+			await sendMarkdown(sessionWebhook, '⚠️ 告警模块未启用，无法绑定。', '⚠️ 提示');
+			return;
+		}
+		const groupId = conversationId;
+		const groupTitle = data.conversationTitle || '未命名群';
+		// 更新 .env 文件
+		const envRaw = readFileSync(ENV_PATH, 'utf-8');
+		const updated = envRaw.includes('ALARM_DINGTALK_GROUP_ID=')
+			? envRaw.replace(/^ALARM_DINGTALK_GROUP_ID=.*$/m, `ALARM_DINGTALK_GROUP_ID=${groupId}`)
+			: envRaw.trimEnd() + `\nALARM_DINGTALK_GROUP_ID=${groupId}\n`;
+		writeFileSync(ENV_PATH, updated);
+		// 同步更新 process.env
+		process.env.ALARM_DINGTALK_GROUP_ID = groupId;
+		await sendMarkdown(sessionWebhook, `✅ 已绑定本群为告警推送群\n\n**群名**：${groupTitle}`, '✅ 绑定成功');
+		console.log(`[绑定告警] 群 "${groupTitle}" → ${groupId}`);
+		return;
+	}
+
+	// /解绑告警群 — 停止向群推送告警（隐藏指令）
+	if (/^\/?解绑告警群$/.test(text.trim())) {
+		if (!process.env.ALARM_DINGTALK_GROUP_ID) {
+			await sendMarkdown(sessionWebhook, '当前没有绑定告警推送群。', '💡 提示');
+			return;
+		}
+		const envRaw = readFileSync(ENV_PATH, 'utf-8');
+		const updated = envRaw.replace(/^ALARM_DINGTALK_GROUP_ID=.*$/m, 'ALARM_DINGTALK_GROUP_ID=');
+		writeFileSync(ENV_PATH, updated);
+		process.env.ALARM_DINGTALK_GROUP_ID = '';
+		await sendMarkdown(sessionWebhook, '✅ 已解绑告警推送群，告警将只推送到个人。', '✅ 解绑成功');
+		console.log('[解绑告警] 已清空群 ID');
 		return;
 	}
 	
@@ -1649,7 +1866,7 @@ async function handleMessage(msg: any) {
 	
 	console.log(`[执行] workspace=${workspace} message="${message.slice(0, 60)}"`);
 	
-	await sendMarkdown(sessionWebhook, '⏳ Cursor AI 正在思考...', '💭 思考中', 'wathet');
+	await sendMarkdown(sessionWebhook, '⏳ AI 正在思考...', '💭 思考中', 'wathet');
 	
 	// 记忆由 Cursor 自主通过 memory-tool.ts 调用，server 记录会话日志
 	if (memory) {
@@ -1683,6 +1900,9 @@ async function handleMessage(msg: any) {
 	
 	try {
 		const agentStart = Date.now();
+		const currentModel = config.CURSOR_MODEL || getDefaultModel();
+		const isOpus = shouldEnableFeedbackGate(currentModel);
+		let lastFeedbackGateOutput = '';
 		
 		const { result, quotaWarning } = await runAgent(workspace, message, session.agentId, {
 			platform: 'dingtalk',
@@ -1690,7 +1910,6 @@ async function handleMessage(msg: any) {
 			onSessionId: (sid) => {
 				session.agentId = sid;
 				setActiveSession(workspace, sid, message.slice(0, 40));
-				// Bug 修复: sessionId 创建后，需更新 busySessions 的 key
 				const oldLockKey = lockKey;
 				const newLockKey = `session:${sid}`;
 				if (oldLockKey !== newLockKey && busySessions.has(oldLockKey)) {
@@ -1700,6 +1919,43 @@ async function handleMessage(msg: any) {
 					console.log(`[lockKey] 更新: ${oldLockKey} → ${newLockKey}`);
 				}
 			},
+			feedbackGate: isOpus ? {
+				chatId: fgKey,
+				platform: 'dingtalk',
+				enabledModel: currentModel,
+			} : undefined,
+			onFeedbackRequested: isOpus ? async (req: FeedbackGateRequest) => {
+				console.log(`[FeedbackGate] Received request: triggerId=${req.triggerId} title=${req.title} isKeepalive=${req.isKeepalive}`);
+				if (req.isKeepalive) {
+					const existingFG = pendingFeedbackGates.get(fgKey);
+					if (existingFG) {
+						console.log(`[FeedbackGate] Keepalive: updating triggerId ${existingFG.triggerId} → ${req.triggerId}`);
+						existingFG.triggerId = req.triggerId;
+						existingFG.createdAt = Date.now();
+					}
+					if (req.agentOutput) {
+						lastFeedbackGateOutput = req.agentOutput;
+					}
+					return;
+				}
+				recentFeedbackConsumed.delete(fgKey);
+				pendingFeedbackGates.set(fgKey, {
+					triggerId: req.triggerId,
+					message: req.message,
+					title: req.title,
+					conversationId,
+					webhook: sessionWebhook,
+					createdAt: Date.now(),
+				});
+				if (req.agentOutput) {
+					lastFeedbackGateOutput = req.agentOutput;
+					await sendMarkdown(sessionWebhook, req.agentOutput, req.title || '💬 AI 请求反馈');
+				}
+				const round = (feedbackRoundCounter.get(fgKey) || 0) + 1;
+				feedbackRoundCounter.set(fgKey, round);
+				const roundLabel = round === 1 ? '🆕 新对话' : `🔄 第 ${round} 轮`;
+				await sendMarkdown(sessionWebhook, `💬 **${req.title || 'AI 请求反馈'}**\n\n${req.message}\n\n---\n${roundLabel}\n回复消息即可提交反馈\n发送「完成」或「done」结束对话`, '💬 等待反馈');
+			} : undefined,
 		});
 		
 		const agentElapsedMs = Date.now() - agentStart;
@@ -1733,6 +1989,12 @@ async function handleMessage(msg: any) {
 			// 重新加载调度器
 			scheduler.reload().catch(() => {});
 			
+			// FeedbackGate 最终输出去重
+			if (lastFeedbackGateOutput && cleanOutput && isFeedbackGateDuplicate(lastFeedbackGateOutput, cleanOutput)) {
+				console.log(`[FeedbackGate] 跳过重复最终输出 (fgLen=${lastFeedbackGateOutput.length} finalLen=${cleanOutput.length})`);
+				cleanOutput = '';
+			}
+
 			// 发送结果
 			if (cleanOutput) {
 				// 分片发送（钉钉 Markdown 有长度限制）
@@ -1749,11 +2011,13 @@ async function handleMessage(msg: any) {
 						await new Promise(resolve => setTimeout(resolve, 500));
 					}
 				}
-			} else {
+			} else if (!lastFeedbackGateOutput) {
 				await sendMarkdown(sessionWebhook, '✅ 任务已完成（无输出）', title, quotaWarning ? 'orange' : 'green');
 			}
 		} finally {
 			busySessions.delete(lockKey);
+			pendingFeedbackGates.delete(fgKey);
+			feedbackRoundCounter.delete(fgKey);
 		}
 		}); // 闭合 withSessionLock
 		
@@ -2136,6 +2400,136 @@ new IdeReplyWatcher("dingtalk", async (chatId, message) => {
 // 	const { startNetworkRecoveryMonitor } = await import('../shared/network-recovery.js');
 // 	startNetworkRecoveryMonitor({ ... });
 // }
+
+// ── 告警检测（私人定制，文件不存在时静默跳过） ────────
+try {
+	const { startAlarmDetection } = await import('../shared/personal/alarm-push');
+	const { env } = process;
+	const personalChannel = {
+		name: 'dingtalk-personal',
+		async send({ title, text }: { title: string; text: string }) {
+			await sendProactiveMessage(
+				{ type: 'user', userId: env.ALARM_DINGTALK_USER_ID || '' },
+				{ title, text }
+			);
+		},
+	};
+	const channels = [personalChannel];
+	channels.push({
+		name: 'dingtalk-group',
+		get mode() { return (process.env.ALARM_GROUP_MODE || 'conclusion') as any; },
+		filter(message: { title: string; text: string; briefText?: string; conclusionText?: string; _filterHint?: string }) {
+			const currentGroupId = process.env.ALARM_DINGTALK_GROUP_ID || '';
+			if (!currentGroupId) return false;
+			const directorName = process.env.ALARM_GROUP_FILTER_NAME || '';
+			if (!directorName) return true;
+			const haystack = message._filterHint || message.text;
+			return directorName.split(',').some(name =>
+				haystack.includes(name.trim())
+			);
+		},
+		async send({ title, text }: { title: string; text: string }) {
+			const currentGroupId = process.env.ALARM_DINGTALK_GROUP_ID || '';
+			if (!currentGroupId) return;
+			await sendProactiveMessage(
+				{ type: 'group', openConversationId: currentGroupId },
+				{ title, text }
+			);
+		},
+	} as any);
+	startAlarmDetection(channels, {
+		runAgent: async (ws: string, prompt: string) => {
+			const primaryModel = config.CURSOR_MODEL || getDefaultModel();
+			const modelChain = getAvailableModelChain(primaryModel);
+			if (modelChain.length === 0) throw new Error('所有模型配额用尽');
+
+			let lastErr: Error | null = null;
+			for (const model of modelChain) {
+				try {
+					const out = await agentExecutor.execute({
+						workspace: ws,
+						model: model.id,
+						prompt,
+						apiKey: config.CURSOR_API_KEY,
+					});
+					return { result: out.result };
+				} catch (err) {
+					lastErr = err as Error;
+					if (isQuotaExhausted(lastErr)) addToBlacklist(model.id);
+					if (!shouldFallback(lastErr)) throw err;
+					console.warn(`[告警排查] ${model.id} 失败，尝试下一个: ${lastErr.message.slice(0, 100)}`);
+				}
+			}
+			throw lastErr || new Error('所有模型都失败');
+		},
+		defaultWorkspace,
+		splitMarkdown,
+	});
+} catch (e: any) {
+	if (e?.code !== 'ERR_MODULE_NOT_FOUND' && e?.code !== 'MODULE_NOT_FOUND') {
+		console.error('[告警检测] 加载失败:', e?.message || e);
+	}
+}
+
+// ── 客诉检测（私人定制，文件不存在时静默跳过） ────────
+try {
+	const { startComplaintDetection } = await import('../shared/personal/complaint-push');
+	const { env } = process;
+	const personalChannel = {
+		name: 'dingtalk-personal',
+		async send({ title, text }: { title: string; text: string }) {
+			await sendProactiveMessage(
+				{ type: 'user', userId: env.ALARM_DINGTALK_USER_ID || '' },
+				{ title, text },
+			);
+		},
+	};
+	const complaintChannels = [personalChannel];
+	const complaintGroupId = env.ALARM_DINGTALK_GROUP_ID || '';
+	if (complaintGroupId) {
+		complaintChannels.push({
+			name: 'dingtalk-group',
+			async send({ title, text }: { title: string; text: string }) {
+				await sendProactiveMessage(
+					{ type: 'group', openConversationId: complaintGroupId },
+					{ title, text },
+				);
+			},
+		} as any);
+	}
+	startComplaintDetection(complaintChannels, {
+		runAgent: async (ws: string, prompt: string) => {
+			const primaryModel = config.CURSOR_MODEL || getDefaultModel();
+			const modelChain = getAvailableModelChain(primaryModel);
+			if (modelChain.length === 0) throw new Error('所有模型配额用尽');
+
+			let lastErr: Error | null = null;
+			for (const model of modelChain) {
+				try {
+					const out = await agentExecutor.execute({
+						workspace: ws,
+						model: model.id,
+						prompt,
+						apiKey: config.CURSOR_API_KEY,
+					});
+					return { result: out.result };
+				} catch (err) {
+					lastErr = err as Error;
+					if (isQuotaExhausted(lastErr)) addToBlacklist(model.id);
+					if (!shouldFallback(lastErr)) throw err;
+					console.warn(`[客诉排查] ${model.id} 失败，尝试下一个: ${lastErr.message.slice(0, 100)}`);
+				}
+			}
+			throw lastErr || new Error('所有模型都失败');
+		},
+		defaultWorkspace,
+		splitMarkdown,
+	});
+} catch (e: any) {
+	if (e?.code !== 'ERR_MODULE_NOT_FOUND' && e?.code !== 'MODULE_NOT_FOUND') {
+		console.error('[客诉检测] 加载失败:', e?.message || e);
+	}
+}
 
 // ── 启动自检（.cursor/BOOT.md）───────────────────────
 // 已禁用：agent 进程初始化太慢，会阻塞启动
