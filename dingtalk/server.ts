@@ -1553,48 +1553,42 @@ async function handleMessage(msg: any) {
 		return;
 	}
 
-	// /绑定告警群 — 将当前群设为告警推送群（隐藏指令，不在 /help 中展示）
-	if (/^\/?绑定告警群$/.test(text.trim())) {
-		if (!isGroup) {
-			await sendMarkdown(sessionWebhook, '⚠️ 此指令仅在群聊中有效，请在目标群里发送。', '⚠️ 提示');
+	// 私人定制模块命令（告警/客诉开关、绑定/解绑等，模块不存在时无命令注册，自然跳过）
+	for (const cmd of personalCommands) {
+		const m = text.trim().match(cmd.pattern);
+		if (!m) continue;
+		if ('handle' in cmd) {
+			const updateEnv = (key: string, value: string) => {
+				const envRaw = readFileSync(ENV_PATH, 'utf-8');
+				const updated = envRaw.includes(`${key}=`)
+					? envRaw.replace(new RegExp(`^${key}=.*$`, 'm'), `${key}=${value}`)
+					: envRaw.trimEnd() + `\n${key}=${value}\n`;
+				writeFileSync(ENV_PATH, updated);
+				process.env[key] = value;
+			};
+			const handled = await cmd.handle({
+				isGroup, conversationId, conversationTitle: data.conversationTitle,
+				reply: (text, title, color) => sendMarkdown(sessionWebhook, text, title || '', color),
+				updateEnv,
+			}, m);
+			if (handled) return;
+		} else {
+			const enable = m[1]!.toLowerCase() === 'on';
+			const envRaw = readFileSync(ENV_PATH, 'utf-8');
+			const updated = envRaw.includes(`${cmd.envKey}=`)
+				? envRaw.replace(new RegExp(`^${cmd.envKey}=.*$`, 'm'), `${cmd.envKey}=${enable}`)
+				: envRaw.trimEnd() + `\n${cmd.envKey}=${enable}\n`;
+			writeFileSync(ENV_PATH, updated);
+			process.env[cmd.envKey] = String(enable);
+			const statusText = enable
+				? `✅ ${cmd.label}已**开启**，下一轮将开始检测`
+				: `⏸️ ${cmd.label}已**关闭**`;
+			await sendMarkdown(sessionWebhook, statusText, enable ? `✅ ${cmd.label}` : `⏸️ ${cmd.label}`);
+			console.log(`[${cmd.label}] ${enable ? '开启' : '关闭'}`);
 			return;
 		}
-		try {
-			await import('../shared/personal/alarm-dingtalk');
-		} catch {
-			await sendMarkdown(sessionWebhook, '⚠️ 告警模块未启用，无法绑定。', '⚠️ 提示');
-			return;
-		}
-		const groupId = conversationId;
-		const groupTitle = data.conversationTitle || '未命名群';
-		// 更新 .env 文件
-		const envRaw = readFileSync(ENV_PATH, 'utf-8');
-		const updated = envRaw.includes('ALARM_DINGTALK_GROUP_ID=')
-			? envRaw.replace(/^ALARM_DINGTALK_GROUP_ID=.*$/m, `ALARM_DINGTALK_GROUP_ID=${groupId}`)
-			: envRaw.trimEnd() + `\nALARM_DINGTALK_GROUP_ID=${groupId}\n`;
-		writeFileSync(ENV_PATH, updated);
-		// 同步更新 process.env
-		process.env.ALARM_DINGTALK_GROUP_ID = groupId;
-		await sendMarkdown(sessionWebhook, `✅ 已绑定本群为告警推送群\n\n**群名**：${groupTitle}`, '✅ 绑定成功');
-		console.log(`[绑定告警] 群 "${groupTitle}" → ${groupId}`);
-		return;
 	}
 
-	// /解绑告警群 — 停止向群推送告警（隐藏指令）
-	if (/^\/?解绑告警群$/.test(text.trim())) {
-		if (!process.env.ALARM_DINGTALK_GROUP_ID) {
-			await sendMarkdown(sessionWebhook, '当前没有绑定告警推送群。', '💡 提示');
-			return;
-		}
-		const envRaw = readFileSync(ENV_PATH, 'utf-8');
-		const updated = envRaw.replace(/^ALARM_DINGTALK_GROUP_ID=.*$/m, 'ALARM_DINGTALK_GROUP_ID=');
-		writeFileSync(ENV_PATH, updated);
-		process.env.ALARM_DINGTALK_GROUP_ID = '';
-		await sendMarkdown(sessionWebhook, '✅ 已解绑告警推送群，告警将只推送到个人。', '✅ 解绑成功');
-		console.log('[解绑告警] 已清空群 ID');
-		return;
-	}
-	
 	// 尝试路由到命令处理器
 	const handled = await commandHandler.route(text, (newSessionId: string) => {
 		session.agentId = newSessionId;
@@ -2434,10 +2428,15 @@ const personalModules = [
 	{ mod: 'alarm-dingtalk', label: '告警排查' },
 	{ mod: 'complaint-dingtalk', label: '客诉排查' },
 ];
+type PersonalCommand =
+	| { pattern: RegExp; envKey: string; label: string }
+	| { pattern: RegExp; handle: (ctx: { isGroup: boolean; conversationId: string; conversationTitle?: string; reply: (text: string, title?: string, color?: string) => Promise<void>; updateEnv: (key: string, value: string) => void }, match: RegExpMatchArray) => Promise<boolean> };
+const personalCommands: PersonalCommand[] = [];
 for (const { mod, label } of personalModules) {
 	try {
-		const { setup } = await import(`../shared/personal/${mod}`);
-		setup(createPersonalModuleDeps(label));
+		const m = await import(`../shared/personal/${mod}`);
+		m.setup(createPersonalModuleDeps(label));
+		if (m.commands) personalCommands.push(...m.commands);
 	} catch (e: any) {
 		if (e?.code !== 'ERR_MODULE_NOT_FOUND' && e?.code !== 'MODULE_NOT_FOUND') {
 			console.error(`[${label}] 加载失败:`, e?.message || e);
