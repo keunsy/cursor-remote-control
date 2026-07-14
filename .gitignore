@@ -116,8 +116,8 @@ docs/similar-projects.md
 !/docs/MEMORY-SYSTEM.md
 !/docs/test-plan-*.md
 
-# 私人定制模块（业务定制代码，不提交）
-shared/personal/
+# 私人定制模块（通过 git submodule 管理，见 .gitmodules）
+# shared/personal/ → https://github.com/keunsy/cursor-remote-control-personal (private)
 
 # 私人配置文件（每人不同，不提交）
 config/news-sources.json

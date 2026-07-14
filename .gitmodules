@@ -1,0 +1,3 @@
+[submodule "shared/personal"]
+	path = shared/personal
+	url = https://github.com/keunsy/cursor-remote-control-personal.git
