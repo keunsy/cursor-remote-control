@@ -807,9 +807,62 @@ class WechatClient {
 
 	public async sendTextMessage(toUserId: string, text: string, contextToken?: string): Promise<any> {
 		if (!contextToken) {
-			console.warn(`[微信] contextToken missing for to=${toUserId}, sending without context (may fail at API level)`);
+			console.warn(`[微信] contextToken missing for to=${toUserId}, sending without context`);
 		}
-		
+
+		const buildMsg = (content: string, ctxTok?: string) => ({
+			base_info: { channel_version: CHANNEL_VERSION },
+			msg: {
+				from_user_id: '',
+				to_user_id: toUserId,
+				client_id: `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+				message_type: MESSAGE_TYPE_BOT,
+				message_state: MESSAGE_STATE_FINISH,
+				item_list: [{ type: MESSAGE_ITEM_TEXT, text_item: { text: content } }],
+				context_token: ctxTok ?? undefined,
+			},
+		});
+
+		const sendOne = async (content: string, ctxTok?: string): Promise<any> => {
+			// 使用独立 fetch 避免与长轮询共享连接导致队头阻塞
+			const url = `${this.baseUrl}/ilink/bot/sendmessage`;
+			const body = JSON.stringify(buildMsg(content, ctxTok));
+			const controller = new AbortController();
+			const timer = setTimeout(() => controller.abort(), 15_000);
+			try {
+				const res = await fetch(url, {
+					method: 'POST',
+					headers: {
+						'Authorization': `Bearer ${this.token}`,
+						'AuthorizationType': 'ilink_bot_token',
+						'X-WECHAT-UIN': String(Math.floor(Math.random() * 900000000) + 100000000),
+						'Content-Type': 'application/json',
+					},
+					body,
+					signal: controller.signal,
+				});
+				clearTimeout(timer);
+				if (!res.ok) {
+					const text = await res.text();
+					throw new Error(`API Error ${res.status}: ${text.substring(0, 200)}`);
+				}
+				const resp = await res.json() as { ret?: number; errcode?: unknown; errmsg?: unknown };
+				if (resp?.ret != null && resp.ret !== 0) {
+					if (resp.ret === -2) {
+						throw new Error('sendmessage failed: ret=-2, context_token 过期或无效，请给 bot 发一条消息刷新会话');
+					}
+					throw new Error(`sendmessage failed: ret=${resp.ret}, errcode=${resp.errcode}, errmsg=${resp.errmsg}`);
+				}
+				return resp;
+			} catch (err) {
+				clearTimeout(timer);
+				if (err instanceof Error && err.name === 'AbortError') {
+					throw new Error('sendmessage timeout (15s)');
+				}
+				throw err;
+			}
+		};
+
 		// 文本分片
 		if (text.length > MAX_MESSAGE_CHUNK) {
 			const chunks: string[] = [];
@@ -819,45 +872,13 @@ class WechatClient {
 			
 			let lastResp: any;
 			for (const chunk of chunks) {
-				lastResp = await this.request('/ilink/bot/sendmessage', {
-					base_info: { 
-						channel_version: CHANNEL_VERSION
-					},
-					msg: {
-						from_user_id: '',  // 可以为空
-						to_user_id: toUserId,
-						client_id: `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
-						message_type: MESSAGE_TYPE_BOT,
-						message_state: MESSAGE_STATE_FINISH,
-						item_list: [{ 
-							type: MESSAGE_ITEM_TEXT, 
-							text_item: { text: chunk }
-						}],
-						context_token: contextToken ?? undefined
-					}
-				});
+				lastResp = await sendOne(chunk, contextToken);
 				await new Promise(resolve => setTimeout(resolve, 200));
 			}
 			return lastResp;
 		}
 		
-		return this.request('/ilink/bot/sendmessage', {
-			base_info: { 
-				channel_version: CHANNEL_VERSION
-			},
-			msg: {
-				from_user_id: '',  // 可以为空
-				to_user_id: toUserId,
-				client_id: `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
-				message_type: MESSAGE_TYPE_BOT,
-				message_state: MESSAGE_STATE_FINISH,
-				item_list: [{ 
-					type: MESSAGE_ITEM_TEXT, 
-					text_item: { text }
-				}],
-				context_token: contextToken ?? undefined
-			}
-		});
+		return sendOne(text, contextToken);
 	}
 
 	/**
@@ -901,7 +922,8 @@ interface PendingFeedbackGate {
 }
 const pendingFeedbackGates = new Map<string, PendingFeedbackGate>();
 const recentFeedbackConsumed = new Map<string, number>();
-const feedbackRoundCounter = new Map<string, number>();
+const feedbackRoundCounter = new Map<string, { count: number; lastAt: number }>();
+const FEEDBACK_ROUND_STALE_MS = 10 * 60 * 1000; // 10 分钟内算同一轮对话
 const activeTypingCleanup = new Map<string, () => void>();
 const FEEDBACK_GATE_TIMEOUT = 24 * 60 * 60 * 1000; // 24h
 
@@ -1404,15 +1426,22 @@ async function startWechatServer() {
 	let lastWechatUserId: string | undefined;
 
 	const sendWechatText = async (toUserId: string, body: string, ctxTok?: string) => {
-		// 微信个人号不支持 Markdown，转换为纯文本（OpenClaw 简洁风格）
 		const plainText = markdownToPlainText(body);
 		
-		for (let off = 0; off < plainText.length; off += MAX_MESSAGE_CHUNK) {
-			const chunk = plainText.slice(off, off + MAX_MESSAGE_CHUNK);
-			await client.sendTextMessage(toUserId, chunk, ctxTok);
-			if (off + MAX_MESSAGE_CHUNK < plainText.length) {
-				await new Promise((r) => setTimeout(r, 300));
+		try {
+			for (let off = 0; off < plainText.length; off += MAX_MESSAGE_CHUNK) {
+				const chunk = plainText.slice(off, off + MAX_MESSAGE_CHUNK);
+				await client.sendTextMessage(toUserId, chunk, ctxTok);
+				if (off + MAX_MESSAGE_CHUNK < plainText.length) {
+					await new Promise((r) => setTimeout(r, 300));
+				}
 			}
+		} catch (err) {
+			if (err instanceof Error && err.message.includes('ret=-2')) {
+				wechatContextTokens.delete(toUserId);
+				console.warn(`[微信] token 已失效，已从缓存清除 (${toUserId})`);
+			}
+			throw err;
 		}
 	};
 
@@ -1604,7 +1633,8 @@ async function startWechatServer() {
 			}
 			const tok = wechatContextTokens.get(uid);
 			if (!tok) {
-				console.warn('[心跳] contextToken missing, attempting to send without context (may fail at API level)');
+				console.warn('[心跳] 无 context_token，跳过推送（需用户先发消息激活会话）');
+				return;
 			}
 			await sendWechatText(uid, `💓 **心跳检查**\n\n${content.slice(0, 3000)}`, tok);
 		},
@@ -1751,9 +1781,9 @@ async function startWechatServer() {
 				console.warn('[定时] 无用户 ID，跳过推送');
 				return;
 			}
-			const tok = wechatContextTokens.get(uid);
-			if (!tok) {
-				console.warn('[定时] contextToken missing, attempting to send without context (may fail at API level)');
+			const ctxTok = wechatContextTokens.get(uid);
+			if (!ctxTok) {
+				throw new Error('无可用 context_token（请给微信 bot 发一条消息激活会话后再触发定时任务）');
 			}
 			let chunks: string[];
 			try {
@@ -1767,7 +1797,7 @@ async function startWechatServer() {
 				if (!ch) continue;
 				const title =
 					chunks.length > 1 ? `⏰ **${job.name}** (${i + 1}/${chunks.length})` : `⏰ **定时：${job.name}**`;
-				await sendWechatText(uid, `${title}\n\n${ch.slice(0, 3500)}`, tok);
+				await sendWechatText(uid, `${title}\n\n${ch.slice(0, 3500)}`, ctxTok);
 				if (i < chunks.length - 1) await new Promise((r) => setTimeout(r, 500));
 			}
 		},
@@ -2364,13 +2394,13 @@ async function startWechatServer() {
 				try {
 					// 发送排队提示消息
 					await sendWechatText(uid, '⏳ 当前会话有任务进行中，请稍候…', contextToken);
-					const maxWait = 5 * 60 * 1000;
+					const maxWait = 15 * 60 * 1000;
 					const startWait = Date.now();
 					while (busySessions.has(lockKey)) {
 						if (Date.now() - startWait > maxWait) {
 							await sendWechatText(
 								uid,
-								'❌ 排队超时，请使用 `/终止` 或稍后再试。',
+								'❌ 排队超时（15分钟），请使用 `/终止` 或稍后再试。',
 								contextToken,
 							);
 							return;
@@ -2457,8 +2487,11 @@ async function startWechatServer() {
 							lastFeedbackGateOutput = req.agentOutput;
 							await sendWechatText(uid, req.agentOutput, contextToken);
 						}
-						const round = (feedbackRoundCounter.get(uid) || 0) + 1;
-						feedbackRoundCounter.set(uid, round);
+						const prev = feedbackRoundCounter.get(uid);
+						const now = Date.now();
+						const isStale = !prev || (now - prev.lastAt) > FEEDBACK_ROUND_STALE_MS;
+						const round = isStale ? 1 : prev.count + 1;
+						feedbackRoundCounter.set(uid, { count: round, lastAt: now });
 						const roundLabel = round === 1 ? '🆕 新对话' : `🔄 第 ${round} 轮`;
 						const fgMsg = `💬 **${req.title || 'AI 请求反馈'}**（${roundLabel}）\n\n${req.message}\n\n---\n回复此消息即可提交反馈\n发送「完成」或「done」结束对话`;
 						await sendWechatText(uid, fgMsg, contextToken);
@@ -2607,7 +2640,6 @@ async function startWechatServer() {
 			const fpCleanup = activeTypingCleanup.get(uid);
 			if (fpCleanup) { fpCleanup(); activeTypingCleanup.delete(uid); }
 			pendingFeedbackGates.delete(uid);
-			feedbackRoundCounter.delete(uid);
 			stopTyping();
 		}
 			} finally {

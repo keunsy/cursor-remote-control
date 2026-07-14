@@ -1874,7 +1874,8 @@ interface PendingFeedbackGate {
 }
 const pendingFeedbackGates = new Map<string, PendingFeedbackGate>();
 const recentFeedbackConsumed = new Map<string, number>();
-const feedbackRoundCounter = new Map<string, number>();
+const feedbackRoundCounter = new Map<string, { count: number; lastAt: number }>();
+const FEEDBACK_ROUND_STALE_MS = 10 * 60 * 1000; // 10 分钟内算同一轮对话
 const feedbackGateLatestCards = new Map<string, string>();
 const FEEDBACK_GATE_TIMEOUT = 24 * 60 * 60 * 1000; // 24h
 
@@ -1922,8 +1923,11 @@ async function runAgent(
 							color: 'green',
 						});
 					}
-					const round = (feedbackRoundCounter.get(chatId) || 0) + 1;
-					feedbackRoundCounter.set(chatId, round);
+					const prev = feedbackRoundCounter.get(chatId);
+					const now = Date.now();
+					const isStale = !prev || (now - prev.lastAt) > FEEDBACK_ROUND_STALE_MS;
+					const round = isStale ? 1 : prev.count + 1;
+					feedbackRoundCounter.set(chatId, { count: round, lastAt: now });
 					const roundLabel = round === 1 ? '🆕 新对话' : `🔄 第 ${round} 轮`;
 					const fgCardId = await sendCard(chatId, `💬 **${req.title || 'AI 请求反馈'}**\n\n${req.message}\n\n---\n${roundLabel}\n回复此消息即可提交反馈\n发送「完成」或「done」结束对话`, {
 						title: `${req.title || '等待反馈'}（${roundLabel}）`,
@@ -2031,7 +2035,6 @@ async function runAgent(
 			busySessions.delete(lockKey);
 			if (chatId) {
 				pendingFeedbackGates.delete(chatId);
-				feedbackRoundCounter.delete(chatId);
 				feedbackGateLatestCards.delete(chatId);
 			}
 		}

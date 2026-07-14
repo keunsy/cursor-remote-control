@@ -320,7 +320,8 @@ export class AgentExecutor {
 		let lastOutputTime = Date.now(); // 追踪最后一次输出时间
 			
 		// 进度更新 + 无输出超时检测定时器
-		const IDLE_TIMEOUT = 5 * 60 * 1000; // 5 分钟无输出超时
+		const IDLE_TIMEOUT = 15 * 60 * 1000; // 15 分钟无输出超时（thinking/tool_call）
+		const IDLE_TIMEOUT_RESPONDING = 20 * 60 * 1000; // 20 分钟（responding 阶段生成长回复时宽容）
 		progressTimer = setInterval(() => {
 			if (done) return;
 			const now = Date.now();
@@ -328,7 +329,8 @@ export class AgentExecutor {
 			// 检查是否长时间无输出（可能卡住）— feedback gate 等待中豁免
 			// feedbackGatePending 一旦触发就持久豁免，防止 MCP 返回 WAITING 后 Agent 继续跑其他 tool 时被 idle timeout 杀死
 			const idleTime = now - lastOutputTime;
-			if (idleTime > IDLE_TIMEOUT && !feedbackGateActive && !feedbackGatePending) {
+			const effectiveTimeout = phase === 'responding' ? IDLE_TIMEOUT_RESPONDING : IDLE_TIMEOUT;
+			if (idleTime > effectiveTimeout && !feedbackGateActive && !feedbackGatePending) {
 				console.warn(`[AgentExecutor] 进程 ${Math.floor(idleTime / 1000 / 60)} 分钟无输出，可能卡住，强制终止 ${lockKey}`);
 				cleanup();
 				try {

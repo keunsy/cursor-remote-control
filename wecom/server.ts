@@ -882,15 +882,15 @@ wsClient.on('message.text', async (frame: WsFrame) => {
 				text: { content: '⏳ 排队中（同会话有任务进行中）\n\n请稍候...' },
 			});
 			console.log(`[并发] 会话 ${lockKey} 已在运行，等待中...`);
-			const maxWaitTime = 5 * 60 * 1000; // 5 分钟
+			const maxWaitTime = 15 * 60 * 1000; // 15 分钟
 			const startWait = Date.now();
 			while (busySessions.has(lockKey)) {
 				if (Date.now() - startWait > maxWaitTime) {
-					console.error(`[并发] 等待超时（5分钟），拒绝执行: ${lockKey}`);
+					console.error(`[并发] 等待超时（15分钟），拒绝执行: ${lockKey}`);
 					await wsClient.reply(frame, {
 						msgtype: 'markdown',
 						markdown: {
-							content: `❌ **排队超时**\n\n当前会话有任务运行超过 5 分钟未完成。\n\n请使用 \`/终止\` 命令强制停止，或稍后再试。`,
+							content: `❌ **排队超时**\n\n当前会话有任务运行超过 15 分钟未完成。\n\n请使用 \`/终止\` 命令强制停止，或稍后再试。`,
 						},
 					});
 					return;

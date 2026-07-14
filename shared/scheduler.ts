@@ -359,9 +359,13 @@ export class Scheduler {
 				job.state.consecutiveErrors = 0;
 				job.state.lastError = undefined;
 				if (result.result && this.opts.onDelivery) {
-					await this.opts.onDelivery(job, result.result).catch((e) =>
-						this.log(`投递失败 "${job.name}": ${e}`),
-					);
+					try {
+						await this.opts.onDelivery(job, result.result);
+					} catch (e) {
+						status = "error";
+						error = `投递失败: ${e instanceof Error ? e.message : String(e)}`;
+						this.log(`投递失败 "${job.name}": ${error}`);
+					}
 				}
 			}
 		} catch (err) {

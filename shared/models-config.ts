@@ -206,7 +206,7 @@ export function findModel(input: string): ModelConfig | null {
  */
 export function getModelChain(modelId: string): ModelConfig[] {
 	const models = getModels();
-	const model = models.find(m => m.id === modelId);
+	const model = models.find(m => m.id === modelId) || findModel(modelId);
 	if (!model) return [];
 	
 	const chain: ModelConfig[] = [model];

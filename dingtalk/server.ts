@@ -189,7 +189,7 @@ watchFile(ENV_PATH, { interval: 2000 }, () => {
 	try {
 		const prev = config.CURSOR_API_KEY;
 		const prevModel = config.CURSOR_MODEL;
-		// 同步所有 .env 变量到 process.env（供 alarm-push / complaint-push 等动态读取）
+		// 同步所有 .env 变量到 process.env（供私人定制模块等动态读取）
 		const raw = readFileSync(ENV_PATH, 'utf-8');
 		for (const line of raw.split('\n')) {
 			const trimmed = line.trim();
@@ -1560,7 +1560,7 @@ async function handleMessage(msg: any) {
 			return;
 		}
 		try {
-			await import('../shared/personal/alarm-push');
+			await import('../shared/personal/alarm-dingtalk');
 		} catch {
 			await sendMarkdown(sessionWebhook, '⚠️ 告警模块未启用，无法绑定。', '⚠️ 提示');
 			return;
@@ -2401,133 +2401,47 @@ new IdeReplyWatcher("dingtalk", async (chatId, message) => {
 // 	startNetworkRecoveryMonitor({ ... });
 // }
 
-// ── 告警检测（私人定制，文件不存在时静默跳过） ────────
-try {
-	const { startAlarmDetection } = await import('../shared/personal/alarm-push');
-	const { env } = process;
-	const personalChannel = {
-		name: 'dingtalk-personal',
-		async send({ title, text }: { title: string; text: string }) {
-			await sendProactiveMessage(
-				{ type: 'user', userId: env.ALARM_DINGTALK_USER_ID || '' },
-				{ title, text }
-			);
-		},
-	};
-	const channels = [personalChannel];
-	channels.push({
-		name: 'dingtalk-group',
-		get mode() { return (process.env.ALARM_GROUP_MODE || 'conclusion') as any; },
-		filter(message: { title: string; text: string; briefText?: string; conclusionText?: string; _filterHint?: string }) {
-			const currentGroupId = process.env.ALARM_DINGTALK_GROUP_ID || '';
-			if (!currentGroupId) return false;
-			const directorName = process.env.ALARM_GROUP_FILTER_NAME || '';
-			if (!directorName) return true;
-			const haystack = message._filterHint || message.text;
-			return directorName.split(',').some(name =>
-				haystack.includes(name.trim())
-			);
-		},
-		async send({ title, text }: { title: string; text: string }) {
-			const currentGroupId = process.env.ALARM_DINGTALK_GROUP_ID || '';
-			if (!currentGroupId) return;
-			await sendProactiveMessage(
-				{ type: 'group', openConversationId: currentGroupId },
-				{ title, text }
-			);
-		},
-	} as any);
-	startAlarmDetection(channels, {
+// ── 私人定制模块（文件不存在时静默跳过） ────────
+function createPersonalModuleDeps(label: string) {
+	return {
+		sendProactiveMessage,
 		runAgent: async (ws: string, prompt: string) => {
 			const primaryModel = config.CURSOR_MODEL || getDefaultModel();
 			const modelChain = getAvailableModelChain(primaryModel);
 			if (modelChain.length === 0) throw new Error('所有模型配额用尽');
-
 			let lastErr: Error | null = null;
 			for (const model of modelChain) {
 				try {
 					const out = await agentExecutor.execute({
-						workspace: ws,
-						model: model.id,
-						prompt,
-						apiKey: config.CURSOR_API_KEY,
+						workspace: ws, model: model.id, prompt, apiKey: config.CURSOR_API_KEY,
 					});
 					return { result: out.result };
 				} catch (err) {
 					lastErr = err as Error;
 					if (isQuotaExhausted(lastErr)) addToBlacklist(model.id);
 					if (!shouldFallback(lastErr)) throw err;
-					console.warn(`[告警排查] ${model.id} 失败，尝试下一个: ${lastErr.message.slice(0, 100)}`);
+					console.warn(`[${label}] ${model.id} 失败，尝试下一个: ${lastErr.message.slice(0, 100)}`);
 				}
 			}
 			throw lastErr || new Error('所有模型都失败');
 		},
 		defaultWorkspace,
 		splitMarkdown,
-	});
-} catch (e: any) {
-	if (e?.code !== 'ERR_MODULE_NOT_FOUND' && e?.code !== 'MODULE_NOT_FOUND') {
-		console.error('[告警检测] 加载失败:', e?.message || e);
-	}
+	};
 }
 
-// ── 客诉检测（私人定制，文件不存在时静默跳过） ────────
-try {
-	const { startComplaintDetection } = await import('../shared/personal/complaint-push');
-	const { env } = process;
-	const personalChannel = {
-		name: 'dingtalk-personal',
-		async send({ title, text }: { title: string; text: string }) {
-			await sendProactiveMessage(
-				{ type: 'user', userId: env.ALARM_DINGTALK_USER_ID || '' },
-				{ title, text },
-			);
-		},
-	};
-	const complaintChannels = [personalChannel];
-	const complaintGroupId = env.ALARM_DINGTALK_GROUP_ID || '';
-	if (complaintGroupId) {
-		complaintChannels.push({
-			name: 'dingtalk-group',
-			async send({ title, text }: { title: string; text: string }) {
-				await sendProactiveMessage(
-					{ type: 'group', openConversationId: complaintGroupId },
-					{ title, text },
-				);
-			},
-		} as any);
-	}
-	startComplaintDetection(complaintChannels, {
-		runAgent: async (ws: string, prompt: string) => {
-			const primaryModel = config.CURSOR_MODEL || getDefaultModel();
-			const modelChain = getAvailableModelChain(primaryModel);
-			if (modelChain.length === 0) throw new Error('所有模型配额用尽');
-
-			let lastErr: Error | null = null;
-			for (const model of modelChain) {
-				try {
-					const out = await agentExecutor.execute({
-						workspace: ws,
-						model: model.id,
-						prompt,
-						apiKey: config.CURSOR_API_KEY,
-					});
-					return { result: out.result };
-				} catch (err) {
-					lastErr = err as Error;
-					if (isQuotaExhausted(lastErr)) addToBlacklist(model.id);
-					if (!shouldFallback(lastErr)) throw err;
-					console.warn(`[客诉排查] ${model.id} 失败，尝试下一个: ${lastErr.message.slice(0, 100)}`);
-				}
-			}
-			throw lastErr || new Error('所有模型都失败');
-		},
-		defaultWorkspace,
-		splitMarkdown,
-	});
-} catch (e: any) {
-	if (e?.code !== 'ERR_MODULE_NOT_FOUND' && e?.code !== 'MODULE_NOT_FOUND') {
-		console.error('[客诉检测] 加载失败:', e?.message || e);
+const personalModules = [
+	{ mod: 'alarm-dingtalk', label: '告警排查' },
+	{ mod: 'complaint-dingtalk', label: '客诉排查' },
+];
+for (const { mod, label } of personalModules) {
+	try {
+		const { setup } = await import(`../shared/personal/${mod}`);
+		setup(createPersonalModuleDeps(label));
+	} catch (e: any) {
+		if (e?.code !== 'ERR_MODULE_NOT_FOUND' && e?.code !== 'MODULE_NOT_FOUND') {
+			console.error(`[${label}] 加载失败:`, e?.message || e);
+		}
 	}
 }
 
