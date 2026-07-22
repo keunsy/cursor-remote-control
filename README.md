@@ -9,7 +9,6 @@
 
 **两种远程模式**：
 - **Agent CLI 模式**：通过 IM 启动独立的 Cursor Agent 会话，适合新任务
-- **IDE 入队模式**（`/ide`）：直接向正在运行的 Cursor IDE 窗口投递消息，与当前活跃的 Agent 对话交互，支持双向反馈——Agent 的回复自动返回 IM（依赖 [cursor-feedback-gate](https://github.com/keunsy/cursor-feedback-gate)）
 
 ---
 
@@ -23,7 +22,7 @@
 钉钉 ────── Stream ────────┤
                            │
 企业微信 ── WebSocket ─────┤
-                           ├──→ Cursor CLI ──→ 本地 Cursor IDE
+                           ├──→ Cursor CLI
 微信 ────── HTTP Poll ─────┤          │
                            │          │
 Telegram ── Bot API ───────┤          │
@@ -116,7 +115,6 @@ cursor-remote-control/
 
 - 🚀 **多渠道支持**: 飞书、钉钉、企业微信、微信个人号、Telegram 等，独立部署，可同时运行，易于扩展新渠道
 - 💰 **配额节约**: 集成 [Feedback Gate](https://github.com/keunsy/cursor-feedback-gate)，Opus 模型下单次请求内多轮反馈不消耗额外配额，500 次/月可实现数倍有效交互；auto 模式配额充足，不启用 CLI Feedback Gate ⭐
-- 🖥️ **IDE 远程入队**: `/ide` 指令从 IM 直接向 Cursor IDE 队列投递消息，支持多窗口 PID 路由和双向反馈（依赖 [cursor-feedback-gate](https://github.com/keunsy/cursor-feedback-gate)）⭐
 - 🧠 **记忆系统**: 混合搜索（FTS5 + 向量）、时间衰减、MMR 去重、自动 Flush
 - ⏰ **定时任务**: AI 通过对话创建 Cron 任务，自动执行并推送通知
 - 📰 **热点新闻推送**: 定时抓取多平台热榜并推送（微博/知乎/百度等）
@@ -140,7 +138,6 @@ cursor-remote-control/
 |------|------|
 | 系统 | macOS |
 | 运行时 | [Bun](https://bun.sh) |
-| IDE | [Cursor](https://cursor.com) 已安装并登录 |
 | CLI | Cursor Agent CLI (`~/.local/bin/agent`) |
 
 ### 选择你的渠道
@@ -333,11 +330,6 @@ bash manage-services.sh logs wecom       # 查看企业微信日志
 | `/新闻状态` | `/health` | 查看热点数据源健康状态 |
 | `/心跳` | `/heartbeat` | 查看/管理心跳系统 |
 | `/发送文件 <路径>` | `/sendfile` `/send` | 发送本地文件（飞书 30MB，企业微信 20MB，微信通过 CDN） |
-| `/ide <消息>` | — | 投递消息到 IDE Feedback Gate 队列（依赖 [cursor-feedback-gate](https://github.com/keunsy/cursor-feedback-gate) Extension） |
-| `/ide #序号 <消息>` | — | 指定窗口投递（多实例时，依赖 cursor-feedback-gate） |
-| `/ide on` | — | 开启转发模式：所有非命令消息自动投递到 IDE |
-| `/ide off` | — | 关闭转发模式 |
-| `/ide` | — | 查看活跃 Feedback Gate 实例列表（依赖 cursor-feedback-gate） |
 
 ### 项目路由（多工作区）
 
@@ -506,7 +498,6 @@ A: 可以！飞书、钉钉、企业微信、微信、Telegram 等所有平台�
 | `scheduler.ts` | Cron/间隔/一次性任务调度 |
 | `heartbeat.ts` | 定期后台维护 |
 | `news-fetcher.ts` | 多源并行抓取、去重、格式化 |
-| `ide-reply-watcher.ts` | 监听 Feedback Gate Agent 回复并转发到 IM |
 
 ---
 

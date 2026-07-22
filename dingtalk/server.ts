@@ -2333,6 +2333,7 @@ if (!isValidConfig(config.DINGTALK_APP_KEY) || !isValidConfig(config.DINGTALK_AP
 const client = new DWClient({
 	clientId: config.DINGTALK_APP_KEY,
 	clientSecret: config.DINGTALK_APP_SECRET,
+	keepAlive: true,
 });
 
 client.registerCallbackListener(TOPIC_ROBOT, async (res) => {
