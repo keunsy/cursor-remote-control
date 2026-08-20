@@ -2401,7 +2401,7 @@ new IdeReplyWatcher("dingtalk", async (chatId, message) => {
 	setInterval(async () => {
 		if (reconnecting) return;
 
-		const isHealthy = (client as any).registered === true && (client as any).connected === true;
+		const isHealthy = (client as any).connected === true;
 
 		if (isHealthy) {
 			if (consecutiveFailures > 0) {
@@ -2412,7 +2412,7 @@ new IdeReplyWatcher("dingtalk", async (chatId, message) => {
 		}
 
 		consecutiveFailures++;
-		console.warn(`[连接监护] 连接异常 (${consecutiveFailures}/${MAX_FAILURES}): registered=${(client as any).registered}, connected=${(client as any).connected}`);
+		console.warn(`[连接监护] 连接异常 (${consecutiveFailures}/${MAX_FAILURES}): connected=${(client as any).connected}`);
 
 		if (consecutiveFailures < MAX_FAILURES) return;
 
