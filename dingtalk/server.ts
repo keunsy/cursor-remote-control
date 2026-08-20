@@ -1541,14 +1541,15 @@ async function handleMessage(msg: any) {
 		}
 	}
 
-	// Bug #26 修复：/apikey 群聊保护（钉钉特定）
+	// 群聊保护：敏感命令只允许私聊
+	if (isGroup && /^\/(apikey|api\s*key|密钥|换key|更换密钥|restart|重启)/i.test(text.trim())) {
+		await sendMarkdown(sessionWebhook, '⚠️ 此指令仅在私聊中可用。', '⚠️ 提示');
+		return;
+	}
+
+	// /apikey 私聊路由
 	const apikeyMatch = text.match(/^\/?(?:apikey|api\s*key|密钥|换key|更换密钥)[\s:：]*(.*)/i);
 	if (apikeyMatch) {
-		if (isGroup) {
-			await sendMarkdown(sessionWebhook, '⚠️ **安全提醒：请勿在群聊中发送 API Key！**\n\n请在与机器人的 **私聊** 中发送 `/密钥` 指令。', '⚠️ 安全提醒', 'red');
-			return;
-		}
-		// 私聊模式：委托给统一处理器（不需要更新 session）
 		await commandHandler.route(text, () => {}, { chatId: conversationId });
 		return;
 	}
@@ -2388,13 +2389,51 @@ new IdeReplyWatcher("dingtalk", async (chatId, message) => {
 	if (webhook) await sendMarkdown(webhook, message, "🤖 IDE Agent", "blue");
 }).start();
 
-// 网络恢复监控已禁用：
-// 实践证明频繁的主动重连反而导致消息丢失和连接不稳定
-// 钉钉 Stream SDK 自带断线重连机制（ReconnectManager），已足够可靠
-// if (process.platform === 'darwin') {
-// 	const { startNetworkRecoveryMonitor } = await import('../shared/network-recovery.js');
-// 	startNetworkRecoveryMonitor({ ... });
-// }
+// ── 连接监护者（Connection Guardian）──────────────
+// 定期检查 SDK 注册状态，连续异常超过阈值则重建连接。
+// 替代之前的 NetworkRecoveryMonitor（过于激进，已移除）。
+{
+	const CHECK_INTERVAL = 60_000;  // 60s 检查一次
+	const MAX_FAILURES = 3;         // 连续 3 次异常（~3min）才介入
+	let consecutiveFailures = 0;
+	let reconnecting = false;
+
+	setInterval(async () => {
+		if (reconnecting) return;
+
+		const isHealthy = (client as any).registered === true && (client as any).connected === true;
+
+		if (isHealthy) {
+			if (consecutiveFailures > 0) {
+				console.log(`[连接监护] 连接已恢复 (之前异常 ${consecutiveFailures} 次)`);
+			}
+			consecutiveFailures = 0;
+			return;
+		}
+
+		consecutiveFailures++;
+		console.warn(`[连接监护] 连接异常 (${consecutiveFailures}/${MAX_FAILURES}): registered=${(client as any).registered}, connected=${(client as any).connected}`);
+
+		if (consecutiveFailures < MAX_FAILURES) return;
+
+		console.warn('[连接监护] 连续异常超过阈值，尝试重建连接...');
+		reconnecting = true;
+		consecutiveFailures = 0;
+
+		try {
+			client.disconnect();
+			await new Promise(r => setTimeout(r, 2000));
+			await client.connect();
+			console.log('[连接监护] ✅ 连接重建成功');
+		} catch (err) {
+			console.error('[连接监护] ❌ 重建失败:', err instanceof Error ? err.message : String(err));
+		} finally {
+			reconnecting = false;
+		}
+	}, CHECK_INTERVAL);
+
+	console.log(`[连接监护] 已启动 (${CHECK_INTERVAL / 1000}s 检查, ${MAX_FAILURES} 次容忍)`);
+}
 
 // ── 私人定制模块（文件不存在时静默跳过） ────────
 function createPersonalModuleDeps(label: string) {

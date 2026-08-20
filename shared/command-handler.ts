@@ -7,7 +7,7 @@
 
 import { resolve } from "node:path";
 import { readFileSync, existsSync, statSync, appendFileSync, readdirSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import type { Scheduler } from "./scheduler.js";
 import type { MemoryManager } from "./memory.js";
 import type { HeartbeatRunner } from "./heartbeat.js";
@@ -251,6 +251,9 @@ export class CommandHandler {
 		"- `/心跳 开启/关闭/执行`",
 		"- `/心跳 间隔 分钟数`",
 		"",
+		"**系统管理**",
+		"- `/重启` `/restart` — 重启当前渠道服务",
+		"",
 		"**项目路由**",
 		"· 对话切换：说「切到 remote」等可持久切换",
 		"· 前缀指定：`项目名:消息` 或 `#项目名 消息`",
@@ -339,6 +342,30 @@ export class CommandHandler {
 		].join("\n");
 
 		await this.adapter.reply(`📊 **服务状态**\n\n${statusText}`);
+	}
+
+	// ──────────────────────────────────────────────────
+	// /重启 - 重启当前渠道服务
+	// ──────────────────────────────────────────────────
+
+	async handleRestart(): Promise<void> {
+		const scriptPath = resolve(this.ctx.rootDir, this.ctx.platform, "service.sh");
+
+		if (!existsSync(scriptPath)) {
+			await this.adapter.reply("❌ 未找到 service.sh，当前渠道不支持 `/重启`");
+			return;
+		}
+
+		await this.adapter.reply("🔄 正在重启服务，请稍候...");
+
+		setTimeout(() => {
+			const child = spawn("bash", [scriptPath, "restart"], {
+				cwd: resolve(this.ctx.rootDir, this.ctx.platform),
+				detached: true,
+				stdio: "ignore",
+			});
+			child.unref();
+		}, 500);
 	}
 
 	// ──────────────────────────────────────────────────
@@ -1552,6 +1579,12 @@ export class CommandHandler {
 		// /status、/状态
 		if (/^\/(status|状态)\s*$/i.test(text.trim())) {
 			await this.handleStatus();
+			return true;
+		}
+
+		// /restart、/重启
+		if (/^\/(restart|重启)\s*$/i.test(text.trim())) {
+			await this.handleRestart();
 			return true;
 		}
 
