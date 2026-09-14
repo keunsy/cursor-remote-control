@@ -2228,18 +2228,27 @@ const scheduler = new Scheduler({
 		console.log(`[scheduler] task triggered: ${job.name}`);
 		return { status: 'ok' as const, result: msg };
 	},
-	onDelivery: async (job: CronJob, result: string) => {
-		// 优先使用任务中保存的 webhook（确保发送到创建任务的平台）
-		const webhook = job.webhook || getWebhook();
-		if (!webhook) {
-			console.warn('[scheduler] no active webhook, skip delivery (user must send at least one message first)');
-			return;
-		}
-
+	onDelivery: async (job: CronJob, result: string, status: "ok" | "error") => {
 		// 只有钉钉创建的任务才发送到钉钉
 		if (job.platform && job.platform !== 'dingtalk') {
 			console.log(`[scheduler] task ${job.name} belongs to ${job.platform}, skip dingtalk delivery`);
 			return;
+		}
+
+		// webhook 优先级：job.webhook（显式指定）> getWebhook()（最近活跃会话）> 单聊推送
+		const webhook = job.webhook || getWebhook();
+		const proactiveUserId = process.env.ALARM_DINGTALK_USER_ID;
+
+		async function deliver(title: string, text: string) {
+			if (job.webhook) {
+				await sendMarkdown(job.webhook, text, title);
+			} else if (proactiveUserId) {
+				await sendProactiveMessage({ type: 'user', userId: proactiveUserId }, { title, text });
+			} else if (webhook) {
+				await sendMarkdown(webhook, text, title);
+			} else {
+				console.warn('[scheduler] no delivery target available, skip');
+			}
 		}
 
 		// 多消息分片：result 为 JSON { chunks: string[] }（新闻任务）
@@ -2256,14 +2265,13 @@ const scheduler = new Scheduler({
 				const piece = chunks[i];
 				if (piece === undefined) continue;
 				const title = chunks.length > 1 ? `📰 今日热点 (${i + 1}/${chunks.length})` : "📰 今日热点";
-				await sendMarkdown(webhook, piece, title, 'blue');
+				await deliver(title, piece);
 				if (i < chunks.length - 1) {
 					await new Promise(r => setTimeout(r, 500));
 				}
 			}
 			console.log(`[scheduler] dingtalk news sent: ${chunks.length} chunk(s)`);
 		} else {
-			// 发送提醒内容（优化格式）
 			const now = new Date();
 			const timeStr = now.toLocaleString('zh-CN', {
 				month: '2-digit',
@@ -2272,9 +2280,12 @@ const scheduler = new Scheduler({
 				minute: '2-digit',
 				hour12: false
 			});
-			const content = `**${result}**\n\n⏱ 提醒时间：${timeStr}\n📌 任务名称：${job.name}`;
-			await sendMarkdown(webhook, content, '⏰ 定时提醒');
-			console.log(`[scheduler] dingtalk reminder sent: ${result}`);
+			const hasEmoji = status === "ok" && /^[\p{Emoji_Presentation}\p{Extended_Pictographic}]/u.test(result);
+			const icon = status === "error" ? "❌" : (hasEmoji ? "" : "✅ ");
+			const titleIcon = status === "error" ? "❌" : "✅";
+			const content = `**${icon}${result}**\n\n⏱ 提醒时间：${timeStr}\n📌 任务名称：${job.name}`;
+			await deliver(`${titleIcon} ${job.name}`, content);
+			console.log(`[scheduler] dingtalk reminder sent: ${result.slice(0, 60)}`);
 		}
 	},
 	log: (msg: string) => console.log(`[调度] ${msg}`),
@@ -2339,38 +2350,46 @@ const client = new DWClient({
 
 client.registerCallbackListener(TOPIC_ROBOT, async (res) => {
 	console.log('[回调] 收到钉钉推送');
+	// 立即向钉钉服务端发送 ACK：不 ACK 的话，服务端会在 60 秒内重试推送（产生大量重复消息）。
+	// 新版 SDK 的回调运行在 AsyncLocalStorage 上下文中，ACK 会通过正确的 socket 发出。
+	try {
+		const streamMessageId = res?.headers?.messageId;
+		if (streamMessageId) {
+			client.socketCallBackResponse(streamMessageId, { code: 200, message: 'OK' });
+		}
+	} catch (ackError) {
+		console.warn('[回调] ACK 发送失败（不影响消息处理）:', ackError instanceof Error ? ackError.message : String(ackError));
+	}
 	try {
 		await handleMessage(res);
-		console.log('[回调] 处理完成，返回 200');
-		return { code: 200, message: 'OK' };
+		console.log('[回调] 处理完成');
 	} catch (error) {
 		console.error('[回调异常]', error);
-		return {
-			code: 500,
-			message: error instanceof Error ? error.message : String(error)
-		};
 	}
 });
 
-// 启动钉钉 Stream 连接，简单重试 3 次，之后由 SDK 自己管理重连
-let startRetries = 3;
-while (startRetries > 0) {
-	try {
-		await refreshAccessToken();
-		await client.connect();
-		console.log('✅ 钉钉 Stream 已连接（SDK 自动管理重连）');
-		break;
-	} catch (err) {
-		startRetries--;
-		const errMsg = err instanceof Error ? err.message : String(err);
-		if (startRetries === 0) {
-			console.error('❌ 钉钉连接启动失败（已重试 3 次）:', errMsg);
-			console.error('请检查网络连接和钉钉凭据（DINGTALK_APP_KEY / DINGTALK_APP_SECRET）');
-			process.exit(1);
-		}
-		console.warn(`[钉钉] 连接失败，5秒后重试 (剩余 ${startRetries} 次): ${errMsg}`);
-		await new Promise(r => setTimeout(r, 5000));
+// 启动钉钉 Stream 连接。
+// 2.1.7+ 语义：connect() 永不抛出、永不挂起（内部含 10s HTTP 超时与异常捕获），
+// 连接失败时由 SDK 内部按指数退避（1s→60s）自动重试。因此这里不再退出进程，
+// 只做有限时间的等待确认；首连失败时让 SDK 在后台持续自愈。
+try {
+	await refreshAccessToken();
+} catch (err) {
+	console.warn('[钉钉] 启动时 access_token 获取失败（发消息前会自动重试）:', err instanceof Error ? err.message : String(err));
+}
+await client.connect();
+let streamStarted = false;
+for (let i = 0; i < 30 && !streamStarted; i++) {
+	if ((client as any).connected === true) {
+		streamStarted = true;
+	} else {
+		await new Promise(r => setTimeout(r, 1000));
 	}
+}
+if (streamStarted) {
+	console.log('✅ 钉钉 Stream 已连接（SDK 自动管理重连）');
+} else {
+	console.warn('⚠️ 钉钉 Stream 30秒内未连接成功，SDK 将在后台持续自动重连（指数退避 1s→60s）');
 }
 
 // ── 启动定时任务调度器 ────────────────────────────
@@ -2391,7 +2410,8 @@ new IdeReplyWatcher("dingtalk", async (chatId, message) => {
 
 // ── 连接监护者（Connection Guardian）──────────────
 // 定期检查 SDK 注册状态，连续异常超过阈值则重建连接。
-// 替代之前的 NetworkRecoveryMonitor（过于激进，已移除）。
+// 定期检查 SDK 连接状态，连续异常超过阈值则重建连接。
+// 新版 SDK（2.1.7+）已内置指数退避重连与心跳清理，本监护作为第二道防线兜底极端情况。
 {
 	const CHECK_INTERVAL = 60_000;  // 60s 检查一次
 	const MAX_FAILURES = 3;         // 连续 3 次异常（~3min）才介入
@@ -2421,10 +2441,24 @@ new IdeReplyWatcher("dingtalk", async (chatId, message) => {
 		consecutiveFailures = 0;
 
 		try {
-			client.disconnect();
-			await new Promise(r => setTimeout(r, 2000));
-			await client.connect();
-			console.log('[连接监护] ✅ 连接重建成功');
+			const rebuild = (async () => {
+				client.disconnect();
+				await new Promise(r => setTimeout(r, 2000));
+				await client.connect();
+				// connect() 会立即落定，需等待真实连接建立（最多 20s）
+				for (let i = 0; i < 20; i++) {
+					if ((client as any).connected === true) return true;
+					await new Promise(r => setTimeout(r, 1000));
+				}
+				return false;
+			})();
+			const ok = await Promise.race([
+				rebuild,
+				new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 40_000)),
+			]);
+			console.log(ok
+				? '[连接监护] ✅ 连接重建成功'
+				: '[连接监护] ⚠️ 重建后 20 秒内未连接成功，SDK 将在后台继续自动重连');
 		} catch (err) {
 			console.error('[连接监护] ❌ 重建失败:', err instanceof Error ? err.message : String(err));
 		} finally {

@@ -13,6 +13,20 @@ PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 BOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUN_BIN="$(which bun 2>/dev/null || echo "$HOME/.bun/bin/bun")"
 LOG_FILE="/tmp/dingtalk-cursor.log"
+LOG_MAX_BYTES=$((50 * 1024 * 1024))  # 50MB
+
+# 启动前日志轮转：超过 50MB 则滚动为 .1（仅保留一代），防止再次出现 17GB 巨型日志。
+rotate_log() {
+    if [[ -f "$LOG_FILE" ]]; then
+        local size
+        size=$(stat -f%z "$LOG_FILE" 2>/dev/null || wc -c < "$LOG_FILE" 2>/dev/null || echo 0)
+        if [[ "$size" -gt "$LOG_MAX_BYTES" ]]; then
+            mv -f "$LOG_FILE" "${LOG_FILE}.1"
+            rm -f "${LOG_FILE}.2" 2>/dev/null || true
+            echo "  📝 日志已轮转 (${size} bytes → ${LOG_FILE}.1，仅保留一代)"
+        fi
+    fi
+}
 
 generate_plist() {
     cat > "$PLIST" <<PEOF
@@ -77,6 +91,7 @@ cmd_uninstall() {
 }
 
 cmd_start() {
+    rotate_log
     if launchctl print "gui/$(id -u)/$LABEL" &>/dev/null; then
         launchctl kickstart -k "gui/$(id -u)/$LABEL"
         echo "  ✅ 服务已启动"

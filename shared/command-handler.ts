@@ -253,6 +253,7 @@ export class CommandHandler {
 		"",
 		"**系统管理**",
 		"- `/重启` `/restart` — 重启当前渠道服务",
+		"- `/重启全部` `/restart all` — 一键重启所有渠道服务",
 		"",
 		"**项目路由**",
 		"· 对话切换：说「切到 remote」等可持久切换",
@@ -260,6 +261,7 @@ export class CommandHandler {
 		`· 可用项目：${projects}`,
 	);
 
+		helpText.push("", "> 💡 发送 `/私人` 查看个人专属命令");
 		await this.adapter.reply(`📖 **使用帮助**\n\n${helpText.join("\n")}`);
 	}
 
@@ -361,6 +363,30 @@ export class CommandHandler {
 		setTimeout(() => {
 			const child = spawn("bash", [scriptPath, "restart"], {
 				cwd: resolve(this.ctx.rootDir, this.ctx.platform),
+				detached: true,
+				stdio: "ignore",
+			});
+			child.unref();
+		}, 500);
+	}
+
+	// ──────────────────────────────────────────────────
+	// /重启全部 - 一键重启所有渠道服务（调用 manage-services.sh）
+	// ──────────────────────────────────────────────────
+
+	async handleRestartAll(): Promise<void> {
+		const scriptPath = resolve(this.ctx.rootDir, "manage-services.sh");
+
+		if (!existsSync(scriptPath)) {
+			await this.adapter.reply("❌ 未找到 manage-services.sh，无法执行 `/重启全部`");
+			return;
+		}
+
+		await this.adapter.reply("🔄 正在重启所有渠道服务（飞书/钉钉/企微/微信/Telegram），本频道短暂不可用，请稍候...");
+
+		setTimeout(() => {
+			const child = spawn("bash", [scriptPath, "restart"], {
+				cwd: this.ctx.rootDir,
 				detached: true,
 				stdio: "ignore",
 			});
@@ -1288,6 +1314,328 @@ export class CommandHandler {
 	}
 
 	// ──────────────────────────────────────────────────
+	// /私人 - 私人命令列表（不在 /帮助 中显示）
+	// ──────────────────────────────────────────────────
+
+	async handlePrivate(): Promise<void> {
+		const helpText = [
+			"🔒 **私人命令**",
+			"",
+			"**预案**",
+			"- `/预案` — 查看最新预案的核心决策树",
+			"- `/预案 0909` — 查看指定日期预案",
+			"- `/预案 生成` — AI 生成次日预案（盘后用，已有则增量校验）",
+			"- `/预案 玫瑰` — AI 抓取玫瑰最新观点 + 与预案比对差异",
+			"",
+			"**股票速报**",
+			"- `/竞价` — 竞价速报（脚本秒出，扫描预案全部标的）",
+			"- `/竞价 AI` — AI 深度分析预案标的竞价",
+			"- `/竞价 金健米业` — AI 分析某股竞价",
+			"- `/盘中` — 盘中速报（脚本秒出，实时数据+情绪面板）",
+			"- `/盘中 AI` — AI 深度分析预案标的盘中状态",
+			"- `/盘中 金健米业` — AI 分析某股盘中状态",
+			"",
+			"**定时任务**",
+			"- 竞价速报 09:25 自动推送（工作日）",
+			"- AI 深度分析 09:25 可选开启（默认关闭）",
+			"",
+			"> 数据源：腾讯行情（主力）→ 新浪行情（兜底）",
+			"> 预案：玫瑰龙头战法/07-watchlist/watchlist-YYYYMMDD.json（按日自动匹配）",
+		];
+
+		await this.adapter.reply(helpText.join("\n"));
+	}
+
+	// ──────────────────────────────────────────────────
+	// /竞价 /盘中 - 股票速报
+	// ──────────────────────────────────────────────────
+
+	async handleStockScan(mode: "auction" | "intraday", stockFilter?: string): Promise<void> {
+		const watchlistDir = resolve(HOME, "work/cursor/taoguba/玫瑰龙头战法/07-watchlist");
+		const scriptPath = resolve(HOME, ".codex/skills/meigui-longtou/scripts/auction_scanner.py");
+
+		if (!existsSync(scriptPath)) {
+			await this.adapter.reply(`❌ **auction_scanner.py 不存在**\n\n路径: \`${scriptPath}\``);
+			return;
+		}
+
+		// 单只股票查询（不需要 watchlist）
+		if (stockFilter) {
+			const label = mode === "auction" ? "竞价查询" : "盘中查询";
+			await this.adapter.reply(`📊 正在查询 ${stockFilter}...`);
+			try {
+				const args = [
+					scriptPath,
+					"--stock", stockFilter,
+					"--mode", mode,
+					"--output", "text",
+					"--watchlist-dir", watchlistDir,
+				];
+				const output = execFileSync("/usr/bin/python3", args, { timeout: 15000, encoding: "utf-8" });
+				await this.adapter.reply(output.trim() || `⚠️ ${label}无结果`);
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				await this.adapter.reply(`❌ **${label}失败**\n\n${msg.slice(0, 500)}`);
+			}
+			return;
+		}
+
+		// 全量扫描（自动按日期查找 watchlist-YYYYMMDD.json）
+		const label = mode === "auction" ? "竞价速报" : "盘中速报";
+		await this.adapter.reply(`📊 正在执行${label}...`);
+
+		try {
+			const output = execFileSync("/usr/bin/python3", [
+				scriptPath,
+				"--watchlist-dir", watchlistDir,
+				"--mode", mode,
+				"--output", "text",
+			], { timeout: 15000, encoding: "utf-8" });
+
+			if (output.trim()) {
+				await this.adapter.reply(output.trim());
+			} else {
+				await this.adapter.reply(`⚠️ ${label}无输出，请检查脚本和数据。`);
+			}
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.error(`[${label}] 执行失败:`, msg);
+			await this.adapter.reply(`❌ **${label}执行失败**\n\n${msg.slice(0, 500)}`);
+		}
+	}
+
+	// ──────────────────────────────────────────────────
+	// /预案 - 查看预案核心决策树
+	// ──────────────────────────────────────────────────
+
+	/**
+	 * 将 Markdown 表格和格式转换为手机友好的纯文本
+	 * 处理新版4列表格(开盘|条件|信号|操作)和旧版3列(信号|条件|操作)
+	 */
+	private convertTableToMobileText(text: string, keepBold = false): string {
+		const lines = text.split("\n");
+		const result: string[] = [];
+		let inTable = false;
+		let tableHeaders: string[] = [];
+
+		for (const line of lines) {
+			const trimmed = line.trim();
+
+			// 跳过表格分隔行 |---|---|
+			if (/^\|[\s-|]+\|$/.test(trimmed)) {
+				inTable = true;
+				continue;
+			}
+
+			// 表格头行
+			if (!inTable && /^\|.*\|$/.test(trimmed) && !trimmed.includes("---")) {
+				tableHeaders = trimmed.split("|").filter(c => c.trim()).map(c => c.trim());
+				inTable = true;
+				continue;
+			}
+
+			// 表格数据行 → 转为纯文本
+			if (inTable && /^\|.*\|$/.test(trimmed)) {
+				const cells = trimmed.split("|").filter(c => c.trim()).map(c => c.trim());
+				
+				if (cells.length >= 4) {
+					// 新版4列: 开盘|条件|信号|操作
+					const [opening, condition, signal, action] = cells;
+					const cleanAction = keepBold ? action : action.replace(/\*{2}/g, "");
+					result.push(`${signal} ${opening}(${condition})`);
+					result.push(`  → ${cleanAction}`);
+					result.push("");  // 操作间空行分隔
+				} else if (cells.length >= 3) {
+					// 旧版3列 或 绝对不做表格
+					const [c1, c2, c3] = cells;
+					if (c1 === "❌") {
+						result.push(`❌ ${c2}（${c3}）`);
+					} else if (/^\d+$/.test(c1) || c1.startsWith("①") || c1.startsWith("②")) {
+						// 关键验证点: #|验证项|依据
+						result.push(`${c1} ${c2}：${c3}`);
+					} else {
+						const cleanC3 = keepBold ? c3 : c3.replace(/\*{2}/g, "");
+						result.push(`${c1} ${c2} → ${cleanC3}`);
+					}
+				} else if (cells.length >= 2) {
+					result.push(cells.join(" → "));
+				}
+				continue;
+			}
+
+			// 非表格行结束表格状态
+			if (inTable && !/^\|/.test(trimmed)) {
+				inTable = false;
+				tableHeaders = [];
+			}
+
+			let cleaned = trimmed;
+			if (!keepBold) {
+				cleaned = cleaned.replace(/\*{2}([^*]+)\*{2}/g, "$1");
+			}
+			cleaned = cleaned
+				.replace(/^#+\s*/, "")  // 移除 # 标题前缀
+				.replace(/^---$/, "━━━━━━━━━━━━━━━━");  // 分隔线
+
+			// 旧版树状格式兼容
+			cleaned = cleaned
+				.replace(/├\s*/g, "▸ ")
+				.replace(/└\s*/g, "▸ ");
+
+			result.push(cleaned);
+		}
+
+		return result.join("\n");
+	}
+
+	/**
+	 * 按表格数量拆分内容，确保每段不超过 maxTables 个表格。
+	 * 以 "---" 分隔线或 "**股票名" 行作为自然分段点。
+	 */
+	private splitByTableLimit(text: string, maxTables: number): string[] {
+		// 按 "---" 分隔符拆分为自然段落
+		const sections = text.split(/\n---\n/);
+		const chunks: string[] = [];
+		let currentChunk = "";
+		let currentTableCount = 0;
+
+		for (const section of sections) {
+			const tableCount = (section.match(/^\|[-:\s|]+\|$/gm) || []).length;
+
+			if (currentTableCount + tableCount > maxTables && currentChunk) {
+				chunks.push(currentChunk.trim());
+				currentChunk = section;
+				currentTableCount = tableCount;
+			} else {
+				currentChunk += (currentChunk ? "\n---\n" : "") + section;
+				currentTableCount += tableCount;
+			}
+		}
+
+		if (currentChunk.trim()) {
+			chunks.push(currentChunk.trim());
+		}
+
+		return chunks.length > 0 ? chunks : [text];
+	}
+
+	async handlePlan(args?: string): Promise<void> {
+		const dailyDir = resolve(HOME, "work/cursor/taoguba/玫瑰龙头战法/06-daily");
+
+		if (!existsSync(dailyDir)) {
+			await this.adapter.reply("❌ 预案目录不存在");
+			return;
+		}
+
+		const files = readdirSync(dailyDir)
+			.filter(f => f.startsWith("预案-") && f.endsWith(".md"))
+			.sort()
+			.reverse();
+
+		if (files.length === 0) {
+			await this.adapter.reply("❌ 未找到任何预案文件");
+			return;
+		}
+
+		let targetFile: string | undefined;
+
+		if (args) {
+			const dateStr = args.length === 4 ? `2026${args}` : args.replace(/-/g, "");
+			const matched = files.filter(f => f.includes(dateStr));
+			if (matched.length === 0) {
+				await this.adapter.reply(`❌ 未找到日期 \`${args}\` 的预案\n\n最近预案：${files.slice(0, 5).map(f => `\`${f}\``).join("、")}`);
+				return;
+			}
+			// 同日期多版本时取版本号最大的（v2 > v1 > 无版本号）
+			matched.sort((a, b) => {
+				const vA = a.match(/-v(\d+)/)?.[1] ?? "0";
+				const vB = b.match(/-v(\d+)/)?.[1] ?? "0";
+				return parseInt(vB) - parseInt(vA);
+			});
+			targetFile = matched[0];
+		} else {
+			targetFile = files[0];
+		}
+
+		if (!targetFile) {
+			await this.adapter.reply("❌ 未找到匹配的预案");
+			return;
+		}
+
+		const fullPath = resolve(dailyDir, targetFile);
+		const content = readFileSync(fullPath, "utf-8");
+
+		// 提取两个核心区块：精确操作手册 + 竞价验证
+		const sections: string[] = [];
+
+		// 1. 精确操作手册（买入/卖出分条列表）
+		const manualMarkers = ["📋 精确操作手册", "精确操作手册"];
+		let manualStart = -1;
+		for (const m of manualMarkers) {
+			manualStart = content.indexOf(m);
+			if (manualStart !== -1) break;
+		}
+		if (manualStart !== -1) {
+			// 提取范围：从精确操作手册到对抗验证之前（包含止损速查+关键验证点+绝对不做）
+			const nextH2 = content.indexOf("\n## ", manualStart + 20);
+			const sliceEnd = nextH2 !== -1 ? nextH2 : content.length;
+			sections.push(content.slice(manualStart, sliceEnd).trim());
+		}
+
+		// 2. 竞价验证（在精确操作手册之前展示）
+		const auctionMarkers = ["**竞价验证**", "竞价验证（"];
+		let auctionStart = -1;
+		for (const m of auctionMarkers) {
+			auctionStart = content.indexOf(m);
+			if (auctionStart !== -1) break;
+		}
+		if (auctionStart !== -1) {
+			// 找"综合"行之后的下一个空行或分隔线作为结束
+			const auctionEndMarkers = ["\n---\n", "\n### 核心决策链", "\n### 📋 精确操作手册"];
+			let auctionEnd = -1;
+			for (const m of auctionEndMarkers) {
+				const idx = content.indexOf(m, auctionStart + 10);
+				if (idx !== -1 && (auctionEnd === -1 || idx < auctionEnd)) {
+					auctionEnd = idx;
+				}
+			}
+			if (auctionEnd === -1) {
+				auctionEnd = Math.min(auctionStart + 1500, content.length);
+			}
+			// 竞价验证放在操作手册前面
+			sections.unshift(content.slice(auctionStart, auctionEnd).trim());
+		}
+
+		let output: string;
+
+		if (sections.length > 0) {
+			output = `📋 ${targetFile.replace(".md", "")}\n\n${sections.join("\n\n---\n\n")}`;
+		} else {
+			// 兜底：旧格式预案，提取决策链
+			const dtMarkers = ["个股决策链", "个股决策", "决策树", "操作决策"];
+			let dtStart = -1;
+			for (const m of dtMarkers) {
+				dtStart = content.indexOf(m);
+				if (dtStart !== -1) break;
+			}
+			if (dtStart !== -1) {
+				const slice = content.slice(dtStart, dtStart + 3000).trim();
+				output = `📋 **${targetFile.replace(".md", "")}**\n\n${slice}\n\n> （旧版格式）`;
+			} else {
+				const lines = content.split("\n");
+				const preview = lines.slice(0, 60).join("\n");
+				output = `📋 **${targetFile.replace(".md", "")}**\n\n${preview}`;
+			}
+		}
+
+		if (output.length > 4000) {
+			output = output.slice(0, 3900) + "\n...\n（过长已截断）";
+		}
+
+		await this.adapter.reply(output);
+	}
+
+	// ──────────────────────────────────────────────────
 	// /apk - 发送 Android APK
 	// ──────────────────────────────────────────────────
 
@@ -1582,6 +1930,12 @@ export class CommandHandler {
 			return true;
 		}
 
+		// /restart all、/重启全部（先匹配，避免被 /重启 规则吃掉）
+		if (/^\/(restart\s+all|重启全部)\s*$/i.test(text.trim())) {
+			await this.handleRestartAll();
+			return true;
+		}
+
 		// /restart、/重启
 		if (/^\/(restart|重启)\s*$/i.test(text.trim())) {
 			await this.handleRestart();
@@ -1704,6 +2058,50 @@ export class CommandHandler {
 		if (feilianMatch) {
 			await this.handleFeilian((feilianMatch[2] ?? "").trim());
 			return true;
+		}
+
+		// /私人 - 私人命令列表
+		if (/^\/(私人|private|我的)\s*$/i.test(text.trim())) {
+			await this.handlePrivate();
+			return true;
+		}
+
+		// /预案 - 查看预案决策树 / 生成次日预案 / 玫瑰观点比对
+		const planMatch = text.trim().match(/^\/(预案|plan)(?:\s+(.+))?$/i);
+		if (planMatch) {
+			const planArg = (planMatch[2] ?? "").trim();
+			if (/^(生成|generate|新建|create|玫瑰|meigui|对比|比对)$/i.test(planArg)) {
+				// 需要 AI 处理：生成预案 / 玫瑰观点比对
+				return false;
+			}
+			await this.handlePlan(planArg || undefined);
+			return true;
+		}
+
+		// /竞价 - 无参数走脚本；有参数（AI/股票名）走 AI 对话
+		const auctionMatch = text.trim().match(/^\/(竞价|auction)(?:\s+(.+))?$/i);
+		if (auctionMatch) {
+			const subArg = (auctionMatch[2] ?? "").trim();
+			if (!subArg) {
+				// 无参数 → 脚本快速速报
+				await this.handleStockScan("auction");
+				return true;
+			}
+			// 有参数（"AI"、"全部"、股票名等）→ 交给 AI 对话
+			return false;
+		}
+
+		// /盘中 - 无参数走脚本；有参数（AI/股票名）走 AI 对话
+		const panzhongMatch = text.trim().match(/^\/(盘中|intraday)(?:\s+(.+))?$/i);
+		if (panzhongMatch) {
+			const subArg = (panzhongMatch[2] ?? "").trim();
+			if (!subArg) {
+				// 无参数 → 脚本快速速报
+				await this.handleStockScan("intraday");
+				return true;
+			}
+			// 有参数（"AI"、"全部"、股票名等）→ 交给 AI 对话
+			return false;
 		}
 
 		// /apk、/sendapk（所有平台支持）

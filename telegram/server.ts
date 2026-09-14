@@ -243,7 +243,7 @@ const scheduler = new Scheduler({
 		}
 		return { status: 'ok' as const, result: job.message };
 	},
-	onDelivery: async (job: CronJob, result: string) => {
+	onDelivery: async (job: CronJob, result: string, status: "ok" | "error") => {
 		const chatId = job.webhook ? Number(job.webhook) : lastActiveTgChatId;
 		if (!chatId) {
 			console.warn('[定时] 无 chat ID，跳过推送');
@@ -256,12 +256,13 @@ const scheduler = new Scheduler({
 		} catch {
 			chunks = [result];
 		}
+		const icon = status === "error" ? "❌" : "✅";
 		for (let i = 0; i < chunks.length; i++) {
 			const ch = chunks[i];
 			if (!ch) continue;
 			const title = chunks.length > 1
-				? `⏰ **${job.name}** (${i + 1}/${chunks.length})`
-				: `⏰ **定时：${job.name}**`;
+				? `${icon} **${job.name}** (${i + 1}/${chunks.length})`
+				: `${icon} **${job.name}**`;
 			try {
 				await bot.sendMessage(chatId, `${title}\n\n${ch.slice(0, 4000)}`);
 			} catch (err) {

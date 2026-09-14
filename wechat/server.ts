@@ -1771,7 +1771,7 @@ async function startWechatServer() {
 			// 3. 普通消息（直接发送）
 			return { status: 'ok' as const, result: msg };
 		},
-		onDelivery: async (job: CronJob, result: string) => {
+		onDelivery: async (job: CronJob, result: string, status: "ok" | "error") => {
 			if (job.platform && job.platform !== 'wechat') {
 				console.log(`[定时] 任务 ${job.name} 属于 ${job.platform}，跳过微信推送`);
 				return;
@@ -1795,8 +1795,9 @@ async function startWechatServer() {
 			for (let i = 0; i < chunks.length; i++) {
 				const ch = chunks[i];
 				if (!ch) continue;
+				const icon = status === "error" ? "❌" : "✅";
 				const title =
-					chunks.length > 1 ? `⏰ **${job.name}** (${i + 1}/${chunks.length})` : `⏰ **定时：${job.name}**`;
+					chunks.length > 1 ? `${icon} **${job.name}** (${i + 1}/${chunks.length})` : `${icon} **${job.name}**`;
 				await sendWechatText(uid, `${title}\n\n${ch.slice(0, 3500)}`, ctxTok);
 				if (i < chunks.length - 1) await new Promise((r) => setTimeout(r, 500));
 			}

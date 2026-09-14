@@ -14,6 +14,7 @@
 
 import { readFileSync, writeFileSync, renameSync, existsSync, watchFile, unwatchFile } from "node:fs";
 import { randomUUID } from "node:crypto";
+import type { ExecScriptPayload } from "./exec-script";
 
 // ── 类型定义 ──────────────────────────────────────
 export type CronSchedule =
@@ -27,7 +28,8 @@ export type CronTaskPayload =
 	| { type: 'agent-prompt'; prompt: string; options?: { timeoutMs?: number } }
 	| { type: 'fetch-news'; options?: { topN?: number } }
 	| { type: 'fetch-weather'; options?: { city?: string } }
-	| { type: 'fetch-github-trending'; options?: { since?: 'daily' | 'weekly' | 'monthly'; language?: string; topN?: number; translateDesc?: boolean } };
+	| { type: 'fetch-github-trending'; options?: { since?: 'daily' | 'weekly' | 'monthly'; language?: string; topN?: number; translateDesc?: boolean } }
+	| ({ type: 'exec-script' } & ExecScriptPayload);
 
 export type CronJob = {
 	id: string;
@@ -173,7 +175,7 @@ interface SchedulerOpts {
 	storePath: string;
 	defaultWorkspace: string;
 	onExecute: (job: CronJob) => Promise<{ status: "ok" | "error"; result?: string; error?: string }>;
-	onDelivery?: (job: CronJob, result: string) => Promise<void>;
+	onDelivery?: (job: CronJob, result: string, status: "ok" | "error") => Promise<void>;
 	log?: (msg: string) => void;
 }
 
@@ -352,19 +354,34 @@ export class Scheduler {
 		let error: string | undefined;
 
 		try {
-			const result = await this.opts.onExecute(job);
+			let result: { status: "ok" | "error"; result?: string; error?: string };
+
+			if (job.task?.type === "exec-script") {
+				this.log(`exec-script: ${job.task.command} ${(job.task.args ?? []).join(" ")}`);
+				const { executeScript } = await import("./exec-script");
+				result = await executeScript(job.task);
+			} else {
+				result = await this.opts.onExecute(job);
+			}
+
 			status = result.status;
 			error = result.error;
+
 			if (status === "ok") {
 				job.state.consecutiveErrors = 0;
 				job.state.lastError = undefined;
-				if (result.result && this.opts.onDelivery) {
-					try {
-						await this.opts.onDelivery(job, result.result);
-					} catch (e) {
+			}
+
+			const deliveryText = result.result || (status === "error" && result.error ? result.error : undefined);
+			if (deliveryText && this.opts.onDelivery) {
+				try {
+					await this.opts.onDelivery(job, deliveryText, status);
+				} catch (e) {
+					const deliveryErr = `投递失败: ${e instanceof Error ? e.message : String(e)}`;
+					this.log(`投递失败 "${job.name}": ${deliveryErr}`);
+					if (status === "ok") {
 						status = "error";
-						error = `投递失败: ${e instanceof Error ? e.message : String(e)}`;
-						this.log(`投递失败 "${job.name}": ${error}`);
+						error = deliveryErr;
 					}
 				}
 			}
@@ -417,7 +434,7 @@ export class Scheduler {
 			this.jobs.clear();
 			const now = Date.now();
 			for (const job of store.jobs) {
-				if (!job.state.nextRunAtMs && job.enabled) {
+				if (job.enabled && (!job.state.nextRunAtMs || job.state.nextRunAtMs <= now)) {
 					job.state.nextRunAtMs = computeNextRun(job, now);
 				}
 				this.jobs.set(job.id, job);

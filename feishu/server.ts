@@ -412,7 +412,7 @@ const scheduler = new Scheduler({
 		console.log(`[scheduler] task triggered: ${job.name}`);
 		return { status: "ok" as const, result: msg };
 	},
-	onDelivery: async (job: CronJob, result: string) => {
+	onDelivery: async (job: CronJob, result: string, status: "ok" | "error") => {
 		// 优先使用任务中保存的 chatId（确保发送到创建任务的平台）
 		const chatId = job.webhook || lastActiveChatId;
 		if (!chatId) {
@@ -455,8 +455,9 @@ const scheduler = new Scheduler({
 				minute: '2-digit',
 				hour12: false,
 			});
+			const icon = status === "error" ? "❌" : "✅";
 			const content = `**${result}**\n\n⏱ 提醒时间：${timeStr}\n📌 任务名称：${job.name}`;
-			await sendCard(chatId, content, { title: "⏰ 定时提醒", color: "blue" });
+			await sendCard(chatId, content, { title: `${icon} ${job.name}`, color: status === "error" ? "red" : "blue" });
 			console.log(`[scheduler] feishu reminder sent: ${result}`);
 		}
 	},

@@ -1133,7 +1133,7 @@ const scheduler = new Scheduler({
 		console.log(`[定时] 触发任务: ${job.name}`);
 		return { status: 'ok' as const, result: msg };
 	},
-	onDelivery: async (job: CronJob, result: string) => {
+	onDelivery: async (job: CronJob, result: string, status: "ok" | "error") => {
 		// 只推送企业微信平台的任务
 		if (job.platform && job.platform !== 'wecom') {
 			console.log(`[定时] 任务 ${job.name} 属于 ${job.platform}，跳过企业微信推送`);
@@ -1169,9 +1169,10 @@ const scheduler = new Scheduler({
 			const chunk = chunks[i];
 			if (!chunk) continue;
 			
+			const icon = status === "error" ? "❌" : "✅";
 			const title = chunks.length > 1 
-				? `⏰ **${job.name}** (${i + 1}/${chunks.length})`
-				: `⏰ **定时任务：${job.name}**`;
+				? `${icon} **${job.name}** (${i + 1}/${chunks.length})`
+				: `${icon} **${job.name}**`;
 			
 			await wsClient.sendMessage(chatid, {
 				msgtype: 'markdown',
