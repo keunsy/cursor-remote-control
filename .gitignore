@@ -140,3 +140,6 @@ wechat/.sessions.json
 
 # 钉钉群 ID 缓存
 dingtalk/known-groups.json
+
+# 测试脚本（含本地路径）
+test-e2e-exec-script.ts
