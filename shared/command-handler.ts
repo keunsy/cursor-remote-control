@@ -1335,8 +1335,13 @@ export class CommandHandler {
 			"- `/盘中 AI` — AI 深度分析预案标的盘中状态",
 			"- `/盘中 金健米业` — AI 分析某股盘中状态",
 			"",
+			"**急跌回踩选股**",
+			"- `/急跌选股` — 今日急跌回踩25维评分选股",
+			"- `/急跌选股 2026-09-16` — 指定日期",
+			"",
 			"**定时任务**",
 			"- 竞价速报 09:25 自动推送（工作日）",
+			"- ProPlus 选股 09:25 自动推送（工作日）",
 			"- AI 深度分析 09:25 可选开启（默认关闭）",
 			"",
 			"> 数据源：腾讯行情（主力）→ 新浪行情（兜底）",
@@ -1401,6 +1406,37 @@ export class CommandHandler {
 			const msg = err instanceof Error ? err.message : String(err);
 			console.error(`[${label}] 执行失败:`, msg);
 			await this.adapter.reply(`❌ **${label}执行失败**\n\n${msg.slice(0, 500)}`);
+		}
+	}
+
+	// ──────────────────────────────────────────────────
+	// /proplus - 急跌回踩 ProPlus 选股
+	// ──────────────────────────────────────────────────
+
+	async handleProPlus(dateArg?: string): Promise<void> {
+		const scriptPath = resolve(HOME, "work/cursor/a-stock-hub/a-stock-pullback-strategy-python/openapi/proplus_push.py");
+		const pythonPath = resolve(HOME, ".venvs/uv-env/bin/python3");
+
+		if (!existsSync(scriptPath)) {
+			await this.adapter.reply(`❌ **proplus_push.py 不存在**\n\n路径: \`${scriptPath}\``);
+			return;
+		}
+
+		await this.adapter.reply(`📊 正在运行 ProPlus 急跌回踩选股${dateArg ? ` (${dateArg})` : ""}...`);
+
+		try {
+			const args = [scriptPath];
+			if (dateArg) args.push(dateArg);
+			const output = execFileSync(pythonPath, args, { timeout: 60000, encoding: "utf-8" });
+			if (output.trim()) {
+				await this.adapter.reply(output.trim());
+			} else {
+				await this.adapter.reply("⚠️ ProPlus 无输出，请检查脚本和数据。");
+			}
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.error("[ProPlus] 执行失败:", msg);
+			await this.adapter.reply(`❌ **ProPlus 执行失败**\n\n${msg.slice(0, 500)}`);
 		}
 	}
 
@@ -2102,6 +2138,14 @@ export class CommandHandler {
 			}
 			// 有参数（"AI"、"全部"、股票名等）→ 交给 AI 对话
 			return false;
+		}
+
+		// /急跌选股 - ProPlus 急跌回踩选股
+		const proPlusMatch = text.trim().match(/^\/(急跌选股|急跌|proplus)(?:\s+(.+))?$/i);
+		if (proPlusMatch) {
+			const dateArg = (proPlusMatch[2] ?? "").trim() || undefined;
+			await this.handleProPlus(dateArg);
+			return true;
 		}
 
 		// /apk、/sendapk（所有平台支持）
