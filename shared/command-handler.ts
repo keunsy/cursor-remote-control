@@ -1426,7 +1426,16 @@ export class CommandHandler {
 
 		try {
 			const args = [scriptPath];
-			if (dateArg) args.push(dateArg);
+			if (dateArg) {
+				let d = dateArg;
+				if (/^\d{4}$/.test(d)) {
+					const year = new Date().getFullYear();
+					d = `${year}-${d.slice(0, 2)}-${d.slice(2, 4)}`;
+				} else if (/^\d{8}$/.test(d)) {
+					d = `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
+				}
+				args.push(d);
+			}
 			const output = execFileSync(pythonPath, args, { timeout: 60000, encoding: "utf-8" });
 			if (output.trim()) {
 				await this.adapter.reply(output.trim());
@@ -1616,30 +1625,51 @@ export class CommandHandler {
 			const nextH2 = content.indexOf("\n## ", manualStart + 20);
 			const sliceEnd = nextH2 !== -1 ? nextH2 : content.length;
 			sections.push(content.slice(manualStart, sliceEnd).trim());
+		} else {
+			// 新格式兜底：从【核心决策链】到对抗验证之前
+			const chainMarkers = ["## 【核心决策链】", "【核心决策链】"];
+			let chainStart = -1;
+			for (const m of chainMarkers) {
+				chainStart = content.indexOf(m);
+				if (chainStart !== -1) break;
+			}
+			if (chainStart !== -1) {
+				const chainEndMarkers = ["\n## 🔍 对抗验证", "\n## 🔍 ", "\n## 第六步"];
+				let chainEnd = -1;
+				for (const m of chainEndMarkers) {
+					const idx = content.indexOf(m, chainStart + 10);
+					if (idx !== -1 && (chainEnd === -1 || idx < chainEnd)) {
+						chainEnd = idx;
+					}
+				}
+				if (chainEnd === -1) chainEnd = content.length;
+				sections.push(content.slice(chainStart, chainEnd).trim());
+			}
 		}
 
-		// 2. 竞价验证（在精确操作手册之前展示）
-		const auctionMarkers = ["**竞价验证**", "竞价验证（"];
-		let auctionStart = -1;
-		for (const m of auctionMarkers) {
-			auctionStart = content.indexOf(m);
-			if (auctionStart !== -1) break;
-		}
-		if (auctionStart !== -1) {
-			// 找"综合"行之后的下一个空行或分隔线作为结束
-			const auctionEndMarkers = ["\n---\n", "\n### 核心决策链", "\n### 📋 精确操作手册"];
-			let auctionEnd = -1;
-			for (const m of auctionEndMarkers) {
-				const idx = content.indexOf(m, auctionStart + 10);
-				if (idx !== -1 && (auctionEnd === -1 || idx < auctionEnd)) {
-					auctionEnd = idx;
+		// 2. 竞价验证（在精确操作手册之前展示，仅在精确操作手册格式中单独提取）
+		// 新格式中竞价验证已包含在核心决策链内，不需要额外提取
+		if (manualStart !== -1) {
+			const auctionMarkers = ["**竞价验证**", "竞价验证（"];
+			let auctionStart = -1;
+			for (const m of auctionMarkers) {
+				auctionStart = content.indexOf(m);
+				if (auctionStart !== -1) break;
+			}
+			if (auctionStart !== -1) {
+				const auctionEndMarkers = ["\n---\n", "\n### 核心决策链", "\n### 📋 精确操作手册"];
+				let auctionEnd = -1;
+				for (const m of auctionEndMarkers) {
+					const idx = content.indexOf(m, auctionStart + 10);
+					if (idx !== -1 && (auctionEnd === -1 || idx < auctionEnd)) {
+						auctionEnd = idx;
+					}
 				}
+				if (auctionEnd === -1) {
+					auctionEnd = Math.min(auctionStart + 1500, content.length);
+				}
+				sections.unshift(content.slice(auctionStart, auctionEnd).trim());
 			}
-			if (auctionEnd === -1) {
-				auctionEnd = Math.min(auctionStart + 1500, content.length);
-			}
-			// 竞价验证放在操作手册前面
-			sections.unshift(content.slice(auctionStart, auctionEnd).trim());
 		}
 
 		let output: string;

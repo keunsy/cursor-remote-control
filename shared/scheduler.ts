@@ -183,6 +183,7 @@ const MAX_CONSECUTIVE_ERRORS = 5;
 
 export class Scheduler {
 	private jobs = new Map<string, CronJob>();
+	private deletedIds = new Set<string>();
 	private timer: ReturnType<typeof setTimeout> | null = null;
 	private opts: SchedulerOpts;
 	private running = false;
@@ -401,10 +402,13 @@ export class Scheduler {
 			}
 		}
 
-		// One-shot "at" tasks: remove or disable after execution
-		if (job.schedule.kind === "at") {
-			if (job.deleteAfterRun) this.jobs.delete(job.id);
-			else job.enabled = false;
+		// deleteAfterRun: remove after execution regardless of schedule kind
+		if (job.deleteAfterRun) {
+			this.jobs.delete(job.id);
+			this.deletedIds.add(job.id);
+			this.log(`deleteAfterRun: 已删除 "${job.name}" (${job.id.slice(0, 8)})`);
+		} else if (job.schedule.kind === "at") {
+			job.enabled = false;
 		} else {
 			job.state.nextRunAtMs = computeNextRun(job, now);
 		}
@@ -434,6 +438,7 @@ export class Scheduler {
 			this.jobs.clear();
 			const now = Date.now();
 			for (const job of store.jobs) {
+				if (this.deletedIds.has(job.id)) continue;
 				if (job.enabled && (!job.state.nextRunAtMs || job.state.nextRunAtMs <= now)) {
 					job.state.nextRunAtMs = computeNextRun(job, now);
 				}
@@ -444,8 +449,13 @@ export class Scheduler {
 		}
 	}
 
+	private pendingSave = false;
+
 	private async save(): Promise<void> {
-		if (this.saving) return;
+		if (this.saving) {
+			this.pendingSave = true;
+			return;
+		}
 		this.saving = true;
 		try {
 			const store: CronStoreFile = {
@@ -466,6 +476,10 @@ export class Scheduler {
 			this.log(`保存失败: ${err instanceof Error ? err.message : err}`);
 		} finally {
 			this.saving = false;
+			if (this.pendingSave) {
+				this.pendingSave = false;
+				await this.save();
+			}
 		}
 	}
 }
