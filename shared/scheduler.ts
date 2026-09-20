@@ -457,30 +457,28 @@ export class Scheduler {
 			return;
 		}
 		this.saving = true;
-		try {
-			const store: CronStoreFile = {
-				version: 1,
-				jobs: [...this.jobs.values()],
-			};
-			const json = JSON.stringify(store, null, 2);
-			const tmpPath = this.opts.storePath + ".tmp";
-			const bakPath = this.opts.storePath + ".bak";
+		do {
+			this.pendingSave = false;
+			try {
+				const store: CronStoreFile = {
+					version: 1,
+					jobs: [...this.jobs.values()],
+				};
+				const json = JSON.stringify(store, null, 2);
+				const tmpPath = this.opts.storePath + ".tmp";
+				const bakPath = this.opts.storePath + ".bak";
 
-			writeFileSync(tmpPath, json);
-			if (existsSync(this.opts.storePath)) {
-				try { renameSync(this.opts.storePath, bakPath); } catch {}
+				writeFileSync(tmpPath, json);
+				if (existsSync(this.opts.storePath)) {
+					try { renameSync(this.opts.storePath, bakPath); } catch {}
+				}
+				renameSync(tmpPath, this.opts.storePath);
+				this.lastSaveTime = Date.now();
+			} catch (err) {
+				this.log(`保存失败: ${err instanceof Error ? err.message : err}`);
 			}
-			renameSync(tmpPath, this.opts.storePath);
-			this.lastSaveTime = Date.now();
-		} catch (err) {
-			this.log(`保存失败: ${err instanceof Error ? err.message : err}`);
-		} finally {
-			this.saving = false;
-			if (this.pendingSave) {
-				this.pendingSave = false;
-				await this.save();
-			}
-		}
+		} while (this.pendingSave);
+		this.saving = false;
 	}
 }
 
